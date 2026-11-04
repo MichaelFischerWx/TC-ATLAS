@@ -531,6 +531,14 @@ function _fitMapSection() {
 _fitMapSection();
 window.addEventListener('load', function() { _fitMapSection(); setTimeout(_fitMapSection, 600); });   // re-measure after fonts/late layout
 (function() { var t; window.addEventListener('resize', function() { clearTimeout(t); t = setTimeout(_fitMapSection, 120); }); })();
+// The toolbar wraps to a second line once a storm's cases fill the Case
+// picker, which pushed the map row, and the bottom of the side panel with
+// it, ~30 px below the fold until the next window resize. Re-fit whenever
+// the strip or the toolbar changes height.
+if (window.ResizeObserver) (function() {
+    var t, ro = new ResizeObserver(function() { clearTimeout(t); t = setTimeout(_fitMapSection, 60); });
+    document.querySelectorAll('#map-section .dataset-stats-strip, #map-section .map-toolbar').forEach(function(el) { ro.observe(el); });
+})();
 
 // ── Basemap ──────────────────────────────────────────────────
 // 'satellite' = NASA GIBS Blue Marble shaded relief + bathymetry (free, no
@@ -1155,7 +1163,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                             '<option value="recentered_upward_air_velocity">Vertical Velocity</option>' +
                             '<option value="recentered_reflectivity">Reflectivity</option>' +
                             '<option value="recentered_wind_speed">Wind Speed</option>' +
-                            '<option value="recentered_earth_relative_wind_speed">Earth-Rel. Wind Speed</option>' +
+                            '<option value="recentered_earth_relative_wind_speed" selected>Earth-Rel. Wind Speed</option>' +
                             '<option value="recentered_relative_vorticity">Relative Vorticity</option>' +
                             '<option value="recentered_divergence">Divergence</option>' +
                         '</optgroup>' +
@@ -1217,7 +1225,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<optgroup label="Sequential"><option value="Viridis">Viridis</option><option value="Inferno">Inferno</option><option value="Magma">Magma</option><option value="Plasma">Plasma</option><option value="Cividis">Cividis</option><option value="Hot">Hot</option><option value="YlOrRd">YlOrRd</option><option value="YlGnBu">YlGnBu</option><option value="Blues">Blues</option><option value="Reds">Reds</option><option value="Greys">Greys</option></optgroup>' +
                         '<optgroup label="Diverging"><option value="RdBu">RdBu (red-blue)</option><option value=\'[[0,"rgb(5,10,172)"],[0.5,"rgb(255,255,255)"],[1,"rgb(178,10,28)"]]\'>BuWtRd (blue-white-red)</option><option value="Picnic">Picnic</option><option value="Portland">Portland</option></optgroup>' +
                         '<optgroup label="Radar"><option value=\'[[0,"rgb(20,20,20)"],[0.2,"rgb(20,20,20)"],[0.2,"rgb(4,233,231)"],[0.2667,"rgb(4,233,231)"],[0.2667,"rgb(1,159,244)"],[0.3333,"rgb(1,159,244)"],[0.3333,"rgb(3,0,244)"],[0.4,"rgb(3,0,244)"],[0.4,"rgb(2,253,2)"],[0.4667,"rgb(2,253,2)"],[0.4667,"rgb(1,197,1)"],[0.5333,"rgb(1,197,1)"],[0.5333,"rgb(0,142,0)"],[0.6,"rgb(0,142,0)"],[0.6,"rgb(253,248,2)"],[0.6667,"rgb(253,248,2)"],[0.6667,"rgb(229,188,0)"],[0.7333,"rgb(229,188,0)"],[0.7333,"rgb(253,149,0)"],[0.8,"rgb(253,149,0)"],[0.8,"rgb(253,0,0)"],[0.8667,"rgb(253,0,0)"],[0.8667,"rgb(212,0,0)"],[0.9333,"rgb(212,0,0)"],[0.9333,"rgb(248,0,253)"],[1.0,"rgb(248,0,253)"]]\'>NWS Reflectivity</option></optgroup>' +
-                        '<optgroup label="Other"><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option><option value="Earth">Earth</option><option value="Blackbody">Blackbody</option></optgroup>' +
+                        '<optgroup label="Other"><option value="Turbo">Turbo</option><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option><option value="Earth">Earth</option><option value="Blackbody">Blackbody</option></optgroup>' +
                     '</select>' +
                 '</div>' +
                 '<div class="explorer-row ep-r-range"><label>Color Range</label>' +
@@ -1390,6 +1398,16 @@ function _resultTabsInit() {
         }, true);
     }
     _resultTabs.init();
+    // A tab picked from the bar scrolls its result fully into view. Added
+    // after the bar's own handler, so the tab has switched by now (and the
+    // bar re-rendered: the clicked button is detached, hence no ancestor test).
+    var bar = document.getElementById('result-tabs');
+    if (bar && !bar._revealHooked) {
+        bar._revealHooked = true;
+        bar.addEventListener('click', function(e) {
+            if (e.target.closest && e.target.closest('[data-tab]')) _revealActiveResult();
+        });
+    }
 }
 function _resultTabsSync() { _resultTabs.sync(); }
 function _resultTabShow(id) { _resultTabs.show(id); }
@@ -4431,37 +4449,33 @@ function buildOverlayContours(json, x, y, isCS) {
 
 // ── Colormap switcher ────────────────────────────────────────
 var _defaultColorscale = null, _defaultVmin = null, _defaultVmax = null;
+// Every chart that can draw the plan-view variable. The picker and the color
+// range restyle the field traces in all of them (TDRView.restyleField), so the
+// cross-section, azimuthal mean and shear quadrants follow the map.
+var _FIELD_CHART_IDS = ['plotly-chart', 'plotly-fullscreen', 'cs-inline-chart', 'cs-fullscreen', 'dual-az-chart',
+                        'az-chart', 'az-fullscreen', 'sq-chart', 'sq-fullscreen'];
 
 function applyCmap() {
     var sel = document.getElementById('ep-cmap'); if (!sel) return;
-    var cs = sel.value;
-    if (!cs && _defaultColorscale) cs = _defaultColorscale; if (!cs) return;
-    var colorscale; try { colorscale = JSON.parse(cs); } catch(e) { colorscale = cs; }
-    ['plotly-chart','plotly-fullscreen','cs-fullscreen','az-chart','az-fullscreen','sq-chart','sq-fullscreen'].forEach(function(id) {
-        var plotDiv = document.getElementById(id);
-        if (!plotDiv || !plotDiv.data || !plotDiv.data.length) return;
-        Plotly.restyle(plotDiv, { colorscale: [colorscale] }, [0]);
-    });
+    var colorscale = sel.value ? TDRView.csResolve(sel.value) : _defaultColorscale;
+    if (!colorscale) return;
+    TDRView.restyleField(_FIELD_CHART_IDS, { colorscale: colorscale });
     if (window._lastPlotlyData) window._lastPlotlyData.heatmap.colorscale = colorscale;
     _radarMapRestyle({ colorscale: colorscale });
 }
 
-// Colormap for a panel: the Colormap picker's choice, else the variable's default.
+// Colormap for a panel: the Colormap picker's choice (as stops, so Plotly and
+// the map drape draw the same scale), else the variable's default.
 function _explorerColorscale(varInfo) {
     var sel = document.getElementById('ep-cmap');
-    if (sel && sel.value) { try { return JSON.parse(sel.value); } catch (e) { return sel.value; } }
-    return varInfo.colorscale;
+    return (sel && sel.value) ? TDRView.csResolve(sel.value) : TDRView.defaultColorscale(varInfo);
 }
 function _getActiveVmin() { var inp = document.getElementById('ep-vmin'); if (inp && inp.value !== '') return parseFloat(inp.value); return _defaultVmin; }
 function _getActiveVmax() { var inp = document.getElementById('ep-vmax'); if (inp && inp.value !== '') return parseFloat(inp.value); return _defaultVmax; }
 
 function applyColorRange() {
     var zmin = _getActiveVmin(), zmax = _getActiveVmax(); if (zmin === null || zmax === null) return;
-    ['plotly-chart','plotly-fullscreen','cs-fullscreen','az-chart','az-fullscreen','sq-chart','sq-fullscreen'].forEach(function(id) {
-        var plotDiv = document.getElementById(id);
-        if (!plotDiv || !plotDiv.data || !plotDiv.data.length) return;
-        Plotly.restyle(plotDiv, { zmin: [zmin], zmax: [zmax] }, [0]);
-    });
+    TDRView.restyleField(_FIELD_CHART_IDS, { zmin: zmin, zmax: zmax });
     if (window._lastPlotlyData) { window._lastPlotlyData.heatmap.zmin = zmin; window._lastPlotlyData.heatmap.zmax = zmax; }
     _radarMapRestyle({ vmin: zmin, vmax: zmax });
 }
@@ -4482,11 +4496,7 @@ function resetColorRange() {
     var vminInput = document.getElementById('ep-vmin'), vmaxInput = document.getElementById('ep-vmax');
     if (vminInput) vminInput.value = ''; if (vmaxInput) vmaxInput.value = '';
     if (_defaultVmin !== null && _defaultVmax !== null) {
-        ['plotly-chart','plotly-fullscreen','cs-fullscreen','az-chart','az-fullscreen','sq-chart','sq-fullscreen'].forEach(function(id) {
-            var plotDiv = document.getElementById(id);
-            if (!plotDiv || !plotDiv.data || !plotDiv.data.length) return;
-            Plotly.restyle(plotDiv, { zmin: [_defaultVmin], zmax: [_defaultVmax] }, [0]);
-        });
+        TDRView.restyleField(_FIELD_CHART_IDS, { zmin: _defaultVmin, zmax: _defaultVmax });
         if (window._lastPlotlyData) { window._lastPlotlyData.heatmap.zmin = _defaultVmin; window._lastPlotlyData.heatmap.zmax = _defaultVmax; }
         _radarMapRestyle({ vmin: _defaultVmin, vmax: _defaultVmax });
     }
@@ -4499,8 +4509,7 @@ var _compDefaultVmax = null;
 
 function _getCompColorscale(fallback) {
     var sel = document.getElementById('comp-cmap');
-    if (sel && sel.value) { try { return JSON.parse(sel.value); } catch(e) { return sel.value; } }
-    return fallback;
+    return (sel && sel.value) ? TDRView.csResolve(sel.value) : fallback;
 }
 function _getCompVmin(fallback) { var inp = document.getElementById('comp-vmin'); if (inp && inp.value !== '') return parseFloat(inp.value); return fallback; }
 function _getCompVmax(fallback) { var inp = document.getElementById('comp-vmax'); if (inp && inp.value !== '') return parseFloat(inp.value); return fallback; }
@@ -4519,9 +4528,8 @@ function _allCompChartIds() {
 
 function applyCompCmap() {
     var sel = document.getElementById('comp-cmap'); if (!sel) return;
-    var cs = sel.value;
-    if (!cs && _compDefaultColorscale) cs = _compDefaultColorscale; if (!cs) return;
-    var colorscale; try { colorscale = JSON.parse(cs); } catch(e) { colorscale = cs; }
+    var colorscale = sel.value ? TDRView.csResolve(sel.value) : _compDefaultColorscale;
+    if (!colorscale) return;
     _allCompChartIds().forEach(function(id) {
         var plotDiv = document.getElementById(id);
         if (!plotDiv || !plotDiv.data || !plotDiv.data.length) return;
@@ -4616,7 +4624,7 @@ var _SHADING_CMAP_OPTIONS =
     '<option value="">Default</option>' +
     '<optgroup label="Sequential"><option value="Viridis">Viridis</option><option value="Inferno">Inferno</option><option value="Magma">Magma</option><option value="Plasma">Plasma</option><option value="Cividis">Cividis</option><option value="Hot">Hot</option><option value="YlOrRd">YlOrRd</option><option value="YlGnBu">YlGnBu</option><option value="Blues">Blues</option><option value="Reds">Reds</option><option value="Greys">Greys</option></optgroup>' +
     '<optgroup label="Diverging"><option value="RdBu">RdBu</option><option value=\'[[0,&quot;rgb(5,10,172)&quot;],[0.5,&quot;rgb(255,255,255)&quot;],[1,&quot;rgb(178,10,28)&quot;]]\'>BuWtRd</option><option value="Picnic">Picnic</option><option value="Portland">Portland</option></optgroup>' +
-    '<optgroup label="Other"><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option></optgroup>';
+    '<optgroup label="Other"><option value="Turbo">Turbo</option><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option></optgroup>';
 
 function _buildShadingControlsRow(prefix, opts) {
     if (!opts) opts = {};
@@ -4650,8 +4658,7 @@ function _applyShadingFor(prefix) {
 
     // Colorscale
     var cs = cmapEl ? cmapEl.value : '';
-    if (!cs) cs = reg.defaultColorscale;
-    else { try { cs = JSON.parse(cs); } catch(e) { /* string name like "Viridis" */ } }
+    cs = cs ? TDRView.csResolve(cs) : reg.defaultColorscale;   // names → stops: Plotly lacks Turbo/Inferno/Magma/Plasma
 
     // Range
     var zmin = (vminEl && vminEl.value !== '') ? parseFloat(vminEl.value) : reg.defaultVmin;
@@ -4755,7 +4762,7 @@ function renderPlotFromJSON(json, resultDiv) {
     _currentShdc = (meta.shdc !== undefined && meta.shdc !== null && meta.shdc !== 9999) ? meta.shdc : null;
     _currentMotionDir = (meta.motion_dir !== undefined && meta.motion_dir !== null && meta.motion_dir !== 9999) ? meta.motion_dir : null;
     _currentMotionSpd = (meta.motion_spd !== undefined && meta.motion_spd !== null && meta.motion_spd !== 9999) ? meta.motion_spd : null;
-    _defaultColorscale = varInfo.colorscale; _defaultVmin = varInfo.vmin; _defaultVmax = varInfo.vmax;
+    _defaultColorscale = TDRView.defaultColorscale(varInfo); _defaultVmin = varInfo.vmin; _defaultVmax = varInfo.vmax;
     var vminInput = document.getElementById('ep-vmin'), vmaxInput = document.getElementById('ep-vmax');
     if (vminInput) vminInput.placeholder = varInfo.vmin; if (vmaxInput) vmaxInput.placeholder = varInfo.vmax;
 
@@ -4994,6 +5001,7 @@ window.runMultiCS = function() {
         locator: p ? { z: p.z, x: p.x, y: p.y, colorscale: p.colorscale, zmin: p.vmin, zmax: p.vmax } : null,
         title: (meta.storm_name || '') + (meta.datetime ? ' | ' + _tcrTime(meta.datetime) : '') + ' \u2014 TDR cross-section (' +
                Math.round(Math.hypot(b.x - a.x, b.y - a.y)) + ' km)',
+        colorscaleFor: TDRView.defaultColorscale,   // each field's default, jet as Turbo
         plot: tcrNewPlot
     });
 };
@@ -5015,6 +5023,7 @@ function fetchCrossSection(a, b) {
                 csResult.innerHTML = '<div style="position:relative;"><div id="cs-inline-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' +
                     '<button onclick="openPlotModal(_lastCsJson)" title="Expand with the plan view" class="cs-inline-expand">\u26F6</button></div>' + _mcsControls();
                 renderCrossSectionInto('cs-inline-chart', json, false);
+                _revealActiveResult();
                 return;
             }
             csResult.innerHTML = '<div class="explorer-status" style="color:#10b981;">\u2713 Cross-section ready \u2014 opening expanded view</div>' + _mcsControls(); openPlotModal(json);
@@ -5026,8 +5035,29 @@ function fetchCrossSection(a, b) {
 
 var _lastCsJson = null;
 // Outside focus mode a finished analysis opens the full view, as it always
-// has. In focus mode it lands in its own result tab instead (⛶ expands).
-function _autoExpand() { if (!_focusMode) openPlotModal(); }
+// has. In focus mode it lands in its own result tab instead (⛶ expands),
+// scrolled fully into view.
+function _autoExpand() { if (!_focusMode) openPlotModal(); else _revealActiveResult(); }
+// Scroll the side panel (not the page) just far enough that the active
+// result tab's content is entirely on screen, keeping as much of the
+// controls above it in view as fits; a result taller than the panel stops
+// with the tab bar at the top. Deferred a tick so the tab switch (a
+// MutationObserver) has re-laid the panel out.
+function _revealActiveResult() {
+    setTimeout(function() {
+        var pane = document.getElementById('side-panel-inner');
+        var el = document.getElementById(_resultTabs.active());
+        if (!_focusMode || !pane || !el || el.classList.contains('result-tab-hidden')) return;
+        var pr = pane.getBoundingClientRect(), er = el.getBoundingClientRect();
+        var bar = document.getElementById('result-tabs');
+        var head = (bar && !bar.hidden) ? bar.getBoundingClientRect().top : er.top;
+        var topbar = document.querySelector('.topbar');   // sticky: covers the panel's top once the page scrolls
+        var visTop = Math.max(pr.top, topbar ? topbar.getBoundingClientRect().bottom : 0, 0);
+        var visBottom = Math.min(pr.bottom, window.innerHeight);
+        var dy = Math.min(er.bottom + 8 - visBottom, head - 6 - visTop);
+        if (dy > 0) pane.scrollTo({ top: pane.scrollTop + dy, behavior: 'smooth' });
+    }, 0);
+}
 function renderCrossSectionInto(targetId, json, fullsize) {
     var el = document.getElementById(targetId); if (!el) return;
     var ep = json.endpoints;
@@ -5400,15 +5430,13 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
     var height_km = json.height_km, varInfo = json.variable, meta = _enrichCaseMeta(json.case_meta);
 
     var fontSize = fullsize ? { title:13,axis:12,tick:10,cbar:12,cbarTick:10 } : { title:10,axis:9,tick:8,cbar:9,cbarTick:8 };
-    var csColorscale = varInfo.colorscale;
-    var cmapSel = document.getElementById('ep-cmap');
-    if (cmapSel && cmapSel.value) { try { csColorscale = JSON.parse(cmapSel.value); } catch(e) { csColorscale = cmapSel.value; } }
+    var csColorscale = _explorerColorscale(varInfo);
 
     var xIdxArr = []; for (var i = 0; i < rHAxis.length; i++) xIdxArr.push(i);
     var ticks = _buildHybridXAxis(rHAxis, nInner);
 
     var heatmap = {
-        z: azData, x: xIdxArr, y: height_km, type: 'heatmap',
+        z: azData, x: xIdxArr, y: height_km, type: 'heatmap', _tdrField: true,
         colorscale: csColorscale, zmin: varInfo.vmin, zmax: varInfo.vmax,
         colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: fontSize.cbar } },
                     tickfont: { color: '#5b6573', size: fontSize.cbarTick }, thickness: fullsize?14:10, len: 0.85 },
@@ -6248,8 +6276,8 @@ fetch('tc_radar_metadata_v4.json?v=' + TCR_DATA_TOKEN)
             var div = L.DomUtil.create('div','intensity-legend intensity-legend-compact');
             div.innerHTML =
                 '<div class="legend-header" onclick="this.parentNode.classList.toggle(\'expanded\')" style="cursor:pointer;display:flex;align-items:center;gap:4px;">' +
-                    '<span style="font-size:9px;font-weight:600;color:var(--slate);text-transform:uppercase;letter-spacing:0.5px;">Intensity</span>' +
-                    '<span class="legend-toggle" style="font-size:8px;color:#64748b;">&#9660;</span>' +
+                    '<span style="font-size:9px;font-weight:600;color:var(--lg-ink-dim);text-transform:uppercase;letter-spacing:0.5px;">Intensity</span>' +
+                    '<span class="legend-toggle" style="font-size:9px;color:var(--lg-ink-dim);">&#9660;&#xFE0E;</span>' +
                 '</div>' +
                 '<div class="legend-body" style="display:none;">' +
                     '<div class="legend-item"><div class="legend-color" style="background:#60a5fa"></div><span>TD</span></div>' +
@@ -6930,7 +6958,7 @@ function _renderHovmoller(data) {
         name: varInfo.display_name,
         marker: {
             color: scatterZ,
-            colorscale: varInfo.colorscale,
+            colorscale: _explorerColorscale(varInfo),
             cmin: varInfo.vmin,
             cmax: varInfo.vmax,
             size: 4,
@@ -7612,7 +7640,7 @@ function _show3D(json) {
         var vi = json.variable || {};
         var ok = TCVolGL.show(map, json, {
             centerLat: currentCaseData.latitude, centerLon: currentCaseData.longitude,
-            colorFor: function(v) { try { return _csColor(_lastPlanRender && _lastPlanRender.colorscale || vi.colorscale, vi.vmin, vi.vmax, v); } catch (e) { return [255, 160, 40]; } },
+            colorFor: function(v) { try { return _csColor(_lastPlanRender && _lastPlanRender.colorscale || TDRView.defaultColorscale(vi), vi.vmin, vi.vmax, v); } catch (e) { return [255, 160, 40]; } },
             // Dim the flat 2-D drape under the volume so the shells read as the field.
             onShow: function() { _tdrDrape.applyVisibility(0.3); },
             onHide: function() { _tdrDrape.applyVisibility();
@@ -8037,7 +8065,7 @@ function initCompositePanel() {
                                         '<option value="">Default (from variable)</option>' +
                                         '<optgroup label="Sequential"><option value="Viridis">Viridis</option><option value="Inferno">Inferno</option><option value="Magma">Magma</option><option value="Plasma">Plasma</option><option value="Cividis">Cividis</option><option value="Hot">Hot</option><option value="YlOrRd">YlOrRd</option><option value="YlGnBu">YlGnBu</option><option value="Blues">Blues</option><option value="Reds">Reds</option><option value="Greys">Greys</option></optgroup>' +
                                         '<optgroup label="Diverging"><option value="RdBu">RdBu (red-blue)</option><option value=\'[[0,"rgb(5,10,172)"],[0.5,"rgb(255,255,255)"],[1,"rgb(178,10,28)"]]\'>BuWtRd (blue-white-red)</option><option value="Picnic">Picnic</option><option value="Portland">Portland</option></optgroup>' +
-                                        '<optgroup label="Other"><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option><option value="Earth">Earth</option><option value="Blackbody">Blackbody</option></optgroup>' +
+                                        '<optgroup label="Other"><option value="Turbo">Turbo</option><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option><option value="Earth">Earth</option><option value="Blackbody">Blackbody</option></optgroup>' +
                                     '</select>' +
                                 '</div>' +
                                 '<div class="wizard-config-row"><label>Color Range</label>' +
@@ -8225,7 +8253,7 @@ function initCompositePanel() {
                                 '<option value="">Default</option>' +
                                 '<optgroup label="Sequential"><option value="Viridis">Viridis</option><option value="Inferno">Inferno</option><option value="Magma">Magma</option><option value="Plasma">Plasma</option><option value="Cividis">Cividis</option><option value="Hot">Hot</option><option value="YlOrRd">YlOrRd</option><option value="YlGnBu">YlGnBu</option><option value="Blues">Blues</option><option value="Reds">Reds</option><option value="Greys">Greys</option></optgroup>' +
                                 '<optgroup label="Diverging"><option value="RdBu">RdBu</option><option value=\'[[0,"rgb(5,10,172)"],[0.5,"rgb(255,255,255)"],[1,"rgb(178,10,28)"]]\'>BuWtRd</option><option value="Picnic">Picnic</option><option value="Portland">Portland</option></optgroup>' +
-                                '<optgroup label="Other"><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option></optgroup>' +
+                                '<optgroup label="Other"><option value="Turbo">Turbo</option><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option></optgroup>' +
                             '</select>' +
                             '<span class="cst-sep"></span>' +
                             '<label class="cst-label">Range</label>' +
@@ -9550,7 +9578,7 @@ function renderCompositeAzMeanInto(targetId, json, filters) {
     var fontSize = { title:14, axis:12, tick:10, cbar:12, cbarTick:10, hover:13 };
     var heatmap = {
         z: azData, x: radius, y: height_km, type: 'heatmap',
-        colorscale: varInfo.colorscale, zmin: varInfo.vmin, zmax: varInfo.vmax,
+        colorscale: TDRView.defaultColorscale(varInfo), zmin: varInfo.vmin, zmax: varInfo.vmax,
         colorbar: { title: { text: varInfo.units, font: { color:'#5b6573', size:fontSize.cbar } }, tickfont: { color:'#5b6573', size:fontSize.cbarTick }, thickness:14, len:0.85 },
         hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>' + rLabel + ': %{x:.2f}<br>Height: %{y:.1f} km<extra></extra>',
         hoverongaps: false
@@ -9584,7 +9612,7 @@ function renderCompositeAzMeanInto(targetId, json, filters) {
     var compAzOverlay = buildCompAzOverlayContours(json, radius, height_km);
     el.style.display = 'block';
     _lastCompJson = json; _lastCompType = 'az';
-    _registerShadingTargets('shd-az', ['comp-az-chart'], varInfo.colorscale, varInfo.vmin, varInfo.vmax);
+    _registerShadingTargets('shd-az', ['comp-az-chart'], TDRView.defaultColorscale(varInfo), varInfo.vmin, varInfo.vmax);
     el.innerHTML = '<div id="comp-az-chart" style="width:100%;height:560px;border-radius:8px;overflow:hidden;"></div>' + _buildShadingControlsRow('shd-az', {defaultVmin: varInfo.vmin, defaultVmax: varInfo.vmax}) + _buildCompToolbar();
     tcrNewPlot('comp-az-chart', [heatmap].concat(compAzOverlay), layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
     // Apply user-specified range from Step 3 controls if set
@@ -9671,7 +9699,7 @@ function renderCompositeQuadMeanInto(targetId, json, filters) {
         var showCbar = (i === 1);
         traces.push({
             z:qData.data, x:radius, y:height_km, type:'heatmap',
-            colorscale:varInfo.colorscale, zmin:zmin, zmax:zmax,
+            colorscale:TDRView.defaultColorscale(varInfo), zmin:zmin, zmax:zmax,
             xaxis:'x'+axSuffix, yaxis:'y'+axSuffix,
             showscale:showCbar,
             colorbar: showCbar ? { title:{text:varInfo.units,font:{color:'#5b6573',size:fontSize.cbar}}, tickfont:{color:'#5b6573',size:fontSize.cbarTick}, thickness:14, len:0.85, x:1.02, y:0.5 } : undefined,
@@ -9735,7 +9763,7 @@ function renderCompositeQuadMeanInto(targetId, json, filters) {
 
     el.style.display = 'block';
     _lastCompJson = json; _lastCompType = 'sq';
-    _registerShadingTargets('shd-sq', ['comp-sq-chart'], varInfo.colorscale, varInfo.vmin, varInfo.vmax);
+    _registerShadingTargets('shd-sq', ['comp-sq-chart'], TDRView.defaultColorscale(varInfo), varInfo.vmin, varInfo.vmax);
     el.innerHTML = '<div id="comp-sq-chart" style="width:100%;height:740px;border-radius:8px;overflow:hidden;"></div>' + _buildShadingControlsRow('shd-sq', {defaultVmin: varInfo.vmin, defaultVmax: varInfo.vmax}) + _buildCompToolbar() + _buildQuadLayoutToggle();
     tcrNewPlot('comp-sq-chart', traces.concat(compQuadOverlay), layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
     // Apply user-specified range from Step 3 controls if set
@@ -9901,7 +9929,7 @@ function renderCompositeAnomalyInto(targetId, json, filters) {
     var zmin = varInfo.vmin != null ? varInfo.vmin : -3;
     var zmax = varInfo.vmax != null ? varInfo.vmax : 3;
     var cbarTitle = isDiff ? '\u0394\u03c3' : '\u03c3';
-    var anomColorscale = varInfo.colorscale || [
+    var anomColorscale = TDRView.defaultColorscale(varInfo) || [
         [0.0, 'rgb(5,48,97)'], [0.1, 'rgb(33,102,172)'],
         [0.2, 'rgb(67,147,195)'], [0.3, 'rgb(146,197,222)'],
         [0.4, 'rgb(209,229,240)'], [0.5, 'rgb(247,247,247)'],
@@ -10639,7 +10667,7 @@ function renderCompositePlanViewInto(targetId, json, filters, pvParams) {
 
     var heatmap = {
         z: planData, x: xAxis, y: yAxis, type: 'heatmap',
-        colorscale: varInfo.colorscale, zmin: varInfo.vmin, zmax: varInfo.vmax,
+        colorscale: TDRView.defaultColorscale(varInfo), zmin: varInfo.vmin, zmax: varInfo.vmax,
         colorbar: { title: { text: varInfo.units, font: { color:'#5b6573', size:fontSize.cbar } },
                     tickfont: { color:'#5b6573', size:fontSize.cbarTick }, thickness:14, len:0.85 },
         hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units +
@@ -10727,7 +10755,7 @@ function renderCompositePlanViewInto(targetId, json, filters, pvParams) {
 
     el.style.display = 'block';
     _lastCompJson = json; _lastCompType = 'pv';
-    _registerShadingTargets('shd-pv', ['comp-pv-chart'], varInfo.colorscale, varInfo.vmin, varInfo.vmax);
+    _registerShadingTargets('shd-pv', ['comp-pv-chart'], TDRView.defaultColorscale(varInfo), varInfo.vmin, varInfo.vmax);
     el.innerHTML = '<div id="comp-pv-chart" style="width:100%;height:620px;border-radius:8px;overflow:hidden;"></div>' + _buildShadingControlsRow('shd-pv', {defaultVmin: varInfo.vmin, defaultVmax: varInfo.vmax}) + _buildCompToolbar();
     tcrNewPlot('comp-pv-chart', [heatmap].concat(pvOverlay).concat(extraTraces), layout,
         { responsive:true, displayModeBar:true, displaylogo:false,
@@ -11044,7 +11072,7 @@ function _renderIRPlanView(targetId, json, filters, pvParams) {
 
     var heatmap = {
         z: planData, x: xAxis, y: yAxis, type: 'heatmap',
-        colorscale: varInfo.colorscale, zmin: varInfo.vmin, zmax: varInfo.vmax,
+        colorscale: TDRView.defaultColorscale(varInfo), zmin: varInfo.vmin, zmax: varInfo.vmax,
         colorbar: { title: { text: varInfo.units, font: { color:'#5b6573', size:12 } },
                     tickfont: { color:'#5b6573', size:10 }, thickness:14, len:0.85 },
         hovertemplate: '<b>IR Tb</b>: %{z:.1f} K<br>' + xLabel + ': %{x:.1f}<br>' + yLabel + ': %{y:.1f}<extra></extra>',
@@ -11333,7 +11361,7 @@ function _renderDiffIRPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filte
         _buildShadingControlsRow('shd-dirpv-d', {label: 'Difference', defaultVmin: diffVarInfo.vmin, defaultVmax: diffVarInfo.vmax}) +
         _buildCompToolbar();
 
-    _registerShadingTargets('shd-dirpv-ab', ['comp-diff-irpv-a', 'comp-diff-irpv-b'], varInfoA.colorscale, varInfoA.vmin, varInfoA.vmax);
+    _registerShadingTargets('shd-dirpv-ab', ['comp-diff-irpv-a', 'comp-diff-irpv-b'], TDRView.defaultColorscale(varInfoA), varInfoA.vmin, varInfoA.vmax);
 
     var plotOpts = { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] };
     var plotBg = '#ffffff';
@@ -11401,7 +11429,7 @@ function _renderDiffIRPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filte
         tcrNewPlot(chartId, traces, layout, plotOpts);
     }
 
-    var activeColorscale = varInfoA.colorscale;
+    var activeColorscale = TDRView.defaultColorscale(varInfoA);
     var activeVmin = varInfoA.vmin;
     var activeVmax = varInfoA.vmax;
 
@@ -11778,7 +11806,7 @@ function _renderDiffAzMean(targetId, diffJson, jsonA, jsonB, filtersA, filtersB)
         _buildShadingControlsRow('shd-daz-d', {label: 'Difference', defaultVmin: diffVarInfo.vmin, defaultVmax: diffVarInfo.vmax}) +
         _buildCompToolbar();
 
-    _registerShadingTargets('shd-daz-ab', ['comp-diff-az-a', 'comp-diff-az-b'], varInfoA.colorscale, varInfoA.vmin, varInfoA.vmax);
+    _registerShadingTargets('shd-daz-ab', ['comp-diff-az-a', 'comp-diff-az-b'], TDRView.defaultColorscale(varInfoA), varInfoA.vmin, varInfoA.vmax);
 
     var plotOpts = { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] };
     var plotBg = '#ffffff';
@@ -11812,7 +11840,7 @@ function _renderDiffAzMean(targetId, diffJson, jsonA, jsonB, filtersA, filtersB)
         tcrNewPlot(chartId, [hm].concat(ovTraces), layout, plotOpts);
     }
 
-    var activeColorscale = varInfoA.colorscale;
+    var activeColorscale = TDRView.defaultColorscale(varInfoA);
     var activeVmin = varInfoA.vmin;
     var activeVmax = varInfoA.vmax;
 
@@ -11875,7 +11903,7 @@ function _renderDiffQuadMean(targetId, diffJson, jsonA, jsonB, filtersA, filters
         _buildShadingControlsRow('shd-dsq-d', {label: 'Difference', defaultVmin: diffVarInfo.vmin, defaultVmax: diffVarInfo.vmax}) +
         _buildCompToolbar() + _buildQuadLayoutToggle();
 
-    _registerShadingTargets('shd-dsq-ab', ['comp-diff-sq-a', 'comp-diff-sq-b'], varInfoA.colorscale, varInfoA.vmin, varInfoA.vmax);
+    _registerShadingTargets('shd-dsq-ab', ['comp-diff-sq-a', 'comp-diff-sq-b'], TDRView.defaultColorscale(varInfoA), varInfoA.vmin, varInfoA.vmax);
 
     var plotOpts = { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] };
     var plotBg = '#ffffff';
@@ -11961,7 +11989,7 @@ function _renderDiffQuadMean(targetId, diffJson, jsonA, jsonB, filtersA, filters
         tcrNewPlot(chartId, traces.concat(ovTraces), layout, plotOpts);
     }
 
-    var activeColorscale = varInfoA.colorscale;
+    var activeColorscale = TDRView.defaultColorscale(varInfoA);
     var activeVmin = varInfoA.vmin;
     var activeVmax = varInfoA.vmax;
 
@@ -12109,7 +12137,7 @@ function _renderDiffPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filters
         _buildShadingControlsRow('shd-dpv-d', {label: 'Difference', defaultVmin: diffVarInfo.vmin, defaultVmax: diffVarInfo.vmax}) +
         _buildCompToolbar();
 
-    _registerShadingTargets('shd-dpv-ab', ['comp-diff-pv-a', 'comp-diff-pv-b'], varInfoA.colorscale, varInfoA.vmin, varInfoA.vmax);
+    _registerShadingTargets('shd-dpv-ab', ['comp-diff-pv-a', 'comp-diff-pv-b'], TDRView.defaultColorscale(varInfoA), varInfoA.vmin, varInfoA.vmax);
 
     var plotOpts = { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] };
     var plotBg = '#ffffff';
@@ -12165,7 +12193,7 @@ function _renderDiffPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filters
         tcrNewPlot(chartId, [hm].concat(ovTraces).concat(rmwCircleTrace()), layout, plotOpts);
     }
 
-    var activeColorscale = varInfoA.colorscale;
+    var activeColorscale = TDRView.defaultColorscale(varInfoA);
     var activeVmin = varInfoA.vmin;
     var activeVmax = varInfoA.vmax;
 
@@ -13741,10 +13769,10 @@ function _archiveRenderFLOverlay(flData) {
     }
 
     // Inherit the TDR heatmap's colorscale + range so scatter matches shading
-    var tdrColorscale = 'Inferno';
+    var tdrColorscale = TDRView.csResolve('Inferno');
     var tdrCmin = 0, tdrCmax = 80;
     if (plotDiv.data && plotDiv.data.length > 0) {
-        var tdrTrace = plotDiv.data[0];
+        var tdrTrace = plotDiv.data.filter(function (t) { return t && t._tdrField; })[0] || plotDiv.data[0];
         if (tdrTrace.colorscale) tdrColorscale = tdrTrace.colorscale;
         if (tdrTrace.zmin != null) tdrCmin = tdrTrace.zmin;
         if (tdrTrace.zmax != null) tdrCmax = tdrTrace.zmax;
@@ -15731,14 +15759,14 @@ function _showMWMapColorbar(product, vmin, vmax) {
     if (product === '37color') {
         // 37color: show a compact legend with color patches
         el.innerHTML =
-            '<div style="font-size:9px;font-weight:600;color:#fdba74;margin-bottom:3px;">37 GHz Color</div>' +
+            '<div style="font-size:9px;font-weight:600;color:var(--lg-mw);margin-bottom:3px;">37 GHz Color</div>' +
             '<div style="display:flex;gap:2px;align-items:center;">' +
                 '<span style="display:inline-block;width:12px;height:10px;background:#008800;border-radius:2px;" title="Ocean"></span>' +
-                '<span style="font-size:8px;color:var(--slate);">Ocn</span>' +
+                '<span style="font-size:9px;color:var(--lg-ink-dim);">Ocn</span>' +
                 '<span style="display:inline-block;width:12px;height:10px;background:#00cccc;border-radius:2px;margin-left:3px;" title="Rain/Cloud"></span>' +
-                '<span style="font-size:8px;color:var(--slate);">Rain</span>' +
+                '<span style="font-size:9px;color:var(--lg-ink-dim);">Rain</span>' +
                 '<span style="display:inline-block;width:12px;height:10px;background:#cc44cc;border-radius:2px;margin-left:3px;" title="Deep Convection"></span>' +
-                '<span style="font-size:8px;color:var(--slate);">Conv</span>' +
+                '<span style="font-size:9px;color:var(--lg-ink-dim);">Conv</span>' +
             '</div>';
     } else {
         // Single-channel: show a gradient colorbar
@@ -15750,9 +15778,9 @@ function _showMWMapColorbar(product, vmin, vmax) {
         // NRL colormap gradient
         var gradientStops = 'linear-gradient(to right, #303030, #606060, #800000, #FF0000, #FF8C00, #FFD700, #ADFF2F, #00CC44, #00DDCC, #0066FF, #0000CC, #8888FF)';
         el.innerHTML =
-            '<div style="font-size:9px;font-weight:600;color:#fdba74;margin-bottom:2px;">' + label + '</div>' +
+            '<div style="font-size:9px;font-weight:600;color:var(--lg-mw);margin-bottom:2px;">' + label + '</div>' +
             '<div style="width:140px;height:10px;border-radius:3px;background:' + gradientStops + ';border:1px solid rgba(15, 22, 35,0.15);"></div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
+            '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--lg-ink-dim);margin-top:1px;">' +
                 '<span>' + vmin + ' K</span><span>' + vmax + ' K</span>' +
             '</div>';
     }
@@ -15779,9 +15807,9 @@ function _showIRMapColorbar() {
     // luminance ramp (warm dark → cold bright) when the gray variant is shown.
     var gradientStops = _irColorbarGradient();
     el.innerHTML =
-        '<div style="font-size:9px;font-weight:600;color:#60a5fa;margin-bottom:2px;">IR Brightness Temp</div>' +
+        '<div style="font-size:9px;font-weight:600;color:var(--lg-ir);margin-bottom:2px;">IR Brightness Temp</div>' +
         '<div style="width:140px;height:10px;border-radius:3px;background:' + gradientStops + ';border:1px solid rgba(15, 22, 35,0.15);"></div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
+        '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--lg-ink-dim);margin-top:1px;">' +
             '<span>170 K</span><span>310 K</span>' +
         '</div>';
     el.style.display = 'block';

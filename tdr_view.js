@@ -13,16 +13,38 @@
     'use strict';
 
     // ── Colormaps ────────────────────────────────────────────────────────
-    // Named Plotly scales the canvas drape can reproduce; anything else that
-    // arrives as a name falls back to Viridis (arrays pass through).
+    // Every scale the colormap pickers offer, as explicit stops. Plotly.js
+    // knows only some of these names (it draws "Reds" for Turbo, Inferno,
+    // Magma and Plasma) and the canvas drape knows none, so a picked name is
+    // resolved here and the charts and the drape get the same array. The
+    // Plotly-named scales are Plotly 2.27's own stops, so the charts look as
+    // they did; the matplotlib ones are 25 even stops (within 5/255 of the
+    // full colormap).
+    function even(hex) { return hex.map(function (c, i) { return [i / (hex.length - 1), c]; }); }
     var NAMED_CS = {
-        Viridis: [[0,'rgb(68,1,84)'],[0.25,'rgb(59,82,139)'],[0.5,'rgb(33,145,140)'],[0.75,'rgb(94,201,98)'],[1,'rgb(253,231,37)']],
+        Turbo: even(['#30123b','#3b2f80','#434eba','#466be3','#4685fa','#3ba0fd','#28bceb','#1ad2d2','#1ae4b6','#32f298','#55fa76','#80ff53','#a4fc3c','#bef434','#d9e436','#eecf3a','#faba39','#fe9e2f','#fb7e21','#f26014','#e4450a','#d02f05','#b91e02','#9b0f01','#7a0403']),
+        Inferno: even(['#000004','#050417','#110a30','#210c4a','#320a5e','#450a69','#57106e','#67166e','#781c6d','#8a226a','#9a2865','#ab2f5e','#bc3754','#ca404a','#d84c3e','#e45a31','#ed6925','#f57b17','#f98e09','#fca108','#fbb61a','#f9cb35','#f4df53','#f2f27d','#fcffa4']),
+        Magma: even(['#000004','#050416','#100b2d','#1d1147','#2c115f','#3f0f72','#51127c','#601880','#721f81','#832681','#932b80','#a5317e','#b73779','#c73d73','#d8456c','#e75263','#f1605d','#f8745c','#fc8961','#fd9b6b','#feb078','#fec488','#fed799','#fdebac','#fcfdbf']),
+        Plasma: even(['#0d0887','#260591','#3a049a','#4c02a1','#5c01a6','#6e00a8','#7e03a8','#8d0ba5','#9c179e','#aa2395','#b52f8c','#c13b82','#cc4778','#d5536f','#de5f65','#e66c5c','#ed7953','#f3874a','#f89540','#fca338','#fdb42f','#fdc527','#fbd524','#f6e826','#f0f921']),
+        Viridis: [[0,'#440154'],[0.0627,'#48186a'],[0.1255,'#472d7b'],[0.1882,'#424086'],[0.251,'#3b528b'],[0.3137,'#33638d'],[0.3765,'#2c728e'],[0.4392,'#26828e'],[0.502,'#21918c'],[0.5647,'#1fa088'],[0.6275,'#28ae80'],[0.6902,'#3fbc73'],[0.7529,'#5ec962'],[0.8157,'#84d44b'],[0.8784,'#addc30'],[0.9412,'#d8e219'],[1,'#fde725']],
+        Cividis: [[0,'rgb(0,32,76)'],[0.0588,'rgb(0,42,102)'],[0.1176,'rgb(0,52,110)'],[0.1765,'rgb(39,63,108)'],[0.2353,'rgb(60,74,107)'],[0.2941,'rgb(76,85,107)'],[0.3529,'rgb(91,95,109)'],[0.4118,'rgb(104,106,112)'],[0.4706,'rgb(117,117,117)'],[0.5294,'rgb(131,129,120)'],[0.5882,'rgb(146,140,120)'],[0.6471,'rgb(161,152,118)'],[0.7059,'rgb(176,165,114)'],[0.7647,'rgb(192,177,109)'],[0.8235,'rgb(209,191,102)'],[0.8824,'rgb(225,204,92)'],[0.9412,'rgb(243,219,79)'],[1,'rgb(255,233,69)']],
         Jet: [[0,'rgb(0,0,131)'],[0.125,'rgb(0,60,170)'],[0.375,'rgb(5,255,255)'],[0.625,'rgb(255,255,0)'],[0.875,'rgb(250,0,0)'],[1,'rgb(128,0,0)']],
-        RdBu: [[0,'rgb(5,10,172)'],[0.35,'rgb(106,137,247)'],[0.5,'rgb(190,190,190)'],[0.6,'rgb(220,170,132)'],[0.7,'rgb(230,145,90)'],[1,'rgb(178,10,28)']],
-        Portland: [[0,'rgb(12,51,131)'],[0.25,'rgb(10,136,186)'],[0.5,'rgb(242,211,56)'],[0.75,'rgb(242,143,56)'],[1,'rgb(217,30,30)']],
         Hot: [[0,'rgb(0,0,0)'],[0.3,'rgb(230,0,0)'],[0.6,'rgb(255,210,0)'],[1,'rgb(255,255,255)']],
+        Blackbody: [[0,'rgb(0,0,0)'],[0.2,'rgb(230,0,0)'],[0.4,'rgb(230,210,0)'],[0.7,'rgb(255,255,255)'],[1,'rgb(160,200,255)']],
+        Electric: [[0,'rgb(0,0,0)'],[0.15,'rgb(30,0,100)'],[0.4,'rgb(120,0,100)'],[0.6,'rgb(160,90,0)'],[0.8,'rgb(230,200,0)'],[1,'rgb(255,250,220)']],
+        Earth: [[0,'rgb(0,0,130)'],[0.1,'rgb(0,180,180)'],[0.2,'rgb(40,210,40)'],[0.4,'rgb(230,230,50)'],[0.6,'rgb(120,70,20)'],[1,'rgb(255,255,255)']],
+        Picnic: [[0,'rgb(0,0,255)'],[0.1,'rgb(51,153,255)'],[0.2,'rgb(102,204,255)'],[0.3,'rgb(153,204,255)'],[0.4,'rgb(204,204,255)'],[0.5,'rgb(255,255,255)'],[0.6,'rgb(255,204,255)'],[0.7,'rgb(255,153,255)'],[0.8,'rgb(255,102,204)'],[0.9,'rgb(255,102,102)'],[1,'rgb(255,0,0)']],
+        Portland: [[0,'rgb(12,51,131)'],[0.25,'rgb(10,136,186)'],[0.5,'rgb(242,211,56)'],[0.75,'rgb(242,143,56)'],[1,'rgb(217,30,30)']],
+        Rainbow: [[0,'rgb(150,0,90)'],[0.125,'rgb(0,0,200)'],[0.25,'rgb(0,25,255)'],[0.375,'rgb(0,152,255)'],[0.5,'rgb(44,255,150)'],[0.625,'rgb(151,255,0)'],[0.75,'rgb(255,234,0)'],[0.875,'rgb(255,111,0)'],[1,'rgb(255,0,0)']],
+        RdBu: [[0,'rgb(5,10,172)'],[0.35,'rgb(106,137,247)'],[0.5,'rgb(190,190,190)'],[0.6,'rgb(220,170,132)'],[0.7,'rgb(230,145,90)'],[1,'rgb(178,10,28)']],
+        YlOrRd: [[0,'rgb(128,0,38)'],[0.125,'rgb(189,0,38)'],[0.25,'rgb(227,26,28)'],[0.375,'rgb(252,78,42)'],[0.5,'rgb(253,141,60)'],[0.625,'rgb(254,178,76)'],[0.75,'rgb(254,217,118)'],[0.875,'rgb(255,237,160)'],[1,'rgb(255,255,204)']],
+        YlGnBu: [[0,'rgb(8,29,88)'],[0.125,'rgb(37,52,148)'],[0.25,'rgb(34,94,168)'],[0.375,'rgb(29,145,192)'],[0.5,'rgb(65,182,196)'],[0.625,'rgb(127,205,187)'],[0.75,'rgb(199,233,180)'],[0.875,'rgb(237,248,217)'],[1,'rgb(255,255,217)']],
+        Blues: [[0,'rgb(5,10,172)'],[0.35,'rgb(40,60,190)'],[0.5,'rgb(70,100,245)'],[0.6,'rgb(90,120,245)'],[0.7,'rgb(106,137,247)'],[1,'rgb(220,220,220)']],
+        Reds: [[0,'rgb(220,220,220)'],[0.2,'rgb(245,195,157)'],[0.4,'rgb(245,160,105)'],[1,'rgb(178,10,28)']],
         Greys: [[0,'rgb(0,0,0)'],[1,'rgb(255,255,255)']]
     };
+    var CS_BY_LOWER = {};
+    Object.keys(NAMED_CS).forEach(function (k) { CS_BY_LOWER[k.toLowerCase()] = NAMED_CS[k]; });
     function csParse(s) {
         s = String(s).trim();
         var m = /rgba?\(([^)]+)\)/.exec(s);
@@ -31,10 +53,49 @@
             return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)]; }
         return [128, 128, 128];
     }
+    /** Stops for a colorscale: arrays pass through; a name (any case) or a
+     *  picker's JSON stop list resolves; anything unknown is Viridis. */
     function csResolve(cs) {
         if (Array.isArray(cs)) return cs;
-        if (typeof cs === 'string' && NAMED_CS[cs]) return NAMED_CS[cs];
+        if (typeof cs === 'string') {
+            var s = cs.trim();
+            if (s.charAt(0) === '[') { try { return csResolve(JSON.parse(s)); } catch (e) { /* not JSON */ } }
+            var hit = NAMED_CS[s] || CS_BY_LOWER[s.toLowerCase()];
+            if (hit) return hit;
+        }
         return NAMED_CS.Viridis;
+    }
+    // A variable's default colormap: the API's, except matplotlib jet (the
+    // tangential and earth-relative wind fields), which draws as Turbo, the
+    // same blue-to-red sweep without jet's false bright bands. The swap is
+    // made here because the API's /data and /azimuthal_mean replies sit on R2
+    // with jet in them.
+    function isMplJet(cs) {
+        if (!Array.isArray(cs) || cs.length < 3) return false;
+        var a = String(cs[0][1]).replace(/\s/g, ''), b = String(cs[cs.length - 1][1]).replace(/\s/g, '');
+        return a === 'rgb(0,0,127)' && b === 'rgb(127,0,0)';
+    }
+    function defaultColorscale(vi) {
+        var cs = vi && vi.colorscale;
+        return isMplJet(cs) ? NAMED_CS.Turbo : cs;
+    }
+    /** Restyle the radar-field traces (tagged _tdrField by the figure builders)
+     *  in the charts with these ids, so a colormap or color-range change
+     *  reaches every panel of the field: the plan view, cross-section,
+     *  azimuthal mean and all four shear quadrants, but not an IR underlay,
+     *  a contour overlay, a CFAD or an anomaly panel. */
+    function restyleField(ids, update) {
+        if (!window.Plotly) return;
+        ids.forEach(function (id) {
+            var gd = document.getElementById(id);
+            if (!gd || !gd.data || !gd.data.length) return;
+            var idx = [];
+            gd.data.forEach(function (t, i) { if (t && t._tdrField) idx.push(i); });
+            if (!idx.length) return;
+            var u = {};
+            Object.keys(update).forEach(function (k) { u[k] = idx.map(function () { return update[k]; }); });
+            try { Plotly.restyle(gd, u, idx); } catch (e) { /* chart mid-redraw: it picks the values up next time */ }
+        });
     }
     /** One color for one value (linear interpolation between stops). */
     function csColor(cs, vmin, vmax, val) {
@@ -280,7 +341,7 @@
     // title), baseLayout (no title — the fullscreen view adds its own), config }.
     function planFigure(o) {
         var vi = o.varInfo;
-        var heatmap = { z: o.z, x: o.x, y: o.y, type: 'heatmap', colorscale: o.colorscale, zmin: o.zmin, zmax: o.zmax,
+        var heatmap = { z: o.z, x: o.x, y: o.y, type: 'heatmap', colorscale: o.colorscale, zmin: o.zmin, zmax: o.zmax, _tdrField: true,
             colorbar: { title: { text: vi.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 12, len: 0.85 },
             hovertemplate: '<b>' + vi.display_name + '</b>: %{z:.2f} ' + vi.units + '<br>X: %{x:.0f} km<br>Y: %{y:.0f} km<extra></extra>',
             hoverongaps: false };
@@ -372,7 +433,7 @@
     function sectionFigure(o) {
         var f = SECTION_FONTS[o.size || 'small'], vi = o.varInfo, isX = o.xTitle || 'Radius (km)';
         var xl = (o.maxLabels || ['R', 'Z']);
-        var heatmap = { z: o.z, x: o.x, y: o.y, type: 'heatmap', colorscale: o.colorscale,
+        var heatmap = { z: o.z, x: o.x, y: o.y, type: 'heatmap', colorscale: o.colorscale, _tdrField: true,
             zmin: o.zmin != null ? o.zmin : vi.vmin, zmax: o.zmax != null ? o.zmax : vi.vmax,
             colorbar: { title: { text: vi.units, font: { color: '#5b6573', size: f.cbar } }, tickfont: { color: '#5b6573', size: f.cbarTick }, thickness: f.cbw, len: 0.85 },
             hovertemplate: '<b>' + vi.display_name + '</b>: %{z:.2f} ' + vi.units + '<br>' + (xl[0] === 'R' ? 'Radius' : 'Distance') + ': %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
@@ -443,7 +504,8 @@
     }
 
     // panels = [{ json (/cross_section response), title }]
-    // o = { title, endpoints, locator: { z, x, y, colorscale, zmin, zmax } }
+    // o = { title, endpoints, locator: { z, x, y, colorscale, zmin, zmax },
+    //       colorscaleFor(variable) → a panel's colormap (default: the API's) }
     // Returns { traces, layout, height }.
     function multiSectionFigure(panels, o) {
         var n = panels.length, gap = 0.045, top = 0.10, bot = 0.07;
@@ -457,7 +519,7 @@
             var j = p.json, vi = j.variable, sfx = i === 0 ? '' : String(i + 1);
             var yTop = 1 - top - i * (rowH + gap), yBot = yTop - rowH;
             traces.push({ z: j.cross_section, x: j.distance_km, y: j.height_km, type: 'heatmap',
-                colorscale: vi.colorscale, zmin: vi.vmin, zmax: vi.vmax, xaxis: 'x' + sfx, yaxis: 'y' + sfx,
+                colorscale: o.colorscaleFor ? o.colorscaleFor(vi) : vi.colorscale, zmin: vi.vmin, zmax: vi.vmax, xaxis: 'x' + sfx, yaxis: 'y' + sfx,
                 colorbar: { title: { text: vi.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 },
                             thickness: 10, len: rowH * 0.95, y: (yTop + yBot) / 2, yanchor: 'middle', x: 1.01 },
                 hovertemplate: '<b>' + vi.display_name + '</b>: %{z:.1f} ' + vi.units + '<br>Distance: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
@@ -497,7 +559,7 @@
 
     /** Fetch every selected field along the same line and draw the stack.
      *  o = { prefix, keyFor(id), fetch(key) → Promise<json>, endpoints, locator,
-     *        title, plot(divId, traces, layout, config) } */
+     *        title, plot(divId, traces, layout, config), colorscaleFor (optional) } */
     function runMultiSection(o) {
         var box = document.getElementById(o.prefix + 'mcs-result'); if (!box) return;
         var fields = multiSectionSelected(o.prefix).filter(function (f) { return o.keyFor(f.id); });
@@ -505,7 +567,7 @@
         box.innerHTML = '<div class="explorer-status">Computing ' + fields.length + ' sections…</div>';
         Promise.all(fields.map(function (f) { return o.fetch(o.keyFor(f.id)); })).then(function (jsons) {
             var fig = multiSectionFigure(fields.map(function (f, i) { return { json: jsons[i], title: f.title }; }),
-                { title: o.title, endpoints: o.endpoints, locator: o.locator });
+                { title: o.title, endpoints: o.endpoints, locator: o.locator, colorscaleFor: o.colorscaleFor });
             var id = o.prefix + 'mcs-chart';
             box.innerHTML = '<div id="' + id + '" style="width:100%;height:' + fig.height + 'px;"></div>';
             o.plot(id, fig.traces, fig.layout, { responsive: true, displayModeBar: true, displaylogo: false,
@@ -671,7 +733,7 @@
             var q = json.quadrant_means[p.key];
             if (!q || !q.data) return;
             var showCbar = (i === 1);
-            traces.push({ z: q.data, x: R, y: H, type: 'heatmap', colorscale: o.colorscale, zmin: zmin, zmax: zmax,
+            traces.push({ z: q.data, x: R, y: H, type: 'heatmap', colorscale: o.colorscale, zmin: zmin, zmax: zmax, _tdrField: true,
                 xaxis: 'x' + sfx, yaxis: 'y' + sfx, showscale: showCbar,
                 colorbar: showCbar ? { title: { text: vi.units, font: { color: '#5b6573', size: f.cbar } }, tickfont: { color: '#5b6573', size: f.cbarTick },
                                        thickness: fs ? 14 : 10, len: 0.85, x: 1.02, y: 0.5 } : undefined,
@@ -1121,7 +1183,8 @@
             if (!st.tiltDots.length) { if (row) row.style.display = 'none'; return; }
             if (!row) {
                 row = document.createElement('div'); row.setAttribute('data-k', 'tilt');
-                row.style.cssText = 'display:flex;align-items:center;gap:5px;margin-top:4px;font-size:10px;color:#475569;';
+                row.className = (cb.cls || cb.id) + '-tilt';   // ink comes from the page's colorbar CSS
+                row.style.cssText = 'display:flex;align-items:center;gap:5px;margin-top:4px;font-size:10px;';
                 el.appendChild(row);
             }
             var hs = st.tilt.height_km.filter(function (h) { return h != null; });
@@ -1232,7 +1295,7 @@
                     '<div class="' + cls + '-foot"><span data-k="level"></span>' +
                         (cb.opacity ? '<span class="' + cls + '-op" title="Opacity of the radar field on the map"><input type="range" data-k="op" min="0" max="100" aria-label="Radar field opacity"><span data-k="opv"></span></span>' : '') +
                         '<button class="' + cls + '-reset" data-k="reset" title="Restore the variable\'s default range">reset</button></div>' +
-                    '<div data-k="ext" style="font-size:11px;font-weight:600;color:#1e293b;margin-top:3px;"></div>';
+                    '<div class="' + cls + '-ext" data-k="ext"></div>';
                 host.appendChild(el);
                 // Keep map drags / clicks from firing through the colorbar.
                 ['mousedown', 'click', 'dblclick', 'wheel', 'touchstart'].forEach(function (ev) {
@@ -1473,6 +1536,7 @@
 
     window.TDRView = {
         NAMED_CS: NAMED_CS, csParse: csParse, csResolve: csResolve, csColor: csColor, csLUT: csLUT,
+        defaultColorscale: defaultColorscale, restyleField: restyleField,
         planExtremes: planExtremes, planExtremesText: planExtremesText,
         windBarbShapes: windBarbShapes,
         bindPlotBarbs: bindPlotBarbs,

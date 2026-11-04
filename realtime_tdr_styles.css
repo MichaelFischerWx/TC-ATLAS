@@ -218,6 +218,8 @@
 .rt-cb-op { display: inline-flex; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; }
 .rt-cb-op input[type=range] { width: 64px; }
 .rt-cb-reset { background: none; border: none; color: var(--blue, #2e7dff); font: 600 9px 'DM Sans', sans-serif; cursor: pointer; padding: 0; }
+.rt-cb-ext { font-size: 11px; font-weight: 600; color: #1e293b; margin-top: 3px; }
+.rt-cb-tilt { color: #475569; }
 /* Phone: compact, top-right (zoom buttons are top-left, IR controls along
    the bottom) so it doesn't sit on the field; the opacity slider drops out.
    Must follow the base rule above — same specificity, so order decides. */
