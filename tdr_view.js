@@ -987,6 +987,7 @@
     //   fieldVisible: fn() → bool (default true; false = opacity 0, barbs/ring hidden)
     //   barbsVisible: fn() → bool (default true)
     //   colorbar: { host: fn() → el, id (container), cls (inner class prefix), className, opacity: bool,
+    //               extInFoot: bool (extremes on the level line, not a row of their own),
     //               onRange(vmin, vmax), onReset(), onShow(), onHide() }
     //   onDraw(p), onOff()   — page extras (center marker, storm grid, IR frame)
     // }
@@ -1293,9 +1294,11 @@
                         '<input type="number" data-k="max" step="any" aria-label="Color range maximum" title="Maximum of the color range — type to rescale">' +
                     '</div>' +
                     '<div class="' + cls + '-foot"><span data-k="level"></span>' +
+                        // extInFoot: the extremes ride on the level line (one row shorter)
+                        (cb.extInFoot ? '<span class="' + cls + '-ext" data-k="ext"></span>' : '') +
                         (cb.opacity ? '<span class="' + cls + '-op" title="Opacity of the radar field on the map"><input type="range" data-k="op" min="0" max="100" aria-label="Radar field opacity"><span data-k="opv"></span></span>' : '') +
                         '<button class="' + cls + '-reset" data-k="reset" title="Restore the variable\'s default range">reset</button></div>' +
-                    '<div class="' + cls + '-ext" data-k="ext"></div>';
+                    (cb.extInFoot ? '' : '<div class="' + cls + '-ext" data-k="ext"></div>');
                 host.appendChild(el);
                 // Keep map drags / clicks from firing through the colorbar.
                 ['mousedown', 'click', 'dblclick', 'wheel', 'touchstart'].forEach(function (ev) {

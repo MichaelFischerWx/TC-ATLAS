@@ -3877,18 +3877,14 @@ function _injectIRMapControls() {
 }
 // Lift the IR colorbar (a bottom-left map control) above the control strip so
 // the two cards never overlap; re-run on strip changes and resize.
+// The legend column sits 6 px above the IR dock (whose height changes as it
+// wraps), or at the map's bottom edge when there is no dock.
 function _positionIRColorbar() {
-    var cb = document.getElementById('ir-map-colorbar');
+    var stack = document.getElementById('map-legend-stack');
+    if (!stack) return;
     var ctrl = document.getElementById('ir-map-controls');
-    if (!cb) return;
-    // Offset the colorbar element itself (its parent differs between Leaflet
-    // corner containers and the GL facade's control wrapper).
-    cb.style.marginBottom = ctrl ? (ctrl.offsetHeight + 10) + 'px' : '';
-    var tcb = document.getElementById('tdr-map-colorbar');
-    if (tcb && tcb.style.display !== 'none') {
-        var irVisible = cb.style.display !== 'none' && cb.offsetHeight > 0;
-        tcb.style.bottom = ((ctrl ? ctrl.offsetHeight + 10 : 0) + (irVisible ? cb.offsetHeight + 6 : 0) + 8) + 'px';
-    }
+    var dockH = (ctrl && ctrl.offsetParent !== null) ? ctrl.offsetHeight : 0;
+    stack.style.bottom = (dockH ? 8 + dockH + 6 : 8) + 'px';
 }
 window.addEventListener('resize', function() { setTimeout(_positionIRColorbar, 150); });
 
@@ -4273,8 +4269,8 @@ var _tdrDrape = TDRView.createDrape({
     fieldVisible: function() { return _tdrVisible; },
     barbsVisible: function() { return _windBarbsEnabled && _radarMapOn; },
     colorbar: {
-        host: function() { return document.getElementById('map-container'); },
-        id: 'tdr-map-colorbar', cls: 'tdr-cb', className: 'map-colorbar tdr-map-colorbar', opacity: false,
+        host: function() { return _mapLegendStack(); },
+        id: 'tdr-map-colorbar', cls: 'tdr-cb', className: 'map-colorbar tdr-map-colorbar', opacity: false, extInFoot: true,
         onRange: function(mn, mx) {
             var a = document.getElementById('ep-vmin'), b = document.getElementById('ep-vmax');
             if (a) a.value = mn; if (b) b.value = mx;
@@ -6293,24 +6289,11 @@ fetch('tc_radar_metadata_v4.json?v=' + TCR_DATA_TOKEN)
         };
         legend.addTo(map);
 
-        // ── MW / IR Colorbar controls on the Leaflet map ──
-        _mwMapColorbar = L.control({ position:'bottomleft' });
-        _mwMapColorbar.onAdd = function() {
-            var div = L.DomUtil.create('div','map-colorbar mw-map-colorbar');
-            div.id = 'mw-map-colorbar';
-            div.style.display = 'none';
-            return div;
-        };
-        _mwMapColorbar.addTo(map);
-
-        _irMapColorbar = L.control({ position:'bottomleft' });
-        _irMapColorbar.onAdd = function() {
-            var div = L.DomUtil.create('div','map-colorbar ir-map-colorbar');
-            div.id = 'ir-map-colorbar';
-            div.style.display = 'none';
-            return div;
-        };
-        _irMapColorbar.addTo(map);
+        // ── Map legends: one column at the IR dock's left edge ──
+        // The radar-field colorbar (the TDRView drape puts it here, first via
+        // CSS order), the MW key and the IR key share one width and 6-px gaps;
+        // _positionIRColorbar keeps the column just above the dock.
+        _mapLegendStack();
         initializeFilters();
 
         // Zarr-derived fields (max_er_wspd_*, sddc/shdc) are baked into the
@@ -14534,6 +14517,7 @@ function _archiveRenderSondePanel(data) {
         '<span style="margin-left:8px;color:#9ca3af;">' + nSondes + ' sondes (' + timeWindow + ')</span>' +
         '<span style="margin-left:8px;color:#9ca3af;">' + nHitSfc + ' hit sfc' +
         (nEstPr > 0 ? ', ' + nEstPr + ' est P' : '') + '</span>' +
+        (data.source === 'aoc_seb' ? '<span style="margin-left:8px;color:#9ca3af;" title="The HRD archive is offline or lacks this mission; these are the same ASPEN-processed sondes from NOAA AOC\u2019s server.">via NOAA AOC</span>' : '') +
         '</div>';
 
     // Sonde table
@@ -15284,8 +15268,24 @@ var _mwVmin = 105;              // current MW color bounds
 var _mwVmax = 305;
 var _mwIsRGB = false;           // true when showing 37color product
 var _mwStormGridRGBb64 = null;  // base64 RGB image for 37color plan view
-var _mwMapColorbar = null;      // L.control for MW colorbar on Leaflet map
-var _irMapColorbar = null;      // L.control for IR colorbar on Leaflet map
+// MW + IR keys live in #map-legend-stack (built by _mapLegendStack) beside the radar colorbar.
+function _mapLegendStack() {
+    var stack = document.getElementById('map-legend-stack');
+    if (stack) return stack;
+    var host = document.getElementById('map-container');
+    if (!host) return null;
+    stack = document.createElement('div');
+    stack.id = 'map-legend-stack';
+    ['mw', 'ir'].forEach(function(k) {
+        var div = document.createElement('div');
+        div.id = k + '-map-colorbar';
+        div.className = 'map-colorbar ' + k + '-map-colorbar';
+        div.style.display = 'none';
+        stack.appendChild(div);
+    });
+    host.appendChild(stack);
+    return stack;
+}
 
 /**
  * Toggle the microwave satellite overlay on/off.
@@ -15759,7 +15759,7 @@ function _showMWMapColorbar(product, vmin, vmax) {
     if (product === '37color') {
         // 37color: show a compact legend with color patches
         el.innerHTML =
-            '<div style="font-size:9px;font-weight:600;color:var(--lg-mw);margin-bottom:3px;">37 GHz Color</div>' +
+            '<div class="map-cb-title" style="color:var(--lg-mw);">37 GHz Color</div>' +
             '<div style="display:flex;gap:2px;align-items:center;">' +
                 '<span style="display:inline-block;width:12px;height:10px;background:#008800;border-radius:2px;" title="Ocean"></span>' +
                 '<span style="font-size:9px;color:var(--lg-ink-dim);">Ocn</span>' +
@@ -15778,11 +15778,9 @@ function _showMWMapColorbar(product, vmin, vmax) {
         // NRL colormap gradient
         var gradientStops = 'linear-gradient(to right, #303030, #606060, #800000, #FF0000, #FF8C00, #FFD700, #ADFF2F, #00CC44, #00DDCC, #0066FF, #0000CC, #8888FF)';
         el.innerHTML =
-            '<div style="font-size:9px;font-weight:600;color:var(--lg-mw);margin-bottom:2px;">' + label + '</div>' +
-            '<div style="width:140px;height:10px;border-radius:3px;background:' + gradientStops + ';border:1px solid rgba(15, 22, 35,0.15);"></div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--lg-ink-dim);margin-top:1px;">' +
-                '<span>' + vmin + ' K</span><span>' + vmax + ' K</span>' +
-            '</div>';
+            '<div class="map-cb-title" style="color:var(--lg-mw);">' + label + '</div>' +
+            '<div class="map-cb-row"><span>' + vmin + ' K</span>' +
+                '<div class="map-cb-grad" style="background:' + gradientStops + ';"></div><span>' + vmax + ' K</span></div>';
     }
     el.style.display = 'block';
 }
@@ -15807,11 +15805,8 @@ function _showIRMapColorbar() {
     // luminance ramp (warm dark → cold bright) when the gray variant is shown.
     var gradientStops = _irColorbarGradient();
     el.innerHTML =
-        '<div style="font-size:9px;font-weight:600;color:var(--lg-ir);margin-bottom:2px;">IR Brightness Temp</div>' +
-        '<div style="width:140px;height:10px;border-radius:3px;background:' + gradientStops + ';border:1px solid rgba(15, 22, 35,0.15);"></div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--lg-ink-dim);margin-top:1px;">' +
-            '<span>170 K</span><span>310 K</span>' +
-        '</div>';
+        '<div class="map-cb-title" style="color:var(--lg-ir);">IR Brightness Temp</div>' +
+        '<div class="map-cb-row"><span>170 K</span><div class="map-cb-grad" style="background:' + gradientStops + ';"></div><span>310 K</span></div>';
     el.style.display = 'block';
     _positionIRColorbar();   // restack the radar key above it
 }
