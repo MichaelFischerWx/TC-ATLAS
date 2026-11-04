@@ -300,9 +300,18 @@
     Map.prototype.getSize = function () { var c = this.getContainer(); return new Point(c.clientWidth, c.clientHeight); };
     Map.prototype.invalidateSize = function () { this._gl.resize(); return this; };
     Map.prototype.remove = function () {
+        // Mark first, so deferred work sees it even if teardown throws midway.
+        this._removed = true;
         try { if (this._resizeObs) { this._resizeObs.disconnect(); this._resizeObs = null; } } catch (e) {}
         try { this._gl.remove(); } catch (e) {}
     };
+    // A removed maplibregl.Map deletes its style, after which getSource/getLayer
+    // throw ("Cannot read properties of undefined (reading 'getSource')"). Retry
+    // timers and queued adds can outlive the map — the storm card rebuilds its
+    // detail map when a deep link opens the same storm twice during init — so
+    // they check this and stop. A live map always has a style (set in the
+    // maplibregl.Map constructor), so this never trips on one.
+    Map.prototype._isDead = function () { return !!this._removed || !this._gl.style; };
 
     // projection
     Map.prototype.latLngToContainerPoint = function (ll) { var p = this._gl.project(ll2ml(ll)); return new Point(p.x, p.y); };
@@ -509,6 +518,9 @@
     Map.prototype.whenReady = function (fn) { if (this._gl.loaded()) fn(); else this._gl.once('load', fn); return this; };
     Map.prototype.stop = function () { this._gl.stop(); return this; };
     Map.prototype._whenStyle = function (fn) {
+        // Torn down: a 'style.load' wait would never fire anyway, and the
+        // ready path would run fn against a map that throws on every call.
+        if (this._isDead()) return;
         if (this._loaded || this._gl.isStyleLoaded()) { fn(); return; }
         this._gl.once('style.load', fn);
     };
@@ -739,7 +751,10 @@
             // whole map). Nothing outside this closure hangs onto the old id
             // — _removeFromGL and _setData read this._id at call time.
             var attempt = function () {
-                if (self._rmFlag || self._map !== map) return;
+                // Also stop once the map itself is gone: removing a map does
+                // not remove its layers, so _rmFlag stays false while the
+                // pending retry would throw on the style-less map.
+                if (self._rmFlag || self._map !== map || map._isDead()) return;
                 var id = self._id;
                 if (gl.getSource(id) && gl.getLayer(id + '-l')) { self._added = true; return; }
                 if (!(map._loaded || gl.isStyleLoaded())) { setTimeout(attempt, 150); return; }
@@ -873,6 +888,7 @@
         // setTimeout, NOT requestAnimationFrame: rAF is paused in a backgrounded tab,
         // which would strand the batched setData. setTimeout still fires (clamped).
         this._raf = setTimeout(function () { self._raf = null;
+            if (self._map._isDead()) return;   // map removed while the flush was pending
             if (self._rmL > 256) { self._lines = self._lines.filter(function (l) { return !l._bRemoved; }); self._rmL = 0; }
             if (self._rmC > 256) { self._circs = self._circs.filter(function (c) { return !c._bRemoved; }); self._rmC = 0; }
             var gl = self._map._gl, ls = gl.getSource(self._id + '-l'), cs = gl.getSource(self._id + '-c');
