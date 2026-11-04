@@ -4385,10 +4385,17 @@
         _rtCsMouseHandler = null;
     }
 
-    // ── Default colormap helper: returns 'Jet' for tangential wind / wind speed ──
+    // ── Default colormap helper: returns 'Turbo' for tangential wind / wind speed ──
     function _rtDefaultCmapForVariable(varName) {
-        if (varName === 'TANGENTIAL_WIND' || varName === 'WIND_SPEED') return 'Jet';
+        if (varName === 'TANGENTIAL_WIND' || varName === 'WIND_SPEED') return 'Turbo';
         return null; // use server default
+    }
+    // A variable's default colormap as stops: Turbo for the winds above, else
+    // the API's, with its matplotlib jet (earth-relative wind) drawn as Turbo
+    // too. Client-side, like the explorer: TDRView.defaultColorscale.
+    function _rtVarColorscale(vi) {
+        var name = _rtDefaultCmapForVariable(vi.key || (document.getElementById('rt-var') || {}).value || '');
+        return name ? TDRView.csResolve(name) : TDRView.defaultColorscale(vi);
     }
 
     // ── Render plan-view from JSON ───────────────────────────────
@@ -4400,12 +4407,11 @@
         }
         // Plan view (left) + azimuthal-mean placeholder (right) — shared with the explorer
         resultDiv.innerHTML = TDRView.dualPanelHTML('rt-', { onExpand: 'rtOpenFullscreen', onToggle: '_rtToggleDualPane', onSave: 'rtSaveTDRView' });
-        _rtDefaultColorscale = varInfo.colorscale;
+        _rtDefaultColorscale = _rtVarColorscale(varInfo);
         _rtDefaultVmin = varInfo.vmin;
         _rtDefaultVmax = varInfo.vmax;
 
         // Colorscale: user override > variable-specific default > server default
-        var varDefault = _rtDefaultCmapForVariable(varInfo.key || (document.getElementById('rt-var') || {}).value || '');
         var activeColorscale = _rtColorscale(varInfo);
         var activeVmin = _rtGetVmin(), activeVmax = _rtGetVmax();
         var frameTag = json.storm_relative ? ' <span style="color:#2563eb;">\u00b7 storm-relative</span>' : '';
@@ -4467,7 +4473,7 @@
         _rtPlan = {
             z: zData, x: x, y: y,
             vmin: (activeVmin != null ? activeVmin : varInfo.vmin), vmax: (activeVmax != null ? activeVmax : varInfo.vmax),
-            colorscale: activeColorscale, default_colorscale: (varDefault || varInfo.colorscale),
+            colorscale: activeColorscale, default_colorscale: _rtDefaultColorscale,
             units: varInfo.units, display_name: varInfo.display_name, level_km: json.actual_level_km,
             rmw_km: json.wcm_rmw_km, rmw_cx: json.wcm_center_x_km || 0, rmw_cy: json.wcm_center_y_km || 0,
             barbs: json.wind_barbs || null, ctrk: !!_ctrk,
@@ -4559,8 +4565,7 @@
     function _rtDrapeRecolor() {
         if (!_rtPlan) return;
         var sel = document.getElementById('rt-cmap'), cs = sel && sel.value;
-        if (cs) { try { _rtPlan.colorscale = JSON.parse(cs); } catch (e) { _rtPlan.colorscale = cs; } }
-        else _rtPlan.colorscale = _rtPlan.default_colorscale;
+        _rtPlan.colorscale = cs ? TDRView.csResolve(cs) : _rtPlan.default_colorscale;
         var mn = _rtGetVmin(), mx = _rtGetVmax();
         if (mn != null && !isNaN(mn)) _rtPlan.vmin = mn;
         if (mx != null && !isNaN(mx)) _rtPlan.vmax = mx;
@@ -4684,11 +4689,12 @@
         var sd = (_rtShipsData && _rtShipsData.ships_data) ? _rtShipsData.ships_data : {};
         return TDRView.shearInsetCS(sd.sddc != null ? sd.sddc : null, isFullsize, sd.shear_kt != null ? sd.shear_kt : null);
     }
-    // Colormap for a panel: picker override > per-variable default (Jet for winds) > server default.
+    // Colormap for a panel: picker override > per-variable default (Turbo for winds) > server default.
+    // As stops, so Plotly (which has no Turbo, Inferno, Magma or Plasma and
+    // draws those names as "Reds") and the map drape draw the same scale.
     function _rtColorscale(vi) {
         var sel = document.getElementById('rt-cmap');
-        if (sel && sel.value) { try { return JSON.parse(sel.value); } catch (e) { return sel.value; } }
-        return _rtDefaultCmapForVariable(vi.key || (document.getElementById('rt-var') || {}).value || '') || vi.colorscale;
+        return (sel && sel.value) ? TDRView.csResolve(sel.value) : _rtVarColorscale(vi);
     }
     // WCM RMW for the dashed RMW line: the panel's own value, else the plan view's
 // (the azimuthal-mean / quadrant endpoints don't return it).
@@ -4752,24 +4758,25 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
     function _rtGetVmin() { var inp = document.getElementById('rt-vmin'); if (inp && inp.value !== '') return parseFloat(inp.value); return _rtDefaultVmin; }
     function _rtGetVmax() { var inp = document.getElementById('rt-vmax'); if (inp && inp.value !== '') return parseFloat(inp.value); return _rtDefaultVmax; }
 
+    // Every chart that can draw the plan-view variable. The picker and the color
+    // range restyle the field traces in all of them (TDRView.restyleField), so the
+    // cross-section, both azimuthal means and the shear quadrants follow the map.
+    var _RT_FIELD_CHART_IDS = ['rt-plotly-chart', 'plotly-fullscreen', 'rt-cs-chart', 'rt-dual-az-chart',
+                               'rt-az-chart', 'rt-quad-chart'];
+
     window.rtApplyCmap = function () {
         var sel = document.getElementById('rt-cmap'); if (!sel) return;
-        var cs = sel.value;
-        if (!cs && _rtDefaultColorscale) cs = _rtDefaultColorscale; if (!cs) return;
-        var colorscale; try { colorscale = JSON.parse(cs); } catch (e) { colorscale = cs; }
-        ['rt-plotly-chart', 'rt-fullscreen-chart', 'rt-cs-fullscreen'].forEach(function (id) {
-            var el = document.getElementById(id);
-            if (el && el.data && el.data.length) Plotly.restyle(el, { colorscale: [colorscale] }, [0]);
-        });
+        var colorscale = sel.value ? TDRView.csResolve(sel.value) : _rtDefaultColorscale;
+        if (!colorscale) return;
+        TDRView.restyleField(_RT_FIELD_CHART_IDS, { colorscale: colorscale });
+        if (_rtLastPlotlyData) _rtLastPlotlyData.heatmap.colorscale = colorscale;
         _rtDrapeRecolor();
     };
 
     window.rtApplyColorRange = function () {
         var zmin = _rtGetVmin(), zmax = _rtGetVmax(); if (zmin === null || zmax === null) return;
-        ['rt-plotly-chart', 'rt-fullscreen-chart', 'rt-cs-fullscreen'].forEach(function (id) {
-            var el = document.getElementById(id);
-            if (el && el.data && el.data.length) Plotly.restyle(el, { zmin: [zmin], zmax: [zmax] }, [0]);
-        });
+        TDRView.restyleField(_RT_FIELD_CHART_IDS, { zmin: zmin, zmax: zmax });
+        if (_rtLastPlotlyData) { _rtLastPlotlyData.heatmap.zmin = zmin; _rtLastPlotlyData.heatmap.zmax = zmax; }
         _rtDrapeRecolor();
     };
 
@@ -4777,10 +4784,8 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var vi = document.getElementById('rt-vmin'), va = document.getElementById('rt-vmax');
         if (vi) vi.value = ''; if (va) va.value = '';
         if (_rtDefaultVmin !== null && _rtDefaultVmax !== null) {
-            ['rt-plotly-chart', 'rt-fullscreen-chart', 'rt-cs-fullscreen'].forEach(function (id) {
-                var el = document.getElementById(id);
-                if (el && el.data && el.data.length) Plotly.restyle(el, { zmin: [_rtDefaultVmin], zmax: [_rtDefaultVmax] }, [0]);
-            });
+            TDRView.restyleField(_RT_FIELD_CHART_IDS, { zmin: _rtDefaultVmin, zmax: _rtDefaultVmax });
+            if (_rtLastPlotlyData) { _rtLastPlotlyData.heatmap.zmin = _rtDefaultVmin; _rtLastPlotlyData.heatmap.zmax = _rtDefaultVmax; }
         }
         _rtDrapeRecolor();
     };
@@ -4935,6 +4940,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             locator: p ? { z: p.z, x: p.x, y: p.y, colorscale: p.colorscale, zmin: p.vmin, zmax: p.vmax } : null,
             title: (meta.storm_name || 'TDR analysis') + (meta.datetime ? ' | ' + _rtAnalysisTime(meta) : '') + ' \u2014 TDR cross-section (' +
                    Math.round(Math.hypot(b.x - a.x, b.y - a.y)) + ' km)',
+            colorscaleFor: _rtVarColorscale,   // each field's default, winds as Turbo
             plot: function (id, t, l, c) { _rtNewPlot(id, t, l, c); }
         });
     };
@@ -7827,10 +7833,10 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         }
 
         // Inherit TDR heatmap colorscale + range
-        var tdrColorscale = 'Jet';
+        var tdrColorscale = TDRView.csResolve('Turbo');
         var tdrCmin = 0, tdrCmax = 80;
         if (plotDiv.data && plotDiv.data.length > 0) {
-            var tdrTrace = plotDiv.data[0];
+            var tdrTrace = plotDiv.data.filter(function (t) { return t && t._tdrField; })[0] || plotDiv.data[0];
             if (tdrTrace.colorscale) tdrColorscale = tdrTrace.colorscale;
             if (tdrTrace.zmin != null) tdrCmin = tdrTrace.zmin;
             if (tdrTrace.zmax != null) tdrCmax = tdrTrace.zmax;
