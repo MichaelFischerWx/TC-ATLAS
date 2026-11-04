@@ -1160,7 +1160,8 @@
 }
 /* Locator: a small themed basemap with the storm's recent track +
    current position, giving the "where on Earth" context the zoomed IR
-   thumbnail lacks. */
+   thumbnail lacks. A canvas of basemap tiles + an SVG track, built by
+   realtime_ir.js (which also sets the overflow clip inline). */
 .qv-card-locator {
     width: 100%;
     height: 96px;
@@ -1168,9 +1169,6 @@
     border-top: 1px solid var(--border);
     background: var(--surface);
 }
-.qv-card-locator .leaflet-container { background: var(--surface); font: inherit; }
-.qv-card-locator .leaflet-control-container,
-.qv-card-locator .leaflet-control-attribution { display: none; }
 .qv-card-body {
     padding: 10px 12px 12px;
     display: flex;
@@ -1226,6 +1224,12 @@
     color: var(--text-faint);
     font-variant-numeric: tabular-nums;
 }
+.qv-gallery-credit {
+    margin: 16px 0 0;
+    font-size: 11px;
+    color: var(--text-faint);
+}
+.qv-gallery-credit a { color: inherit; }
 .qv-gallery-empty {
     text-align: center;
     color: var(--text);
