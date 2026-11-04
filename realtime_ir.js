@@ -10382,9 +10382,7 @@
         if (window.tcaLoadPlotly) window.tcaLoadPlotly();
 
         // Hide the active-storm gallery landing — opening a card replaces it.
-        // Its locator maps go too: _irShowGallery() rebuilds the grid on the
-        // way back, so left alive they only hold a WebGL context each behind
-        // the card.
+        // _irShowGallery() rebuilds the grid on the way back.
         _irHideGallery();
 
         // Clean up model overlay from previous storm
@@ -14517,7 +14515,14 @@
     }
 
     // ── Card locator maps + stats ──────────────────────────────────
-    var _galleryLocatorMaps = [];
+    // A card's locator is a static picture, not a map: the CARTO basemap
+    // tiles around the storm drawn into a 2D canvas, the recent track as SVG
+    // and the current-position dot on top. Each card used to get a live GL map
+    // (L.map), which never pans or zooms but held a WebGL context. Chrome
+    // keeps ~16 live per page (fewer on phones) and past that force-loses
+    // the OLDEST, here the global map (#ir-map), which MapLibre never
+    // restores: a 16-storm gallery left the Global Map tab blank. Static
+    // locators hold no context however many storms are active.
     var _LOC_TILES = {
         light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
         dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
@@ -14525,7 +14530,14 @@
     // Fixed zoom for every locator so all cards show the SAME geographic
     // extent (centered on each storm's current position), rather than
     // auto-fitting to each track and ending up at different scales.
+    // MapLibre zoom, as the GL locator used: its world is 512 · 2^z px, so
+    // the 256 px CARTO tiles it drew 1:1 come from one level deeper.
     var _LOC_ZOOM = 3;
+    var _LOC_TILE_PX = 256;
+    var _LOC_TILE_Z = _LOC_ZOOM + 1;
+    var _SVG_NS = 'http://www.w3.org/2000/svg';
+    // Draws a locator once it has a size, and again when its card resizes.
+    var _locResizeObs = null;
     function _irFetchShearInto(statsEl, atcfId) {
         _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear',
               { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
@@ -14538,65 +14550,162 @@
             })
             .catch(function () {});
     }
+    /** Stop redrawing the current grid's locators (they hold no WebGL
+     *  context; the observer is all there is to release). Run before a
+     *  rebuild and when the gallery hides. */
     function _irCleanupGalleryMaps() {
-        for (var i = 0; i < _galleryLocatorMaps.length; i++) {
-            var m = _galleryLocatorMaps[i];
-            m._qvDead = true;
-            try { m.remove(); } catch (e) {}
-        }
-        _galleryLocatorMaps = [];
+        if (_locResizeObs) { _locResizeObs.disconnect(); _locResizeObs = null; }
     }
-    function _irInitLocator(mapDiv, s) {
-        if (!mapDiv || typeof L === 'undefined') return;
-        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
-        var map;
+    // Web Mercator world pixels at the locator's scale.
+    function _irLocWorldPx(lat, lon) {
+        var size = _LOC_TILE_PX * Math.pow(2, _LOC_TILE_Z);
+        var phi = Math.max(-85.0511, Math.min(85.0511, lat)) * Math.PI / 180;
+        return [(lon + 180) / 360 * size,
+                (1 - Math.log(Math.tan(phi) + 1 / Math.cos(phi)) / Math.PI) / 2 * size];
+    }
+    // Basemap URL template for a theme. Built through theme.js's patched
+    // L.tileLayer factory, which owns the CARTO key; a pinned tcaVariant
+    // keeps that throwaway layer out of theme.js's swap registry.
+    function _irLocTileTemplate(dark) {
+        var v = dark ? 'dark' : 'light', url = _LOC_TILES[v];
         try {
-            map = L.map(mapDiv, {
-                zoomControl: false, attributionControl: false, dragging: false,
-                scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false,
-                keyboard: false, touchZoom: false, tap: false, fadeAnimation: false,
-            });
-        } catch (e) { return; }
-        var tiles = L.tileLayer(dark ? _LOC_TILES.dark : _LOC_TILES.light,
-            { subdomains: 'abcd', maxZoom: 8 }).addTo(map);
-        map._qvTiles = tiles;
-        map._qvDark = dark;
-        map.setView([s.lat, s.lon], _LOC_ZOOM);
-        _galleryLocatorMaps.push(map);
-
+            var layer = L.tileLayer(url, { tcaVariant: v });
+            if (layer && layer._url) url = layer._url;
+        } catch (e) {}
+        return url;
+    }
+    // Same tile URLs (subdomain included) the GL locator requested: MapLibre
+    // picks subdomain (x + y) % 4 and the facade drops {r}.
+    function _irLocTileUrl(tpl, x, y) {
+        var n = Math.pow(2, _LOC_TILE_Z), xw = ((x % n) + n) % n;
+        return tpl.replace('{s}', 'abcd'.charAt((xw + y) % 4)).replace('{z}', _LOC_TILE_Z)
+            .replace('{x}', xw).replace('{y}', y).replace('{r}', '');
+    }
+    // The current theme's image for tile (tx, ty) of a locator, loading it
+    // (CORS, like MapLibre's fetch, so the canvas stays clean) on first use.
+    function _irLocTile(loc, st, tx, ty) {
+        var key = tx + '/' + ty, img = st.imgs[key];
+        if (img && img._qvTpl === st.tpl) return img;
+        img = new Image();
+        img.crossOrigin = 'anonymous';
+        img._qvTpl = st.tpl;
+        img.onload = function () { if (st.imgs[key] === img && loc.isConnected) _irLocDraw(loc); };
+        img.src = _irLocTileUrl(st.tpl, tx, ty);
+        st.imgs[key] = img;
+        return img;
+    }
+    /** Draw the tiles a locator's current size needs into its canvas, at
+     *  device resolution; a tile still loading draws when it lands. One
+     *  raster with each shared tile edge rounded once: separate <img> tiles
+     *  left hairline seams on fractional device-pixel ratios (2.625 phones).
+     *  A hidden locator (no size) waits for the resize observer. */
+    function _irLocDraw(loc) {
+        var st = loc && loc._qvLoc;
+        var w = loc ? loc.clientWidth : 0, h = loc ? loc.clientHeight : 0;
+        if (!st || !w || !h) return;
+        var dpr = window.devicePixelRatio || 1, cv = st.canvas;
+        var cw = Math.round(w * dpr), ch = Math.round(h * dpr);
+        if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+        var ctx = cv.getContext('2d');
+        if (!ctx) return;
+        var T = _LOC_TILE_PX, n = Math.pow(2, _LOC_TILE_Z);
+        // World px → locator px: the storm sits at the center.
+        var ox = w / 2 - st.cx, oy = h / 2 - st.cy;
+        var x0 = Math.floor(-ox / T), x1 = Math.floor((w - ox) / T);
+        var y0 = Math.max(0, Math.floor(-oy / T)), y1 = Math.min(n - 1, Math.floor((h - oy) / T));
+        for (var ty = y0; ty <= y1; ty++) {
+            for (var tx = x0; tx <= x1; tx++) {
+                var img = _irLocTile(loc, st, tx, ty);
+                if (!img.complete || !img.naturalWidth) continue;
+                var l = Math.round((ox + tx * T) * dpr), r = Math.round((ox + (tx + 1) * T) * dpr);
+                var t = Math.round((oy + ty * T) * dpr), b = Math.round((oy + (ty + 1) * T) * dpr);
+                ctx.drawImage(img, l, t, r - l, b - t);
+            }
+        }
+    }
+    function _irInitLocator(loc, s) {
+        if (!loc || s.lat == null || s.lon == null) return;
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var c = _irLocWorldPx(s.lat, s.lon);
+        var st = { cx: c[0], cy: c[1], dark: dark, tpl: _irLocTileTemplate(dark), imgs: {} };
+        loc._qvLoc = st;
+        // Decorative and click-through: the whole card is the button.
+        loc.setAttribute('aria-hidden', 'true');
+        loc.style.overflow = 'hidden';
+        loc.style.pointerEvents = 'none';
+        st.canvas = document.createElement('canvas');
+        st.canvas.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;';
+        loc.appendChild(st.canvas);
+        // Track and dot hang off an anchor at the center (the storm).
+        var anchor = document.createElement('div');
+        anchor.style.cssText = 'position:absolute;left:50%;top:50%;width:0;height:0;';
+        // Same marker as the GL locator's circleMarker (radius 5, white 1.5 px ring).
         var color = _irClassColor(s);
-        var cur = L.circleMarker([s.lat, s.lon],
-            { radius: 5, color: '#fff', weight: 1.5, fillColor: color, fillOpacity: 1 }).addTo(map);
-        setTimeout(function () { if (!map._qvDead) { try { map.invalidateSize(false); } catch (e) {} } }, 60);
+        var dot = document.createElement('div');
+        dot.className = 'qv-loc-dot';
+        dot.style.cssText = 'position:absolute;left:0;top:0;width:10px;height:10px;border-radius:50%;'
+            + 'transform:translate(-50%,-50%);background:' + color + ';border:1.5px solid #fff;';
+        anchor.appendChild(dot);
+        loc.appendChild(anchor);
+        if (typeof ResizeObserver !== 'undefined') {
+            if (!_locResizeObs) {
+                _locResizeObs = new ResizeObserver(function (entries) {
+                    for (var i = 0; i < entries.length; i++) _irLocDraw(entries[i].target);
+                });
+            }
+            _locResizeObs.observe(loc);
+        } else {
+            setTimeout(function () { _irLocDraw(loc); }, 0);
+        }
 
-        // Recent track → polyline + fit to extent.
+        // Recent track → polyline under the dot. The extent stays fixed
+        // (centered on the current position) so every card matches.
         _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(s.atcf_id) + '/metadata',
               { cache: 'no-store' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (d) {
-                if (!d || map._qvDead) return;
+                if (!d || !loc.isConnected) return;
                 var pts = (d.intensity_history || []).filter(function (p) {
                     return p && p.lat != null && p.lon != null;
                 });
-                if (pts.length >= 2) {
-                    var ll = pts.map(function (p) { return [p.lat, p.lon]; });
-                    L.polyline(ll, { color: color, weight: 2, opacity: 0.85 }).addTo(map);
-                    cur.bringToFront();
-                    // Keep the fixed extent (centered on current position) — the
-                    // track is drawn but we don't re-fit, so every card matches.
-                }
-                try { map.invalidateSize(false); } catch (e) {}
+                if (pts.length < 2) return;
+                var xy = pts.map(function (p) {
+                    // The copy of each fix nearest the storm, so a track
+                    // across the antimeridian stays one line.
+                    var w = _irLocWorldPx(p.lat, p.lon + 360 * Math.round((s.lon - p.lon) / 360));
+                    return (w[0] - st.cx).toFixed(1) + ',' + (w[1] - st.cy).toFixed(1);
+                });
+                var svg = document.createElementNS(_SVG_NS, 'svg');
+                svg.setAttribute('width', '1');
+                svg.setAttribute('height', '1');
+                svg.style.cssText = 'position:absolute;left:0;top:0;overflow:visible;';
+                var line = document.createElementNS(_SVG_NS, 'polyline');
+                line.setAttribute('points', xy.join(' '));
+                line.setAttribute('fill', 'none');
+                line.setAttribute('stroke', color);
+                line.setAttribute('stroke-width', '2');
+                line.setAttribute('stroke-opacity', '0.85');
+                line.setAttribute('stroke-linecap', 'round');
+                line.setAttribute('stroke-linejoin', 'round');
+                svg.appendChild(line);
+                anchor.insertBefore(svg, dot);
             })
             .catch(function () {});
     }
-    // Swap locator basemaps when the site theme toggles.
+    // Swap locator basemaps when the site theme toggles. A hidden gallery
+    // is skipped: _irShowGallery() rebuilds it in the new theme.
     document.documentElement.addEventListener('theme:change', function (e) {
         var dark = !!(e.detail && e.detail.theme === 'dark');
-        for (var i = 0; i < _galleryLocatorMaps.length; i++) {
-            var m = _galleryLocatorMaps[i];
-            if (m._qvDead || m._qvDark === dark || !m._qvTiles) continue;
-            m._qvDark = dark;
-            m._qvTiles.setUrl(dark ? _LOC_TILES.dark : _LOC_TILES.light);
+        var gallery = document.getElementById('sat-gallery');
+        if (!gallery || gallery.style.display === 'none') return;
+        var locs = document.querySelectorAll('#sat-gallery-grid .qv-card-locator');
+        var tpl = null;
+        for (var i = 0; i < locs.length; i++) {
+            var st = locs[i]._qvLoc;
+            if (!st || st.dark === dark) continue;
+            st.dark = dark;
+            st.tpl = tpl = tpl || _irLocTileTemplate(dark);
+            _irLocDraw(locs[i]);   // the old theme's tiles stay until each new one lands
         }
     });
 
@@ -14661,12 +14770,11 @@
         card.appendChild(thumb);
 
         // Locator: themed mini-map with the storm's recent track + current
-        // position. Initialised by _irRenderGallery once the card is in the
-        // DOM (Leaflet needs a sized container).
+        // position.
         var loc = document.createElement('div');
         loc.className = 'qv-card-locator';
         card.appendChild(loc);
-        card._qvLocStorm = s;
+        _irInitLocator(loc, s);
 
         var body = document.createElement('div');
         body.className = 'qv-card-body';
@@ -14732,16 +14840,18 @@
     window._irRenderGallery = function () {
         var grid = document.getElementById('sat-gallery-grid');
         if (!grid) return;
-        _irCleanupGalleryMaps();   // tear down prior locator maps before rebuild
+        _irCleanupGalleryMaps();   // release the prior grid's locators before rebuild
         var countEl = document.getElementById('sat-gallery-count');
         var emptyEl = document.getElementById('sat-gallery-empty');
         var loadingEl = document.getElementById('sat-gallery-loading');
+        var creditEl = document.getElementById('sat-gallery-credit');
         var storms = (stormData || []).slice().sort(function (a, b) {
             return (b.vmax_kt || 0) - (a.vmax_kt || 0);
         });
         if (countEl) countEl.textContent = storms.length ? '· ' + storms.length + ' active' : '';
         if (!storms.length) {
             grid.innerHTML = '';
+            if (creditEl) creditEl.style.display = 'none';
             // A cold load reaches here before the first list arrives (the API
             // can take seconds, longer on a cold start): say it's loading
             // rather than claim there are no storms. The ir-storms-loaded
@@ -14752,16 +14862,11 @@
         }
         if (loadingEl) loadingEl.style.display = 'none';
         if (emptyEl) emptyEl.style.display = 'none';
+        if (creditEl) creditEl.style.display = '';
         var frag = document.createDocumentFragment();
         for (var i = 0; i < storms.length; i++) frag.appendChild(_irMakeGalleryCard(storms[i], i));
         grid.innerHTML = '';
         grid.appendChild(frag);
-        // Init locator maps now that the cards are sized in the DOM.
-        var cards = grid.querySelectorAll('.qv-card');
-        for (var j = 0; j < cards.length; j++) {
-            var loc = cards[j].querySelector('.qv-card-locator');
-            if (loc && cards[j]._qvLocStorm) _irInitLocator(loc, cards[j]._qvLocStorm);
-        }
     };
     /** Show the gallery landing (hides the detail card + other sat views).
      *  Renders now; the ir-storms-loaded listener below re-renders it when
@@ -14781,12 +14886,10 @@
         } catch (e) {}
         window._irRenderGallery();
     };
-    /** Hide the gallery landing and dispose of its locator maps. Each holds
-     *  a WebGL context, and Chrome caps how many a page keeps live (~16 on
-     *  desktop, fewer on phones), dropping the oldest (often the global
-     *  map's) past that. Nothing is lost: every way back to the gallery
-     *  goes through _irShowGallery(), which rebuilds the grid. Used by
-     *  openStormDetail() and by the tab controller in realtime_ir.html. */
+    /** Hide the gallery landing and release its grid's locators. Nothing is
+     *  lost: every way back to the gallery goes through _irShowGallery(),
+     *  which rebuilds the grid. Used by openStormDetail() and by the tab
+     *  controller in realtime_ir.html. */
     function _irHideGallery() {
         var gallery = document.getElementById('sat-gallery');
         if (gallery) gallery.style.display = 'none';
