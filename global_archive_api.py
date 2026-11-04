@@ -33,6 +33,7 @@ import threading
 from collections import OrderedDict
 from datetime import datetime
 from functools import lru_cache
+from urllib.parse import urlsplit
 
 import numpy as np
 import requests
@@ -1433,6 +1434,31 @@ def _get_earthdata_session():
     return session
 
 
+# Earthdata Cloud logs a client in through an OAuth redirect dance that ends in
+# a per-host session cookie (OPeNDAP: JSESSIONID; the TEA download: asf-urs).
+# Concurrent first requests on one cookie-less session race that dance and
+# overwrite each other's login state: all but one end on Hyrax's HTML page
+# ("OPeNDAP Hyrax for NASA Earthdata"; 9 of 10 in a reproduced viewer burst,
+# 2026-11-02, and 10 of 10 fine once the cookie existed). So the first request
+# to a host logs in alone, and an HTML reply is retried once the same way.
+_earthdata_login_lock = threading.Lock()
+
+
+def _earthdata_logged_in(session, url: str) -> bool:
+    """True when the session holds a cookie for the URL's host."""
+    host = urlsplit(url).hostname or ""
+    return any(c.domain.lstrip(".") == host for c in session.cookies)
+
+
+def _earthdata_get(session, url: str, relogin: bool = False, **kwargs):
+    """session.get for an Earthdata URL; a host's login runs one request at a time."""
+    if relogin or not _earthdata_logged_in(session, url):
+        with _earthdata_login_lock:
+            if relogin or not _earthdata_logged_in(session, url):
+                return session.get(url, **kwargs)
+    return session.get(url, **kwargs)
+
+
 def _mergir_direct_file_url(dt: datetime) -> str:
     """
     Build direct download URL for the MergIR file covering a given datetime.
@@ -1609,7 +1635,8 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
                 # timeout=(connect, read): 15s to connect, 30s per chunk read.
                 # The old timeout=90 only covered connection with stream=True,
                 # allowing iter_content to hang indefinitely on slow NASA responses.
-                resp = session.get(url, timeout=(15, 30), allow_redirects=True, stream=True)
+                resp = _earthdata_get(session, url, timeout=(15, 30),
+                                      allow_redirects=True, stream=True)
 
                 if resp.status_code in (401, 403):
                     logger.warning(
@@ -1624,17 +1651,25 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
                     _mergir_tls.n_other += 1
                     continue
 
-                # Detect Earthdata login page redirect — if the response is
-                # HTML instead of NetCDF, the token is likely expired.
+                # HTML instead of data: a login race on the shared session (see
+                # _earthdata_get) or a stale host session. Retry once, logging in
+                # alone; keep the session and its cookies (replacing it on every
+                # HTML reply made each later burst race the login again).
                 content_type = resp.headers.get("content-type", "")
                 if "text/html" in content_type:
+                    resp.close()
+                    resp = _earthdata_get(session, url, relogin=True, timeout=(15, 30),
+                                          allow_redirects=True, stream=True)
+                    content_type = resp.headers.get("content-type", "")
+                if "text/html" in content_type:
+                    head = next(resp.iter_content(4096), b"")
+                    m = re.search(rb"<title>(.*?)</title>", head, re.S | re.I)
+                    title = m.group(1).decode("utf-8", "replace").strip()[:80] if m else ""
                     logger.warning(
-                        f"MergIR: got HTML response for {url_label} — "
-                        f"likely expired Earthdata token (redirected to login page)"
+                        f"MergIR: HTML instead of data for {url_label} "
+                        f"(HTTP {resp.status_code} from {urlsplit(resp.url).hostname}: {title!r})"
                     )
                     resp.close()
-                    _earthdata_session = None
-                    session = _get_earthdata_session()
                     _mergir_record_failure()
                     _mergir_tls.n_other += 1
                     continue
