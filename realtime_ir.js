@@ -10385,9 +10385,7 @@
         // Its locator maps go too: _irShowGallery() rebuilds the grid on the
         // way back, so left alive they only hold a WebGL context each behind
         // the card.
-        var _satGallery = document.getElementById('sat-gallery');
-        if (_satGallery) _satGallery.style.display = 'none';
-        _irCleanupGalleryMaps();
+        _irHideGallery();
 
         // Clean up model overlay from previous storm
         _rtRemoveModelOverlay();
@@ -14783,6 +14781,18 @@
         } catch (e) {}
         window._irRenderGallery();
     };
+    /** Hide the gallery landing and dispose of its locator maps. Each holds
+     *  a WebGL context, and Chrome caps how many a page keeps live (~16 on
+     *  desktop, fewer on phones), dropping the oldest (often the global
+     *  map's) past that. Nothing is lost: every way back to the gallery
+     *  goes through _irShowGallery(), which rebuilds the grid. Used by
+     *  openStormDetail() and by the tab controller in realtime_ir.html. */
+    function _irHideGallery() {
+        var gallery = document.getElementById('sat-gallery');
+        if (gallery) gallery.style.display = 'none';
+        _irCleanupGalleryMaps();
+    }
+    window._irHideGallery = _irHideGallery;
     // Keep the gallery fresh as poll cycles update the storm list, but only
     // while it's the visible view. Checked in a microtask, after the
     // dispatching code and the other listeners have run: on a cold storm=
