@@ -13883,7 +13883,9 @@ function _archivePopulateFLInfo(flData) {
     var n30s = flData.obs_30s ? flData.obs_30s.length : 0;
     el.innerHTML = flData.mission_id + ' \u00b7 1s/' + n1s + ', 10s/' + n10s + ', 30s/' + n30s +
         ' (' + flData.n_obs_raw + ' raw) \u00b7 \u00b1' + flData.time_window_min + ' min \u00b7 ' +
-        '<a href="' + (flData.source_url || '#') + '" target="_blank" style="color:#60a5fa;font-size:10px;">HRD Archive</a>';
+        (flData.source === 'aoc_acdata'
+            ? '<a href="' + flData.source_url + '" target="_blank" rel="noopener" style="color:#60a5fa;font-size:10px;" title="The HRD archive is offline or lacks this mission; this is the aircraft\u2019s own 1-Hz record from NOAA AOC.">NOAA AOC</a>'
+            : '<a href="' + (flData.source_url || '#') + '" target="_blank" style="color:#60a5fa;font-size:10px;">HRD Archive</a>');
 }
 
 function _archFLSetXAxis(mode) {
