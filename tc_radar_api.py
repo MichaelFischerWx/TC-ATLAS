@@ -7793,8 +7793,10 @@ def _parse_tdr_scan_time(dt_str: str) -> Optional[datetime]:
 # visitor after the first. Failures (success: false) are neither mirrored nor
 # cached — a transient HRD fetch error must not be pinned for a day.
 # ---------------------------------------------------------------------------
-def _archive_reply(result: dict, r2_key: str):
+def _archive_reply(result: dict, r2_key: str, mirror: bool = True):
     if isinstance(result, dict) and result.get("success"):
+        if not mirror:   # a stand-in source (see _seb_sonde_frd_files): serve it, don't make it the record
+            return JSONResponse(result, headers={"Cache-Control": "public, max-age=600"})
         from global_archive_api import _r2_mirror_frame_async
         _r2_mirror_frame_async(r2_key, result)
         return JSONResponse(result, headers={"Cache-Control": "public, max-age=86400, s-maxage=604800, immutable"})
@@ -8783,6 +8785,56 @@ def _fetch_and_extract_frd_tarball(
     return frd_files
 
 
+# NOAA AOC's SEB server keeps the same ASPEN-processed sondes as the HRD
+# archive for NOAA P-3 / G-IV missions (2016 on), one .frd per sonde under
+# ASPEN_Data/<YYYYMMDD><aircraft><flight>/. /dropsondes/archive falls back to
+# it when HRD has nothing for the mission: AOML unreachable (2026-11-04 every
+# www.aoml.noaa.gov URL redirected to a placeholder), no season directory yet,
+# or no tarball. Not mirrored to R2: per-file fetches can come back partial,
+# and HRD stays the record once it is back.
+_SEB_SONDE_WORKERS = 8
+_hrd_sonde_year_miss: dict = {}   # year -> when HRD last had no season dir for it
+_HRD_SONDE_MISS_TTL = 300         # skip re-probing a dead/missing season for 5 min
+
+
+def _seb_sonde_frd_files(mission_id: str, scan_dt: datetime,
+                         window_min: Optional[float]) -> tuple[list[tuple[str, str]], Optional[str], int]:
+    """The mission's .frd sondes from SEB: ([(filename, text)], folder URL,
+    number of files that failed to download). With window_min, only sondes
+    launched within window_min + 15 min of scan_dt (by file name) are
+    fetched; the exact window is applied after parsing."""
+    from realtime_tdr_api import (SEB_SONDE_BASE, _parse_directory, _fetch_text,
+                                  _classify_sonde_file, _parse_sonde_launch_time)
+    m = re.match(r"(\d{6})([A-Za-z])(\d+)", mission_id or "")
+    if not m or scan_dt is None:
+        return [], None, 0
+    folder = f"{SEB_SONDE_BASE}/{scan_dt.year // 100}{m.group(1)}{m.group(2).upper()}{m.group(3)}/"
+    try:
+        names = _parse_directory(folder)
+    except Exception:
+        return [], folder, 0
+    picks = []
+    for name in names:
+        if _classify_sonde_file(name) != "frd":
+            continue
+        if window_min is not None:
+            launch = _parse_sonde_launch_time(name)
+            if launch is not None and abs((launch - scan_dt).total_seconds()) > (window_min + 15) * 60:
+                continue
+        picks.append(name)
+    files, failed = [], 0
+    if picks:
+        with ThreadPoolExecutor(max_workers=min(_SEB_SONDE_WORKERS, len(picks))) as pool:
+            futs = {pool.submit(_fetch_text, folder + n, 30): n for n in picks}
+            for fut in as_completed(futs):
+                try:
+                    files.append((futs[fut], fut.result()))
+                except Exception:
+                    failed += 1
+    files.sort()
+    return files, folder, failed
+
+
 @app.get("/dropsondes/archive")
 def get_archive_dropsondes(
     case_index: int = Query(..., ge=0, description="0-based case index"),
@@ -8804,7 +8856,7 @@ def get_archive_dropsondes(
         cached, ts = _hrd_sonde_cache[cache_key]
         if now - ts < _HRD_SONDE_CACHE_TTL:
             _hrd_sonde_cache.move_to_end(cache_key)
-            return _archive_reply(cached, r2_key_early)
+            return _archive_reply(cached, r2_key_early, mirror=cached.get("source") != "aoc_seb")
 
     # Look up case metadata
     cache = _merge_metadata_cache if data_type == "merge" else _metadata_cache
@@ -8925,80 +8977,81 @@ def get_archive_dropsondes(
     # --- Diagnostic tracking ---
     _diag = {"center_source": _center_source, "mission_id": mission_id}
 
-    # Resolve dropsonde season directories — search both HURR and AFRES
-    season_dirs = _resolve_sonde_season_dirs(year)
+    # Resolve dropsonde season directories — search both HURR and AFRES.
+    # Any HRD miss below is recorded in hrd_fail and the NOAA AOC copy on
+    # SEB is tried before giving up.
+    hrd_fail = None
+    tarball_url = None
+    frd_files: list = []
+    if now - _hrd_sonde_year_miss.get(year, 0) < _HRD_SONDE_MISS_TTL:
+        season_dirs = []
+        _diag["season_probe_skipped"] = True
+    else:
+        season_dirs = _resolve_sonde_season_dirs(year)
+        if not season_dirs:
+            _hrd_sonde_year_miss[year] = now
     _diag["season_dirs"] = season_dirs
     if not season_dirs:
-        result = {
-            "success": False,
-            "reason": "no_season_dir",
-            "message": f"No HRD dropsonde season directory found for {year}",
-            "dropsondes": [],
-            "analysis_time": scan_dt.strftime("%Y-%m-%d %H:%M:%SZ"),
-            "_diag": _diag,
-        }
-        _hrd_sonde_cache[cache_key] = (result, now)
-        return _archive_reply(result, r2_key)
+        hrd_fail = ("no_season_dir", f"the HRD archive is unreachable or has no {year} season")
+    else:
+        # Search each season directory (HURR, AFRES) for the mission tarball
+        base_url = None
+        for season_dir in season_dirs:
+            _base = _resolve_sonde_storm_dir(season_dir, storm_name)
+            if not _base:
+                _base = f"{HRD_SONDE_BASE}/{season_dir}"
+            _tb = _find_frd_tarball(_base, mission_id, year)
+            if _tb:
+                tarball_url = _tb
+                base_url = _base
+                _diag["season_dir"] = season_dir
+                break
 
-    # Search each season directory (HURR, AFRES) for the mission tarball
-    tarball_url = None
-    base_url = None
-    for season_dir in season_dirs:
-        _base = _resolve_sonde_storm_dir(season_dir, storm_name)
-        if not _base:
-            _base = f"{HRD_SONDE_BASE}/{season_dir}"
-        _tb = _find_frd_tarball(_base, mission_id, year)
-        if _tb:
-            tarball_url = _tb
-            base_url = _base
-            _diag["season_dir"] = season_dir
-            break
+        if not base_url:
+            # Fallback: use first season dir for diagnostics
+            base_url = f"{HRD_SONDE_BASE}/{season_dirs[0]}"
 
-    if not base_url:
-        # Fallback: use first season dir for diagnostics
-        base_url = f"{HRD_SONDE_BASE}/{season_dirs[0]}"
+        _diag["storm_dir_resolved"] = base_url
+        _diag["tarball_url"] = tarball_url
+        _diag["operproc_url"] = f"{base_url}/operproc/"
+        if not tarball_url:
+            # List what's actually in operproc for debugging
+            try:
+                _op_entries = _hrd_parse_directory(f"{base_url}/operproc/")
+                _diag["operproc_sample"] = _op_entries[:20] if _op_entries else []
+                _diag["operproc_count"] = len(_op_entries) if _op_entries else 0
+            except Exception as e:
+                _diag["operproc_error"] = str(e)
+            hrd_fail = ("no_tarball", "the HRD archive has no .frd tarball for it")
+        else:
+            # Fetch and extract .frd files
+            frd_files = _fetch_and_extract_frd_tarball(tarball_url)
+            _diag["n_frd_extracted"] = len(frd_files)
+            _diag["frd_filenames"] = [fn for fn, _ in frd_files[:5]]  # first 5 for debug
+            if not frd_files:
+                hrd_fail = ("empty_tarball", "the HRD archive file could not be read")
 
-    _diag["storm_dir_resolved"] = base_url
-    _diag["tarball_url"] = tarball_url
-    _diag["operproc_url"] = f"{base_url}/operproc/"
-    if not tarball_url:
-        # List what's actually in operproc for debugging
-        try:
-            _op_entries = _hrd_parse_directory(f"{base_url}/operproc/")
-            _diag["operproc_sample"] = _op_entries[:20] if _op_entries else []
-            _diag["operproc_count"] = len(_op_entries) if _op_entries else 0
-        except Exception as e:
-            _diag["operproc_error"] = str(e)
-        result = {
-            "success": False,
-            "reason": "no_tarball",
-            "message": f"No dropsonde .frd archive found for mission {mission_id}",
-            "dropsondes": [],
-            "analysis_time": scan_dt.strftime("%Y-%m-%d %H:%M:%SZ"),
-            "center_lat": center_lat,
-            "center_lon": center_lon,
-            "_diag": _diag,
-        }
-        _hrd_sonde_cache[cache_key] = (result, now)
-        return _archive_reply(result, r2_key)
-
-    # Fetch and extract .frd files
-    frd_files = _fetch_and_extract_frd_tarball(tarball_url)
-    _diag["n_frd_extracted"] = len(frd_files)
-    _diag["frd_filenames"] = [fn for fn, _ in frd_files[:5]]  # first 5 for debug
-    if not frd_files:
-        result = {
-            "success": False,
-            "reason": "empty_tarball",
-            "message": f"Could not extract .frd files from archive",
-            "dropsondes": [],
-            "analysis_time": scan_dt.strftime("%Y-%m-%d %H:%M:%SZ"),
-            "center_lat": center_lat,
-            "center_lon": center_lon,
-            "_diag": _diag,
-        }
-        _hrd_sonde_cache[cache_key] = (result, now)
-        return _archive_reply(result, r2_key)
+    source, source_url, n_seb_failed = "hrd", tarball_url, 0
+    if hrd_fail:
+        frd_files, seb_url, n_seb_failed = _seb_sonde_frd_files(
+            mission_id, scan_dt, SONDE_ARCHIVE_TIME_WINDOW_MIN if data_type == "swath" else None)
+        _diag.update({"hrd_fail": hrd_fail[0], "seb_folder": seb_url,
+                      "seb_files": len(frd_files), "seb_failed": n_seb_failed})
+        if not frd_files:
+            result = {
+                "success": False,
+                "reason": hrd_fail[0],
+                "message": f"No dropsondes found for mission {mission_id}: {hrd_fail[1]}, "
+                           f"and NOAA AOC's server has no copy",
+                "dropsondes": [],
+                "analysis_time": scan_dt.strftime("%Y-%m-%d %H:%M:%SZ"),
+                "center_lat": center_lat,
+                "center_lon": center_lon,
+                "_diag": _diag,
+            }
+            _hrd_sonde_cache[cache_key] = (result, now)
+            return _archive_reply(result, r2_key)
+        source, source_url = "aoc_seb", seb_url
 
     # Parse all .frd files
     dropsondes = []
@@ -9040,17 +9093,20 @@ def get_archive_dropsondes(
         "time_window_min": SONDE_ARCHIVE_TIME_WINDOW_MIN if data_type == "swath" else None,
         "n_sondes": len(dropsondes),
         "n_frd_files": len(frd_files),
-        "source_url": tarball_url,
+        "source": source,
+        "source_url": source_url,
         "storm_motion_corrected": _has_sm,
         "storm_motion_east_ms": round(_sonde_storm_u, 2) if _has_sm else None,
         "storm_motion_north_ms": round(_sonde_storm_v, 2) if _has_sm else None,
     }
+    if n_seb_failed:
+        result["n_files_failed"] = n_seb_failed
 
     _hrd_sonde_cache[cache_key] = (result, now)
     if len(_hrd_sonde_cache) > _HRD_SONDE_CACHE_MAX:
         _hrd_sonde_cache.popitem(last=False)
 
-    return _archive_reply(result, r2_key)
+    return _archive_reply(result, r2_key, mirror=(source == "hrd"))
 
 
 # ---------------------------------------------------------------------------

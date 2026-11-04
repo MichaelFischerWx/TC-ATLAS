@@ -217,7 +217,7 @@
 .rt-cb-row { display: flex; align-items: center; gap: 4px; }
 .rt-cb-grad { flex: 1; height: 10px; border-radius: var(--radius-sm); border: 1px solid rgba(15, 22, 35, 0.15); }
 .rt-cb-row input[type=number] {
-    width: 48px; padding: 1px 3px; font: 600 10px 'JetBrains Mono', monospace;
+    width: 48px; padding: 1px 3px; font: 600 10px 'DM Sans', sans-serif; font-variant-numeric: tabular-nums;
     border: 1px solid rgba(15, 22, 35, 0.2); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.7);
     color: #0f1623; text-align: center; -moz-appearance: textfield;
 }
