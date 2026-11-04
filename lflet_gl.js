@@ -161,7 +161,14 @@
         this._layers = {};            // id → layer facade
         this._glz = {};               // gl layer id → pane z-index (stacking order)
         this._maxZoom = options.maxZoom != null ? options.maxZoom : 22;
-        try { (global.__lfletMaps = global.__lfletMaps || []).push(this); } catch (e) {}  // debug registry
+        // Debug registry for console/harness checks. The one the facade makes
+        // lists live maps only (remove() takes a map out), so it never keeps
+        // a removed map alive; an array a harness sets as window.__lfletMaps
+        // before load keeps every map it saw, removed ones included.
+        try {
+            if (!global.__lfletMaps) { global.__lfletMaps = []; global.__lfletMaps._liveOnly = true; }
+            global.__lfletMaps.push(this);
+        } catch (e) {}
 
         this._gl = new maplibregl.Map({
             container: el,
@@ -304,6 +311,15 @@
         this._removed = true;
         try { if (this._resizeObs) { this._resizeObs.disconnect(); this._resizeObs = null; } } catch (e) {}
         try { this._gl.remove(); } catch (e) {}
+        // MapLibre 4.7 never takes its container 'scroll' listener off, and
+        // that arrow function holds the whole map: a page that builds a new
+        // map in the same element (the RT storm card's #ir-detail-map) kept
+        // every old one alive.
+        try { var gl = this._gl; if (gl._onMapScroll) gl.getContainer().removeEventListener('scroll', gl._onMapScroll, false); } catch (e) {}
+        try {
+            var reg = global.__lfletMaps, i = reg && reg._liveOnly ? reg.indexOf(this) : -1;
+            if (i >= 0) reg.splice(i, 1);
+        } catch (e) {}
     };
     // A removed maplibregl.Map deletes its style, after which getSource/getLayer
     // throw ("Cannot read properties of undefined (reading 'getSource')"). Retry

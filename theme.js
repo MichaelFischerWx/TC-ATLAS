@@ -208,6 +208,22 @@
     // the global satellite mosaic, where a light basemap shows through the
     // coverage gaps as a white wedge.
     var _cartoLayers = [];
+    // A layer whose map is gone leaves the registry. Otherwise each removed
+    // map stays reachable through its layer's _map (the RT storm card builds
+    // a fresh map per open) and every theme swap throws on it.
+    // Leaflet nulls _map when a layer or its map is removed (the onAdd patch
+    // below re-registers a layer that comes back); the lflet_gl facade keeps
+    // _map and marks the removed map _removed.
+    function pruneCartoLayers() {
+        for (var i = _cartoLayers.length - 1; i >= 0; i--) {
+            var m = _cartoLayers[i]._map;
+            if (m === null || (m && m._removed)) _cartoLayers.splice(i, 1);
+        }
+    }
+    function registerCarto(layer) {
+        pruneCartoLayers();
+        if (_cartoLayers.indexOf(layer) < 0) _cartoLayers.push(layer);
+    }
     function pinnedVariant(opts) {
         var v = opts && opts.tcaVariant;
         return (v === 'dark' || v === 'light') ? v : null;
@@ -276,7 +292,7 @@
                     ? 'dark' : 'light';
                 var swapped = cartoKeyed(cartoSwapUrl(url, current));
                 var layer = origFactory(swapped, opts);
-                if (_cartoLayers.indexOf(layer) < 0) _cartoLayers.push(layer);
+                registerCarto(layer);
                 return layer;
             }
             return origFactory(url, opts);
@@ -291,7 +307,7 @@
             if (this._url && typeof this._url === 'string'
                 && this._url.indexOf('basemaps.cartocdn.com') >= 0) {
                 var pinned = pinnedVariant(this.options);
-                if (!pinned && _cartoLayers.indexOf(this) < 0) _cartoLayers.push(this);
+                if (!pinned) registerCarto(this);
                 var current = pinned || ((document.documentElement.getAttribute('data-theme') === 'dark')
                     ? 'dark' : 'light');
                 var swapped = cartoKeyed(cartoSwapUrl(this._url, current));
@@ -349,7 +365,7 @@
                             && typeof layer._url === 'string'
                             && layer._url.indexOf('basemaps.cartocdn.com') >= 0) {
                             var pinned = pinnedVariant(layer.options);
-                            if (!pinned && _cartoLayers.indexOf(layer) < 0) _cartoLayers.push(layer);
+                            if (!pinned) registerCarto(layer);
                             var swapped = cartoKeyed(cartoSwapUrl(layer._url, pinned || current));
                             if (swapped !== layer._url && layer.setUrl) {
                                 layer.setUrl(swapped);
@@ -367,12 +383,20 @@
 
     document.documentElement.addEventListener('theme:change', function (e) {
         var theme = (e && e.detail && e.detail.theme) || 'light';
+        pruneCartoLayers();
         for (var i = 0; i < _cartoLayers.length; i++) {
             try {
                 var layer = _cartoLayers[i];
                 if (!layer || !layer._url) continue;
                 var newUrl = cartoKeyed(cartoSwapUrl(layer._url, theme));
-                if (newUrl !== layer._url) layer.setUrl(newUrl);
+                if (newUrl === layer._url) continue;
+                // Taken off a map that is still up: retarget the URL only, so
+                // it comes back in this theme if re-added. The facade's setUrl
+                // would put it back on the map (explorer: Map → Satellite,
+                // then a theme toggle, buried the satellite under CARTO).
+                var m = layer._map;
+                if (m && typeof m.hasLayer === 'function' && !m.hasLayer(layer)) layer._url = newUrl;
+                else layer.setUrl(newUrl);
             } catch (err) {}
         }
     });
