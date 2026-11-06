@@ -2548,17 +2548,41 @@
         });
     }
 
+    var _KT_MS = 1.943844;
     function _hdobVerCell(x) {
         if (!x) return '\u2014';
-        return (x.bias_kt >= 0 ? '+' : '\u2212') + Math.abs(x.bias_kt).toFixed(1) + ' / ' + x.mae_kt.toFixed(1);
+        var b = x.bias_kt / _KT_MS;
+        return (b >= -0.05 ? '+' : '\u2212') + Math.abs(b).toFixed(1) + ' / ' + (x.mae_kt / _KT_MS).toFixed(1) + ' / ' +
+            (x.rmse_kt != null ? (x.rmse_kt / _KT_MS).toFixed(1) : '\u2014');
+    }
+
+    /** Current season verification (2026-11-06): sear_verify.py republishes sear-rt/verification.json every 6 h,
+     *  but each storm's archive JSON froze the copy from when it was archived (Isaias: 10 Oct; Polo: none), so
+     *  the Recon archive showed stale or no numbers. Fetch the current file; the payload's copy is the fallback. */
+    var _VERIF_URL = 'https://cdn.tcatlas.org/sear-rt/verification.json';
+    var _hdobVerif = null, _hdobVerifAt = 0, _hdobVerifBusy = false;
+    function _hdobLoadVerif() {
+        if (_hdobVerifBusy || (_hdobVerif && Date.now() - _hdobVerifAt < 15 * 60 * 1000)) return;
+        _hdobVerifBusy = true;
+        fetch(_VERIF_URL, { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+                _hdobVerifBusy = false;
+                if (!j || !j.season_2026) return;
+                _hdobVerif = j; _hdobVerifAt = Date.now();
+                _hdobBuildVerif();
+            })
+            .catch(function () { _hdobVerifBusy = false; });
     }
 
     /** Verification summary table under Live Flight (2026-09-30, Michael: "like GHOST"), from the publisher's
-     *  sear_verify.py (payload.verification): 2026 season + the models' held-out 2025 test, both products. */
+     *  sear_verify.py: 2026 season + the models' held-out 2025 test, both products. m/s with RMSE since 2026-11-06. */
     function _hdobBuildVerif() {
         var el = document.getElementById('recon-hdob-verif');
         if (!el) return;
-        var v = _hdobData && _hdobData.sear && _hdobData.sear.verification;
+        var sp = _hdobData && _hdobData.sear;
+        if (sp) _hdobLoadVerif();
+        var v = sp && (_hdobVerif || sp.verification);
         if (!v || !v.season_2026) { el.style.display = 'none'; el.innerHTML = ''; return; }
         var S = v.season_2026 || {}, H = v.holdout_2025 || {};
         function cell(x, strong) {
@@ -2577,20 +2601,21 @@
         }
         function table(cap, key) {
             return '<div class="exp-verif-t"><table><caption>' + cap + '</caption>' +
-                '<tr><th>cut</th><th>2026 season<br>bias / MAE</th><th>2025 test<br>bias / MAE</th></tr>' + rows(key) + '</table></div>';
+                '<tr><th>cut</th><th>2026 season<br>bias / MAE / RMSE</th><th>2025 test<br>bias / MAE / RMSE</th></tr>' + rows(key) + '</table></div>';
         }
         var cm = S.common_sondes;
         el.innerHTML =
             '<div class="exp-verif-h">SEAR verification against dropsondes' +
-            '<span class="exp-verif-src">10-m wind, kt (bias / mean absolute error); the sonde&rsquo;s WL150 reduced to 10 m with the ' +
-            'same wind-dependent factor the products use; eye excluded. 2026 = this season in real time; 2025 test = storms held out ' +
+            '<span class="exp-verif-src">10-m wind, m/s (bias / mean absolute error / root-mean-square error); the sonde&rsquo;s WL150 reduced to 10 m with the ' +
+            'same wind-dependent factor the products use; eye excluded. 2026 = this season in real time, all storms to date; 2025 test = storms held out ' +
             'of training. Scores the FINAL estimates (every center and leg in hand) &mdash; preliminary values carry more error. ' +
             'Updated ' + TCTime.utc(v.generated) + '.</span></div>' +
             table('TDR SEAR &mdash; tail-Doppler analysis at the sonde&rsquo;s splash point', 'tdr') +
             table('Flight-level SEAR &mdash; at the sonde&rsquo;s release point', 'fl') +
             '<div class="exp-verif-note">' + (cm && cm.n ? 'On the ' + cm.n + ' sondes both products score: TDR SEAR ' + _hdobVerCell(cm.tdr) +
-            ' kt, flight-level SEAR ' + _hdobVerCell(cm.fl) + ' kt. ' : '') +
-            '\u2021 sonde 10-m wind &ge; 64 kt, except the flight-level 2025 test row: flight-level wind &ge; 100 kt. ' +
+            ' m/s, flight-level SEAR ' + _hdobVerCell(cm.fl) + ' m/s. ' : '') +
+            '\u2021 sonde 10-m wind &ge; 64 kt (33 m/s), except the flight-level 2025 test row: flight-level wind &ge; 100 kt (51 m/s). ' +
+            'The flight-level 2025 test comes from the model&rsquo;s training report, which keeps bias and MAE only (no RMSE). ' +
             'Eyewalls whose surface wind exceeds the flight-level wind (e.g. Rachel 30 Sep) are where flight-level SEAR runs low; the eyewall-sonde flag marks them.</div>';
         el.style.display = '';
     }
