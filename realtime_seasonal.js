@@ -595,9 +595,22 @@
     // -------------------------------------------------------------------
 
     var ACE_BASIN_ORDER = ['NA', 'EP', 'WP', 'NI', 'SI', 'SP'];
+    // Hemispheric / global totals (build_ace_pace_climo.AGGREGATES): NH =
+    // NA+EP+WP+NI on Jan-Dec, SH = SI+SP on Jul-Jun, GL = calendar year.
+    // They ship as extra "basins" in both feeds, so every code path below
+    // treats them like one.
+    var ACE_TOTAL_ORDER = ['NH', 'SH', 'GL'];
     var ACE_BASIN_SHORT = { NA: 'Atlantic', EP: 'E Pacific', WP: 'W Pacific',
-                            NI: 'N Indian', SI: 'S Indian', SP: 'S Pacific' };
-    var ACE_SH_BASINS = { SI: 1, SP: 1 };
+                            NI: 'N Indian', SI: 'S Indian', SP: 'S Pacific',
+                            NH: 'N Hemisphere', SH: 'S Hemisphere',
+                            GL: 'Global' };
+    // Keys whose season axis runs Jul-Jun (GL is a calendar year).
+    var ACE_SH_BASINS = { SI: 1, SP: 1, SH: 1 };
+    var ACE_TOTAL_TIP = {
+        NH: 'North Atlantic + East Pacific + West Pacific + North Indian, January-December',
+        SH: 'South Indian + South Pacific, July-June, named for the year the season ends',
+        GL: 'All six basins in the calendar year (Southern Hemisphere storms count on their own dates)',
+    };
     var _ACE_LEAP_CUM = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
 
     function _aceSeasonDay(basin, month, day) {
@@ -623,6 +636,15 @@
     function _aceDayLabel(basin, sd) {
         var md = _aceDayToDate(basin, sd);
         return _MONTH_NAMES_FULL[md.month - 1] + ' ' + md.day;
+    }
+
+    // "2027" is the Jul 2026 - Jun 2027 season on a Jul-Jun axis; spell it
+    // "2026-27" wherever a person reads it (values and keys stay the year).
+    function _aceSeasonLabel(basin, season) {
+        if (season === null || season === undefined || season === '') return '';
+        var y = parseInt(season, 10);
+        if (!ACE_SH_BASINS[basin] || !isFinite(y)) return String(season);
+        return (y - 1) + '-' + String(y).slice(2);
     }
 
     // Today's position on the basin's season axis.
@@ -744,7 +766,18 @@
         var el = document.getElementById('seasonal-ace-chips');
         if (!el || !state.ace_pace) return;
         var html = '';
-        ACE_BASIN_ORDER.forEach(function (b) {
+        var order = ACE_BASIN_ORDER.slice();
+        // Totals follow the basins behind a divider — only when the climo
+        // file carries them (an older cached copy may not).
+        if (ACE_TOTAL_ORDER.some(function (b) { return _aceBasinClimo(b); })) {
+            order.push('|');
+            order = order.concat(ACE_TOTAL_ORDER);
+        }
+        order.forEach(function (b) {
+            if (b === '|') {
+                html += '<span class="seasonal-ace-chip-sep" aria-hidden="true"></span>';
+                return;
+            }
             var cl = _aceBasinClimo(b);
             if (!cl) return;
             var st = _aceStanding(b);
@@ -759,8 +792,10 @@
                 pctTxt = 'pre-season';
             }
             html += '<button type="button" class="seasonal-ace-chip' +
+                (ACE_TOTAL_TIP[b] ? ' is-total' : '') +
                 (b === state.acePace.basin ? ' is-active' : '') +
                 '" data-basin="' + b + '" title="' + cl.name +
+                (ACE_TOTAL_TIP[b] ? ' (' + ACE_TOTAL_TIP[b] + ')' : '') +
                 ' — season-to-date ACE vs the 1991-2020 mean for the same ' +
                 'calendar day">' +
                 '<span class="ace-chip-basin">' + ACE_BASIN_SHORT[b] + '</span>' +
@@ -772,8 +807,6 @@
         el.querySelectorAll('.seasonal-ace-chip').forEach(function (chip) {
             chip.addEventListener('click', function () {
                 state.acePace.basin = chip.getAttribute('data-basin');
-                var sel = document.getElementById('seasonal-ace-basin');
-                if (sel) sel.value = state.acePace.basin;
                 _populateAceCompare();
                 _renderAcePace();
                 _renderAceChips();
@@ -793,9 +826,11 @@
             .sort(function (a, b) { return b - a; });
         var prev = state.acePace.compare;
         sel.innerHTML = '<option value="">None</option>' +
-            '<option value="record">Record season (' + cl.record.season + ')</option>' +
+            '<option value="record">Record season (' +
+                _aceSeasonLabel(state.acePace.basin, cl.record.season) + ')</option>' +
             years.map(function (y) {
-                return '<option value="' + y + '">' + y + '</option>';
+                return '<option value="' + y + '">' +
+                    _aceSeasonLabel(state.acePace.basin, y) + '</option>';
             }).join('');
         // Keep the user's choice when switching basins if it still exists.
         sel.value = (prev && (prev === 'record' ||
@@ -841,7 +876,7 @@
         // the wrap stays at three rows (see the legend block below).
         var shortNames = _seasNarrow();
         var nm = function (full, short) { return shortNames ? short : full; };
-        var liveName = (st && st.season ? st.season : 'live') +
+        var liveName = (st && st.season ? _aceSeasonLabel(basin, st.season) : 'live') +
                        nm(' season', '');
         if (isPct) {
             // Percent-of-normal-to-date. Only defined once the climo mean
@@ -932,10 +967,12 @@
                     traces.push({
                         x: days, y: _aceExpand(cl.years[cmpYear], null),
                         type: 'scatter', mode: 'lines',
-                        name: cmpYear + (cmp === 'record' ? ' (record)' : ''),
+                        name: _aceSeasonLabel(basin, cmpYear) +
+                              (cmp === 'record' ? ' (record)' : ''),
                         line: { color: BRAND.highlight, width: 2 },
                         customdata: hoverDates,
-                        hovertemplate: '%{customdata} · ' + cmpYear +
+                        hovertemplate: '%{customdata} · ' +
+                            _aceSeasonLabel(basin, cmpYear) +
                             ': %{y:.1f}<extra></extra>',
                     });
                 }
@@ -1042,7 +1079,8 @@
                            ' 1991-2020 seasons on this date (' + pctOrd + ')');
                 }
                 note.innerHTML =
-                    '<strong>' + cl.name + ' ' + st.season + ':</strong> ' +
+                    '<strong>' + cl.name + ' ' +
+                    _aceSeasonLabel(basin, st.season) + ':</strong> ' +
                     st.ace.toFixed(1) + ' ACE through ' +
                     _aceDayLabel(basin, st.today) + ' from ' + st.storms +
                     ' storm' + (st.storms === 1 ? '' : 's') + ' — ' +
@@ -1086,8 +1124,6 @@
             var m = (new Date()).getUTCMonth() + 1;
             if (m >= 12 || m <= 3) {
                 state.acePace.basin = 'SI';
-                var bsel = document.getElementById('seasonal-ace-basin');
-                if (bsel) bsel.value = 'SI';
             }
             _populateAceCompare();
             _renderAceChips();
@@ -1130,7 +1166,8 @@
         if (!rows) return null;
         return rows.map(function (r) {
             return { name: r[0], ace: r[1], peak_kt: r[2],
-                     firstDay: r[3], lastDay: r[4], points: r[5] };
+                     firstDay: r[3], lastDay: r[4], points: r[5],
+                     basin: r[6] || null };
         });
     }
 
@@ -1155,10 +1192,15 @@
                 : _aceStampLabel(r.first) + '-' + _aceStampLabel(r.last);
             var tip = (r.id || r.name || '') + ' · ' + r.points +
                 ' synoptic points at or above 34 kt · peak ' + r.peak_kt + ' kt';
+            // Totals list storms from several basins: tag each one
+            // ("EP>WP" for a storm that crossed between them).
+            var tag = (ACE_TOTAL_TIP[basin] && r.basin)
+                ? '<span class="ace-storm-basin">' +
+                  r.basin.replace(/>/g, '→') + '</span> ' : '';
             return '<div class="seasonal-ace-storm' +
                 (r.active ? ' is-active' : '') + '">' +
                 '<div class="ace-storm-name" title="' + tip + '">' +
-                (r.name || r.id || 'UNNAMED') +
+                tag + (r.name || r.id || 'UNNAMED') +
                 ' <span class="ace-storm-meta">' + r.peak_kt + ' kt · ' +
                 span + '</span></div>' +
                 '<div class="ace-storm-bar"><span style="width:' +
@@ -1195,10 +1237,12 @@
             if (!recs.length) {
                 html += '<div class="seasonal-ace-storms-empty">No ' +
                     'ACE-contributing storms yet in the ' + name + ' ' +
-                    live.season + ' season — nothing has reached 34 kt as a ' +
+                    _aceSeasonLabel(basin, live.season) +
+                    ' season — nothing has reached 34 kt as a ' +
                     'tropical or subtropical cyclone.</div>';
             } else {
-                var head = '<strong>' + name + ' ' + live.season +
+                var head = '<strong>' + name + ' ' +
+                    _aceSeasonLabel(basin, live.season) +
                     ' storm contributions</strong> — ' + recs.length +
                     ' storm' + (recs.length === 1 ? '' : 's') + ', ' +
                     (live.ace || 0).toFixed(1) + ' ACE' +
@@ -1227,7 +1271,8 @@
                 var hKey = basin + ':' + cmpSeason;
                 html += '<div class="seasonal-ace-storms-gap"></div>' +
                     _aceStormBlock(
-                        '<strong>' + name + ' ' + cmpSeason +
+                        '<strong>' + name + ' ' +
+                        _aceSeasonLabel(basin, cmpSeason) +
                         ' storm contributions</strong> — ' + hist.length +
                         ' storm' + (hist.length === 1 ? '' : 's') + ', ' +
                         hTotal.toFixed(1) + ' ACE (IBTrACS best tracks)',
@@ -1236,7 +1281,8 @@
             } else if (state.ace_storms) {
                 html += '<div class="seasonal-ace-storms-gap"></div>' +
                     '<div class="seasonal-ace-storms-empty">No storm-level ' +
-                    'breakdown on file for ' + name + ' ' + cmpSeason +
+                    'breakdown on file for ' + name + ' ' +
+                    _aceSeasonLabel(basin, cmpSeason) +
                     '.</div>';
             }
         }
@@ -1251,16 +1297,6 @@
     }
 
     function _bindAcePaceControls() {
-        var bsel = document.getElementById('seasonal-ace-basin');
-        if (bsel) {
-            bsel.addEventListener('change', function () {
-                state.acePace.basin = bsel.value;
-                _populateAceCompare();
-                _renderAcePace();
-                _renderAceChips();
-                _ga('rt_seasonal_ace_basin', { basin: bsel.value, via: 'select' });
-            });
-        }
         var csel = document.getElementById('seasonal-ace-compare');
         if (csel) {
             csel.addEventListener('change', function () {

@@ -9536,6 +9536,10 @@ def _parse_bdeck_ace_points(text: str, atcf_basin: str = "", allow_untyped: bool
 def _ace_season_bdeck_urls(nh_season: int, sh_season: int) -> list:
     """(atcf_basin, url) for every non-invest b-deck of the current seasons.
 
+    From July on, the SH season that ENDED in June (named `nh_season`) is
+    listed too: the calendar-year Global total needs its January-June ACE.
+    Those decks feed only the Global curve (see _compute_live_ace).
+
     UCAR's `bdecks_open/{year}/` mirror is the only listing that carries the
     WHOLE season across all basins (NHC's btk directory only holds storms
     that are currently active). NHC's own copies are layered on top below
@@ -9546,7 +9550,11 @@ def _ace_season_bdeck_urls(nh_season: int, sh_season: int) -> list:
     seen = set()
     ucar = dict(JTWC_SOURCES).get("ucar",
                                   "https://hurricanes.ral.ucar.edu/repository/data/bdecks_open")
-    for season, basins in ((nh_season, ("al", "ep", "cp", "wp", "io")),
+    nh_codes = ("al", "ep", "cp", "wp", "io")
+    if sh_season != nh_season:
+        # Same UCAR directory: the finished SH season is named nh_season.
+        nh_codes = nh_codes + ("sh",)
+    for season, basins in ((nh_season, nh_codes),
                            (sh_season, ("sh",))):
         text = _http_get(f"{ucar}/{season}/", timeout=15)
         if not text:
@@ -9618,9 +9626,13 @@ def _compute_live_ace() -> dict:
     cut_7d = (now - timedelta(days=7)).strftime("%Y%m%d%H")
     cut_active = (now - timedelta(hours=18)).strftime("%Y%m%d%H")
 
-    daily: dict = {}       # basin -> {season_day: ace increment}
-    latest: dict = {}      # basin -> newest synoptic stamp used
-    per_storm: dict = {}   # basin -> [storm record, ...]
+    daily: dict = {}       # key -> {season_day: ace increment}
+    latest: dict = {}      # key -> newest synoptic stamp used
+    per_storm: dict = {}   # key -> [storm record, ...]
+    # Keys are the six basins plus the hemispheric / global totals, with the
+    # conventions of build_ace_pace_climo.AGGREGATES: NH = NA+EP+WP+NI and SH =
+    # SI+SP on their seasons' axes; GL = the calendar year (NH points by NH
+    # season-day, SH points by their own date).
     # Gather points per storm first: NHC decks are authoritative; a "+J" entry
     # (JTWC's copy of an EP/CP storm) contributes only fixes AFTER NHC's last,
     # i.e. what JTWC adds once the storm crosses the dateline (Nolo 2026).
@@ -9650,29 +9662,28 @@ def _compute_live_ace() -> dict:
             _merged.setdefault((b, sid), {}).update({p[0]: p for p in pts})
     for (atcf_basin, sid), _pmap in _merged.items():
         pts = [_pmap[k] for k in sorted(_pmap)]
-        # One storm can straddle the SI/SP boundary, so its ACE is tallied
-        # per basin exactly the way the curve is.
-        rec_by_basin: dict = {}
-        for stamp, lat, lon, vmax, name in pts:
-            basin = _ace_basin_for(atcf_basin, lon)
-            if basin is None:
-                continue
-            season = sh_season if basin in _ACE_SH_BASINS else nh_season
-            sd = _ace_season_day(basin, int(stamp[:4]), int(stamp[4:6]),
-                                 int(stamp[6:8]), season)
-            if sd is None or not (1 <= sd <= 366):
-                continue
-            contrib = vmax * vmax * 1e-4
-            daily.setdefault(basin, {})
-            daily[basin][sd] = daily[basin].get(sd, 0.0) + contrib
-            if stamp > latest.get(basin, ""):
-                latest[basin] = stamp
-            rec = rec_by_basin.get(basin)
+        # The deck's season is in its id (SH052027 -> 2027). An SH deck from
+        # the season that already ended feeds only the calendar-year Global.
+        try:
+            deck_season = int(sid[-4:])
+        except ValueError:
+            deck_season = None
+        # One storm can straddle the SI/SP boundary (or the dateline), so
+        # its ACE is tallied per basin exactly the way the curve is, and
+        # once — naming every basin it crossed — per aggregate.
+        rec_by_key: dict = {}
+
+        def _tally(key, day, stamp, vmax, name, basin, contrib):
+            daily.setdefault(key, {})
+            daily[key][day] = daily[key].get(day, 0.0) + contrib
+            if stamp > latest.get(key, ""):
+                latest[key] = stamp
+            rec = rec_by_key.get(key)
             if rec is None:
-                rec = rec_by_basin[basin] = {
+                rec = rec_by_key[key] = {
                     "id": sid, "name": "", "ace": 0.0, "ace_24h": 0.0,
                     "ace_7d": 0.0, "peak_kt": 0.0, "points": 0,
-                    "first": stamp, "last": stamp,
+                    "first": stamp, "last": stamp, "basins": [],
                 }
             rec["ace"] += contrib
             if stamp >= cut_24h:
@@ -9685,21 +9696,50 @@ def _compute_live_ace() -> dict:
                 rec["first"] = stamp
             if stamp > rec["last"]:
                 rec["last"] = stamp
+            if basin not in rec["basins"]:
+                rec["basins"].append(basin)
             # Later entries carry the assigned name; earlier ones may still
             # read INVEST or a number, so keep the last non-placeholder.
             if name and name not in ("INVEST", "UNNAMED", "NONAME"):
                 rec["name"] = name
-        for basin, rec in rec_by_basin.items():
+
+        for stamp, lat, lon, vmax, name in pts:
+            basin = _ace_basin_for(atcf_basin, lon)
+            if basin is None:
+                continue
+            y, m, d = int(stamp[:4]), int(stamp[4:6]), int(stamp[6:8])
+            contrib = vmax * vmax * 1e-4
+            is_sh = basin in _ACE_SH_BASINS
+            season = sh_season if is_sh else nh_season
+            sd = None
+            if not is_sh or deck_season == sh_season:
+                sd = _ace_season_day(basin, y, m, d, season)
+                if sd is not None and not (1 <= sd <= 366):
+                    sd = None
+            if sd is not None:
+                _tally(basin, sd, stamp, vmax, name, basin, contrib)
+                _tally("SH" if is_sh else "NH", sd, stamp, vmax, name,
+                       basin, contrib)
+            # Global = calendar year nh_season.
+            if is_sh:
+                g_day = (_ACE_LEAP_CUM[m - 1] + d) if y == nh_season else None
+            else:
+                g_day = sd
+            if g_day is not None:
+                _tally("GL", g_day, stamp, vmax, name, basin, contrib)
+
+        for key, rec in rec_by_key.items():
             rec["ace"] = round(rec["ace"], 2)
             rec["ace_24h"] = round(rec["ace_24h"], 2)
             rec["ace_7d"] = round(rec["ace_7d"], 2)
             rec["peak_kt"] = int(rec["peak_kt"])
             rec["active"] = rec["last"] >= cut_active
-            per_storm.setdefault(basin, []).append(rec)
+            rec["basin"] = ">".join(rec.pop("basins"))
+            per_storm.setdefault(key, []).append(rec)
 
     basins = {}
-    for basin in ("NA", "EP", "WP", "NI", "SI", "SP"):
-        season = sh_season if basin in _ACE_SH_BASINS else nh_season
+    for basin in ("NA", "EP", "WP", "NI", "SI", "SP", "NH", "SH", "GL"):
+        season = sh_season if basin in ("SI", "SP", "SH") else nh_season
         per_day = daily.get(basin, {})
         curve = []
         total = 0.0

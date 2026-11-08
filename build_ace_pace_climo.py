@@ -73,6 +73,24 @@ DAYS = 366                      # leap-year frame
 # Basins whose season runs Jul → Jun and is named for the ending year.
 SH_BASINS = {"SI", "SP"}
 
+# Hemispheric and global totals, emitted as extra "basins" with the same
+# payload shape. They are accumulated point by point (never summed from the
+# basin percentiles), so their bands are percentiles of whole hemispheric /
+# global SEASONS. Conventions follow CSU's real-time page and Maue:
+#   NH — NA+EP+WP+NI on the Jan-Dec axis, IBTrACS season (= calendar year,
+#        with the same January spillover pin as the NH basins).
+#   SH — SI+SP on the Jul-Jun axis, named for the year the season ends.
+#   GL — calendar year: NH points by NH season, SH points by their calendar
+#        date (Jan-Jun from the season ending that year, Jul-Dec from the
+#        one starting).
+AGGREGATES = {
+    "NH": ("Northern Hemisphere", ("NA", "EP", "WP", "NI")),
+    "SH": ("Southern Hemisphere", ("SI", "SP")),
+    "GL": ("Global", ("NA", "EP", "WP", "NI", "SI", "SP")),
+}
+# Every key whose axis runs Jul → Jun.
+SH_AXIS = SH_BASINS | {"SH"}
+
 # Cumulative day-of-year for the 1st of each month in a LEAP year.
 _LEAP_CUM = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
 
@@ -124,7 +142,7 @@ def _season_is_over(basin: str, season: int,
     Jun 30 of the season year (they open the previous Jul 1).
     """
     today = today or datetime.now(timezone.utc)
-    if basin in SH_BASINS:
+    if basin in SH_AXIS:
         current = today.year + 1 if today.month >= 7 else today.year
     else:
         current = today.year
@@ -170,6 +188,7 @@ def accumulate(ibtracs_path: str) -> dict:
     usa_status = (ds["usa_status"].values if "usa_status" in ds
                   else np.full(nature.shape, b"", dtype=object))
     storm_name = ds["name"].values if "name" in ds else None
+    lat_v = ds["lat"].values
 
     # US-PROVISIONAL covers storms IBTrACS has only from the US agencies
     # (NHC/JTWC) so far — that is nearly every JTWC-basin storm for the
@@ -195,11 +214,22 @@ def accumulate(ibtracs_path: str) -> dict:
     ACE_NATURES = {"TS", "SS"}
     ACE_USA_STATUS = {"TD", "TS", "HU", "TY", "ST", "TC", "SD", "SS"}
     NON_TC_USA_STATUS = {"EX", "LO", "DB", "WV", "DS", "PT", "IN"}
+    # Neither field says anything at all: IBTrACS `nature` "NR" (not
+    # reported) with a blank or "XX" US status. That is how JTWC's North
+    # Indian record reads for whole seasons (1990, 1991, 1993-95 had NO
+    # point pass the gate above — the 140-kt 1991 Bangladesh cyclone
+    # counted zero). Treat it the way the live b-deck reader treats
+    # JTWC's untyped "XX" lines: tropical, with a latitude backstop for
+    # an unflagged extratropical tail.
+    UNTYPED_STATUS = {"", "XX"}
+    UNTYPED_MAX_LAT = 45.0
 
     n_storms, n_times = wmo_wind.shape
-    # daily[basin][season] = per-day (not cumulative) ACE increments
-    daily: dict[str, dict[int, np.ndarray]] = {b: {} for b in ACE_BASINS}
-    storms: dict[str, dict[int, int]] = {b: {} for b in ACE_BASINS}
+    # daily[key][season] = per-day (not cumulative) ACE increments, for every
+    # basin and every aggregate (NH / SH / GL).
+    keys = list(ACE_BASINS) + list(AGGREGATES)
+    daily: dict[str, dict[int, np.ndarray]] = {k: {} for k in keys}
+    storms: dict[str, dict[int, int]] = {k: {} for k in keys}
     per_storm: dict[str, dict[int, list]] = {}
 
     for i in range(n_storms):
@@ -211,9 +241,28 @@ def accumulate(ibtracs_path: str) -> dict:
             continue
         if _decode(track_type[i]) not in ACCEPTED_TRACK_TYPES:
             continue
-        # Per-storm tally, keyed by basin so a system that crosses the
-        # SI/SP boundary is credited exactly the way the curve is.
-        rec_by_basin: dict[str, dict] = {}
+        # Per-storm tally keyed by (basin or aggregate, season): a system
+        # that crosses the SI/SP boundary is credited to each basin exactly
+        # the way the curves are, and ONCE (naming both basins) to SH / GL.
+        rec_by: dict[tuple, dict] = {}
+
+        def _tally(key, season, day, contrib, v, b, rec_by=rec_by):
+            arr = daily[key].get(season)
+            if arr is None:
+                arr = daily[key][season] = np.zeros(DAYS, dtype=np.float64)
+            arr[day - 1] += contrib
+            rec = rec_by.get((key, season))
+            if rec is None:
+                rec = rec_by[(key, season)] = {
+                    "ace": 0.0, "peak": 0.0, "pts": 0,
+                    "first": day, "last": day, "basins": []}
+            rec["ace"] += contrib
+            rec["peak"] = max(rec["peak"], v)
+            rec["pts"] += 1
+            rec["first"] = min(rec["first"], day)
+            rec["last"] = max(rec["last"], day)
+            if b not in rec["basins"]:
+                rec["basins"].append(b)
         for j in range(n_times):
             tstr = _decode(iso_time[i, j])
             # 6-hourly synoptic times only — IBTrACS also carries 3-hourly
@@ -224,9 +273,11 @@ def accumulate(ibtracs_path: str) -> dict:
             st = _decode(usa_status[i, j]).strip().upper()
             if st in NON_TC_USA_STATUS:
                 continue
-            if (_decode(nature[i, j]) not in ACE_NATURES
-                    and st not in ACE_USA_STATUS):
-                continue
+            nat = _decode(nature[i, j])
+            if nat not in ACE_NATURES and st not in ACE_USA_STATUS:
+                if not (nat == "NR" and st in UNTYPED_STATUS
+                        and abs(float(lat_v[i, j])) <= UNTYPED_MAX_LAT):
+                    continue
             b = _decode(basin_v[i, j])
             if b not in ACE_BASINS:
                 continue
@@ -238,30 +289,32 @@ def accumulate(ibtracs_path: str) -> dict:
             sd = _season_day(b, int(tstr[:4]), int(tstr[5:7]), int(tstr[8:10]), s)
             if sd is None or not (1 <= sd <= DAYS):
                 continue
-            arr = daily[b].get(s)
-            if arr is None:
-                arr = np.zeros(DAYS, dtype=np.float64)
-                daily[b][s] = arr
             contrib = float(v) * float(v) * 1e-4
-            arr[sd - 1] += contrib
-            rec = rec_by_basin.get(b)
-            if rec is None:
-                rec = rec_by_basin[b] = {"ace": 0.0, "peak": 0.0, "pts": 0,
-                                         "first": sd, "last": sd}
-            rec["ace"] += contrib
-            rec["peak"] = max(rec["peak"], float(v))
-            rec["pts"] += 1
-            rec["first"] = min(rec["first"], sd)
-            rec["last"] = max(rec["last"], sd)
+            _tally(b, s, sd, contrib, float(v), b)
+            if b in SH_BASINS:
+                _tally("SH", s, sd, contrib, float(v), b)
+                # Global is a calendar year: an SH point counts on its own
+                # date, whichever SH season it belongs to.
+                g_year = int(tstr[:4])
+                g_day = _leap_doy(int(tstr[5:7]), int(tstr[8:10]))
+            else:
+                _tally("NH", s, sd, contrib, float(v), b)
+                g_year, g_day = s, sd
+            # SH season 1982 opens in Jul 1981, which has no NH half.
+            if g_year >= HISTORY_START:
+                _tally("GL", g_year, g_day, contrib, float(v), b)
         nm = _decode(storm_name[i]).strip().upper() if storm_name is not None else ""
         if nm in ("NOT_NAMED", "UNNAMED", "NOT NAMED", "NONAME"):
             nm = ""
-        for b, rec in rec_by_basin.items():
-            storms[b][s] = storms[b].get(s, 0) + 1
+        for (key, season), rec in rec_by.items():
+            storms[key][season] = storms[key].get(season, 0) + 1
             # Compact row: [name, ace, peak_kt, first_day, last_day, points]
-            per_storm.setdefault(b, {}).setdefault(s, []).append(
-                [nm, round(rec["ace"], 2), int(rec["peak"]),
-                 rec["first"], rec["last"], rec["pts"]])
+            # plus, for aggregates, the basin(s) in track order ("EP>WP").
+            row = [nm, round(rec["ace"], 2), int(rec["peak"]),
+                   rec["first"], rec["last"], rec["pts"]]
+            if key in AGGREGATES:
+                row.append(">".join(rec["basins"]))
+            per_storm.setdefault(key, {}).setdefault(season, []).append(row)
 
     ds.close()
     cum = {b: {s: np.cumsum(a) for s, a in per.items()}
@@ -304,7 +357,9 @@ def build(ibtracs_path: str, out_path: Path) -> Path:
         "basins": {},
     }
 
-    for b, label in ACE_BASINS.items():
+    entries = list(ACE_BASINS.items()) + [
+        (k, label) for k, (label, _m) in AGGREGATES.items()]
+    for b, label in entries:
         per_season = cum[b]
         seasons = sorted(per_season)
         if not seasons:
@@ -333,7 +388,11 @@ def build(ibtracs_path: str, out_path: Path) -> Path:
         # The last season in IBTrACS is usually PROVISIONAL and partial —
         # flag it so the frontend doesn't offer it as a comparison year
         # while the live curve already covers it.
-        record_season = max(totals, key=lambda k: totals[k])
+        # The record is the highest COMPLETED season: a season in progress
+        # (East Pacific 2026 in November) would otherwise be offered as
+        # "Record season" — i.e. compared against itself.
+        _done_keys = [str(s) for s in seasons if _season_is_over(b, s)]
+        record_season = max(_done_keys or totals, key=lambda k: totals[k])
 
         # Per-day record envelope: the fastest and slowest any season has
         # ever been through this same calendar date. This is what makes
@@ -356,8 +415,13 @@ def build(ibtracs_path: str, out_path: Path) -> Path:
 
         payload["basins"][b] = {
             "name": label,
-            "hemisphere": "SH" if b in SH_BASINS else "NH",
-            "season_start_month": 7 if b in SH_BASINS else 1,
+            "hemisphere": ("SH" if b in SH_AXIS
+                           else "GL" if b == "GL" else "NH"),
+            "season_start_month": 7 if b in SH_AXIS else 1,
+            # Aggregates name their member basins; GL also flags that its
+            # "season" is a calendar year.
+            **({"members": list(AGGREGATES[b][1])} if b in AGGREGATES else {}),
+            **({"calendar_year": True} if b == "GL" else {}),
             "n_climo_seasons": n_climo,
             "climo": {k: [round(float(x), 2) for x in v]
                       for k, v in climo.items()},
@@ -394,6 +458,9 @@ def build(ibtracs_path: str, out_path: Path) -> Path:
         "days": DAYS,
         "columns": ["name", "ace", "peak_kt", "first_day", "last_day",
                     "points"],
+        # NH / SH / GL rows carry a 7th column: the basin(s), e.g. "EP>WP".
+        "columns_aggregate": ["name", "ace", "peak_kt", "first_day",
+                              "last_day", "points", "basins"],
         "vmax_threshold_kt": ACE_VMAX_THRESH,
         "wind_source": payload["wind_source"],
         "basins": {b: {str(s): rows for s, rows in sorted(per.items())}

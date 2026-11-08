@@ -859,6 +859,27 @@ body.seasonal-maximized .seasonal-header {
     color: var(--text, #e0e0e0);
 }
 .seasonal-ace-chip .ace-chip-pct { font-variant-numeric: tabular-nums; }
+/* Hemispheric / global totals sit behind a hairline divider. */
+.seasonal-ace-chip-sep {
+    width: 1px;
+    align-self: stretch;
+    margin: 2px 4px;
+    background: var(--border-light);
+}
+@media (max-width: 640px) {
+    /* Three chips per row on a phone (basins in two rows, totals in a
+       third) instead of two per row and five rows of chips. */
+    .seasonal-ace-chips { gap: 6px; }
+    .seasonal-ace-chip {
+        flex: 1 1 calc(33.333% - 6px);
+        min-width: 0;
+        padding: 5px 6px;
+    }
+    .seasonal-ace-chip .ace-chip-basin,
+    .seasonal-ace-chip .ace-chip-pct { font-size: 0.6875rem; }
+    /* The divider becomes a row break. */
+    .seasonal-ace-chip-sep { flex-basis: 100%; width: auto; height: 0; margin: 0; }
+}
 .seasonal-ace-chip .ace-hi { color: #ff7a59; }
 .seasonal-ace-chip .ace-lo { color: #6da8e6; }
 /* On the green fill every line reads white (the data colors above are for the off state). */
@@ -883,6 +904,9 @@ body.seasonal-maximized .seasonal-header {
    grow; this panel's chart is a grid item, so it never grew and the
    400 px figure overflowed into the caption below it. */
 #seasonal-ace-plot { height: 400px; min-height: 400px; }
+@media (max-width: 640px) {
+    #seasonal-ace-plot { height: 470px; min-height: 470px; }
+}
 .seasonal-ace-chart .seasonal-panel-desc { margin-top: 6px; }
 
 /* Panel A — per-storm ACE contribution breakdown */
@@ -918,6 +942,20 @@ body.seasonal-maximized .seasonal-header {
        width, which widens the shared name track for everyone instead of
        ellipsizing the one long name. */
     min-width: 0;
+}
+/* Basin tag in the hemispheric / global lists ("EP→WP" = crossed). */
+.seasonal-ace-storm .ace-storm-basin {
+    display: inline-block;
+    margin-right: 2px;
+    padding: 0 4px;
+    border-radius: var(--radius-sm);
+    background: var(--navy-light);
+    border: 1px solid var(--border-light);
+    color: var(--text-dim, #94a3b8);
+    font-size: 0.625rem;
+    font-weight: 500;
+    letter-spacing: .02em;
+    vertical-align: 1px;
 }
 .seasonal-ace-storm .ace-storm-meta {
     font-weight: 400;
