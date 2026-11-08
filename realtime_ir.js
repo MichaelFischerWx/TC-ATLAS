@@ -2723,20 +2723,36 @@
     }
 
     var _inspectOn = false, _inspectTileCache = {}, _inspectTipEl = null, _inspectThrottle = false;
+    // Hover readouts are drawn after an async tile sample. Each sample takes a
+    // ticket and only the newest one may draw; hiding (mouseout, tab switch)
+    // voids outstanding tickets. Without this a tile that lands after the
+    // pointer left the map re-showed the box, and nothing hid it again — it
+    // stayed stuck on screen over other tabs.
+    var _inspectSeq = 0;
     function _inspectSampleTile(z, x, y, cb) {
         // idx (v3): the single channel IS the quantized Tb → exact readout (no RGB invert).
         var url = (_IR2A ? _ir2aRoot('ir') + '/' + _mosaicTs : _MOSAIC_ROOT + '/ir/' + _mosaicTs)
             + '/' + z + '/' + x + '/' + y + '.png';
         var rec = _inspectTileCache[url];
-        if (rec) { cb(rec.cx ? rec : null); return; }
-        rec = _inspectTileCache[url] = {};
+        if (rec) {
+            if (rec.cx) cb(rec);
+            else if (rec.waiters) rec.waiters.push(cb);   // still loading: answer when it lands
+            else cb(null);                                // no tile here
+            return;
+        }
+        rec = _inspectTileCache[url] = { waiters: [cb] };
+        var done = function (ok) {
+            var w = rec.waiters; rec.waiters = null;
+            if (!w) return;
+            for (var i = 0; i < w.length; i++) w[i](ok ? rec : null);
+        };
         _v3TileBlob(url).then(function (b) {
-            if (!b) { cb(null); return; }
+            if (!b) { done(false); return; }
             return createImageBitmap(b).then(function (bmp) {
                 var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
-                rec.cx = c.getContext('2d'); rec.cx.drawImage(bmp, 0, 0); cb(rec);
+                rec.cx = c.getContext('2d'); rec.cx.drawImage(bmp, 0, 0); done(true);
             });
-        }).catch(function () { cb(null); });
+        }).catch(function () { done(false); });
     }
     // Sample the global IR mosaic at (lat, lon) and invert to Tb (Kelvin).
     // Map-agnostic — samples tiles by URL, so both the global map inspect
@@ -2767,8 +2783,11 @@
         });
     }
     function _inspectAt(lat, lon, clientX, clientY) {
+        var seq = ++_inspectSeq;
         _mosaicTbAt(lat, lon, function (tb) {
-            if (tb == null) { _inspectHideTip(); return; }
+            if (seq !== _inspectSeq) return;   // superseded, or dismissed while the tile loaded
+            if (tb == null || !_inspectOn ||
+                document.documentElement.getAttribute('data-view') !== 'map') { _inspectTipOff(); return; }
             _inspectShowTip(clientX, clientY, tb);
         });
     }
@@ -2785,7 +2804,8 @@
         _inspectTipEl.style.left = (x + 14) + 'px'; _inspectTipEl.style.top = (y - 6) + 'px';
         _inspectTipEl.style.display = 'block';
     }
-    function _inspectHideTip() { if (_inspectTipEl) _inspectTipEl.style.display = 'none'; }
+    function _inspectTipOff() { if (_inspectTipEl) _inspectTipEl.style.display = 'none'; }
+    function _inspectHideTip() { _inspectSeq++; _inspectTipOff(); }
     function _inspectMouseMove(e) {
         if (!_inspectOn || (globalProduct !== 'ir' && globalProduct !== 'combo') || !e.latlng) { _inspectHideTip(); return; }
         if (_inspectThrottle) return;
@@ -26521,9 +26541,22 @@
         return el;
     }
 
+    // Same late-tile guard as the global inspect (_inspectSeq): the storm-card
+    // hover draws its IR line after an async tile sample, so hiding voids any
+    // sample still in flight.
+    var _envHoverSeq = 0;
     function _hideEnvHoverTip() {
+        _envHoverSeq++;
         if (_envHoverTip) _envHoverTip.style.display = 'none';
     }
+    // Every RT tab switch (realtime_ir.html _switchIRViewNow) and a hidden page
+    // drop both cursor readouts: they are position:fixed on <body>, so a box
+    // left showing would float over whatever tab comes next.
+    function _irHideHoverTips() { _inspectHideTip(); _hideEnvHoverTip(); }
+    window._irHideHoverTips = _irHideHoverTips;
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) _irHideHoverTips();
+    });
 
     function _sampleEnvLayer(entry, lat, lon) {
         if (!entry || !entry.ctx) return null;
@@ -27008,9 +27041,11 @@
         }
         var pt = e.originalEvent;
         var wantTb = (typeof productMode === 'undefined' || productMode === 'eir');
+        var seq = ++_envHoverSeq;
         // IR Tb is async (mosaic tile sample); render once it resolves so the
         // Tb line leads the tooltip. Skip the Tb sample for Vis/WV products.
         var render = function (tb) {
+            if (seq !== _envHoverSeq) return;   // superseded, or the pointer left while the tile loaded
             var lines = [];
             if (tb != null) {
                 lines.push('<b>IR:</b> ' + tb.toFixed(0) + ' K · ' + (tb - 273.15).toFixed(0) + ' °C');

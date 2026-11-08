@@ -84,7 +84,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261104st1">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261108tip1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -2895,7 +2895,7 @@
     <script defer src="tc_mw_layer.js?v=20261020au1"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261010tm1"></script>
-    <script defer src="realtime_ir.js?v=20261104st1"></script>
+    <script defer src="realtime_ir.js?v=20261108tip1"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -3145,6 +3145,10 @@
             var satGallery = document.getElementById('sat-gallery');
             irMain.style.display = 'none';
             satMain.style.display = 'none';
+            /* The cursor readouts (Global Map Inspect Tb, storm-card hover)
+               are position:fixed on <body>; drop them so neither floats over
+               the next tab. */
+            if (window._irHideHoverTips) window._irHideHoverTips();
             /* Hide the gallery through realtime_ir.js so it releases its
                grid's locators; _irShowGallery() rebuilds the grid on the way
                back. Before that bundle has run there is nothing to release. */
