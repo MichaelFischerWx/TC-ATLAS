@@ -163,6 +163,19 @@ ACE_BASINS = {
     "SI": "South Indian",
     "SP": "South Pacific",
 }
+# Hemispheric / global totals (conventions in build_ace_pace_climo.AGGREGATES).
+ACE_TOTALS = {
+    "NH": "Northern Hemisphere",
+    "SH": "Southern Hemisphere",
+    "GL": "Global",
+}
+ACE_LABELS = {**ACE_BASINS, **ACE_TOTALS}
+# Keys whose season runs Jul-Jun and is named for the year it ENDS.
+SH_SEASON_KEYS = {"SI", "SP", "SH"}
+# SST year Y pairs with ACE season Y + offset. For the Southern Hemisphere
+# that is the season STARTING in July of Y: pairing it with the season that
+# ended in June made "pre-season" May SST an end-of-season predictor.
+ACE_SST_YEAR_OFFSET = {k: 1 for k in SH_SEASON_KEYS}
 
 # IBTrACS.ALL — global basins, for per-basin ACE used in correlation maps.
 # (NA-only file at IBTRACS_LOCAL_DEFAULT is still used for the headline
@@ -1385,86 +1398,54 @@ def build_ace(out_path: Path, ibtracs_path: str | None = None,
 
 def build_ace_all_basins(out_path: Path,
                          ibtracs_all_path: str | None = None) -> dict:
-    """Compute annual ACE for every basin in IBTrACS.ALL.
+    """Annual ACE per basin and per hemispheric / global total.
 
-    Same per-storm policy as `build_ace` (synoptic 6-hourly times, nature
-    in {TS, SS}, track_type in {main, PROVISIONAL}, wmo_wind ≥ 35 kt with
-    usa_wind fallback). Storms that cross basins are credited to the basin
-    of the point being summed, so a single storm can contribute to two
-    basins if it crossed (e.g., EP→NA).
+    Uses EXACTLY the accumulation behind the Season ACE pace panel
+    (build_ace_pace_climo.accumulate): 1-minute NHC/JTWC winds (usa_wind,
+    wmo_wind fallback), the same tropical/subtropical phase gate, and the
+    same season conventions (SH = Jul-Jun named for the ending year; GL =
+    calendar year). The older WMO-first version put a JMA 10-minute West
+    Pacific (1991-2020 mean 208) beside the pace panel's 1-minute one (300).
 
-    Returns the in-memory dict so the correlation step can consume it
-    directly without re-reading the file.
+    Keys stay the IBTrACS season. Consumers pairing SST year Y with a
+    season use `sst_year_offset` (SH: Y + 1, the season starting that July).
+
+    Returns the in-memory dict (int year keys) for the correlation step.
     """
+    import build_ace_pace_climo as pace   # function-level: pace imports us
+
     path = ibtracs_all_path or IBTRACS_ALL_LOCAL
     if not Path(path).exists():
         raise FileNotFoundError(f"IBTrACS.ALL not found at {path}")
-    log.info("Computing per-basin annual ACE from %s ...", path)
+    log.info("Computing annual ACE (pace-panel definition) from %s ...", path)
+    acc = pace.accumulate(path)
+    cum, storms = acc["cum"], acc["storms"]
 
-    ds = xr.open_dataset(path)
-    season = ds["season"].values
-    wmo_wind = ds["wmo_wind"].values
-    usa_wind = ds["usa_wind"].values if "usa_wind" in ds else np.full_like(wmo_wind, np.nan)
-    basin_arr = ds["basin"].values
-    track_type = ds["track_type"].values
-    iso_time = ds["iso_time"].values
-    nature = ds["nature"].values
-
-    def _b2s(x):
-        return x.decode("utf-8") if isinstance(x, (bytes, bytearray)) else str(x)
-
-    # US-PROVISIONAL = IBTrACS has only the US-agency (NHC/JTWC) track so
-    # far. That is how nearly every JTWC-basin storm arrives for the first
-    # year or two, so excluding it reported recent WP/NI/SP seasons as a
-    # flat zero rather than as missing.
-    ACCEPTED_TRACK_TYPES = {"main", "PROVISIONAL", "US-PROVISIONAL"}
-    ACE_NATURES = {"TS", "SS"}
-
-    n_storms, n_times = wmo_wind.shape
-    years = sorted({int(y) for y in season if not np.isnan(y) and int(y) >= INDICES_START_YEAR})
-    # ace[basin][year] = cumulative ACE
-    ace = {b: {y: 0.0 for y in years} for b in ACE_BASINS}
-
-    for i in range(n_storms):
-        yr = season[i]
-        if np.isnan(yr):
+    payload = {
+        "vmax_threshold_kt": ACE_VMAX_THRESH,
+        "wind_source": "usa_wind (1-min NHC/JTWC) with wmo_wind fallback",
+        "season_convention": "IBTrACS season; SH (SI/SP/SH) = Jul-Jun named "
+                             "for the ending year; GL = calendar year",
+        "sst_year_offset": ACE_SST_YEAR_OFFSET,
+        "generated_utc": datetime.now(timezone.utc).isoformat(),
+        "basins": {},
+    }
+    for b, label in ACE_LABELS.items():
+        per = cum.get(b, {})
+        if not per:
+            log.warning("  %s: no seasons", b)
             continue
-        yr = int(yr)
-        if yr < INDICES_START_YEAR:
-            continue
-        tt = _b2s(track_type[i])
-        if tt not in ACCEPTED_TRACK_TYPES:
-            continue
-        for j in range(n_times):
-            tstr = _b2s(iso_time[i, j])
-            if len(tstr) < 16 or tstr[11:13] not in ("00", "06", "12", "18") \
-                    or tstr[14:16] != "00":
-                continue
-            if _b2s(nature[i, j]) not in ACE_NATURES:
-                continue
-            b = _b2s(basin_arr[i, j])
-            if b not in ACE_BASINS:
-                continue
-            v = wmo_wind[i, j]
-            if np.isnan(v):
-                v = usa_wind[i, j]
-            if np.isnan(v) or v < ACE_VMAX_THRESH:
-                continue
-            ace[b][yr] += (v * v) * 1e-4
-
-    ds.close()
-
-    # Round + log a summary line per basin (last year + max year)
-    payload = {"vmax_threshold_kt": ACE_VMAX_THRESH,
-               "generated_utc": datetime.now(timezone.utc).isoformat(),
-               "basins": {}}
-    for b, label in ACE_BASINS.items():
-        rounded = {y: round(float(v), 2) for y, v in ace[b].items()}
-        max_yr = max(rounded, key=rounded.get)
-        last_yr = max(rounded.keys())
+        first = INDICES_START_YEAR
+        last = max(per)
+        years = {y: round(float(per[y][-1]), 2) if y in per else 0.0
+                 for y in range(first, last + 1)}
+        counts = {y: int(storms.get(b, {}).get(y, 0))
+                  for y in range(first, last + 1)}
+        max_yr = max(years, key=years.get)
         log.info("  %s (%s): max=%.1f in %d, %d=%.1f",
-                 b, label, rounded[max_yr], max_yr, last_yr, rounded[last_yr])
-        payload["basins"][b] = {"name": label, "years": rounded}
+                 b, label, years[max_yr], max_yr, last, years[last])
+        payload["basins"][b] = {"name": label, "years": years,
+                                "storms": counts}
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, separators=(",", ":")))
@@ -1510,7 +1491,8 @@ def build_correlations(out_dir: Path,
     corr_dir.mkdir(parents=True, exist_ok=True)
 
     manifest = {
-        "basins": ACE_BASINS,
+        "basins": ACE_LABELS,
+        "sst_year_offset": ACE_SST_YEAR_OFFSET,
         "months": list(range(1, 13)),
         "kinds": ["raw", "detrended", "relative",
                   "raw_spearman", "detrended_spearman", "relative_spearman"],
@@ -1716,17 +1698,21 @@ def build_correlations(out_dir: Path,
         having opened the previous Jul 1 — the IBTrACS `season` convention.
         """
         today = datetime.now(timezone.utc)
-        if basin in ("SI", "SP"):
+        if basin in SH_SEASON_KEYS:
             current = today.year + 1 if today.month >= 7 else today.year
         else:
             current = today.year
         return season < current
 
-    for basin in ACE_BASINS:
+    for basin in ACE_LABELS:
+        if basin not in ace_all["basins"]:
+            continue
         region_corr[basin] = {}
         distance_matrices[basin] = {}
         ace_dict = ace_all["basins"][basin]["years"]
-        ace_full = np.array([ace_dict.get(y, 0.0) for y in years_all.tolist()],
+        # SST year Y <-> season Y + off (SH: the season starting that July).
+        off = ACE_SST_YEAR_OFFSET.get(basin, 0)
+        ace_full = np.array([ace_dict.get(y + off, 0.0) for y in years_all.tolist()],
                             dtype=np.float64)
         # A season still in progress carries a PARTIAL ACE total (the North
         # Atlantic sat at 2.6 on 3 Aug 2026 against a 122 climatology), and
@@ -1739,7 +1725,7 @@ def build_correlations(out_dir: Path,
         # only. The distance matrices below deliberately keep every year:
         # ranking analogs *for* the in-progress season is their entire job.
         season_done = np.array(
-            [_season_finished(basin, int(y)) for y in years_all.tolist()])
+            [_season_finished(basin, int(y) + off) for y in years_all.tolist()])
         for month in range(1, 13):
             sst_ym = sst_stack[:, month - 1]   # (n_years, lat, lon)
             # Mask out years where this month's SST is entirely missing
@@ -1766,9 +1752,9 @@ def build_correlations(out_dir: Path,
             r_raw  = _corr_along_year(sst_c, ace_c)
             r_raw_s = _spearman_along_year(sst_c, ace_c)
             _render(r_raw, f"{basin}_{month:02d}_raw.png",
-                    ACE_BASINS[basin], month, "raw")
+                    ACE_LABELS[basin], month, "raw")
             _render(r_raw_s, f"{basin}_{month:02d}_raw_spearman.png",
-                    ACE_BASINS[basin], month, "raw_spearman")
+                    ACE_LABELS[basin], month, "raw_spearman")
             _write_grid_sidecar(r_raw, f"{basin}_{month:02d}_raw.grid.json")
             _write_grid_sidecar(r_raw_s, f"{basin}_{month:02d}_raw_spearman.grid.json")
             # Detrended (linear-in-year removed from both SST and ACE).
@@ -1782,9 +1768,9 @@ def build_correlations(out_dir: Path,
             r_det  = _corr_along_year(sst_c_dt, ace_dt)
             r_det_s = _spearman_along_year(sst_c_dt, ace_dt)
             _render(r_det, f"{basin}_{month:02d}_detrended.png",
-                    ACE_BASINS[basin], month, "detrended")
+                    ACE_LABELS[basin], month, "detrended")
             _render(r_det_s, f"{basin}_{month:02d}_detrended_spearman.png",
-                    ACE_BASINS[basin], month, "detrended_spearman")
+                    ACE_LABELS[basin], month, "detrended_spearman")
             _write_grid_sidecar(r_det, f"{basin}_{month:02d}_detrended.grid.json")
             _write_grid_sidecar(r_det_s, f"{basin}_{month:02d}_detrended_spearman.grid.json")
             # Relative SST (Vecchi-Soden); ACE detrended for consistency.
@@ -1794,9 +1780,9 @@ def build_correlations(out_dir: Path,
             r_rel  = _corr_along_year(sst_c_rel, ace_dt)
             r_rel_s = _spearman_along_year(sst_c_rel, ace_dt)
             _render(r_rel, f"{basin}_{month:02d}_relative.png",
-                    ACE_BASINS[basin], month, "relative")
+                    ACE_LABELS[basin], month, "relative")
             _render(r_rel_s, f"{basin}_{month:02d}_relative_spearman.png",
-                    ACE_BASINS[basin], month, "relative_spearman")
+                    ACE_LABELS[basin], month, "relative_spearman")
             _write_grid_sidecar(r_rel, f"{basin}_{month:02d}_relative.grid.json")
             _write_grid_sidecar(r_rel_s, f"{basin}_{month:02d}_relative_spearman.grid.json")
             total += 6
@@ -1839,9 +1825,23 @@ def build_correlations(out_dir: Path,
     )
     log.info("  wrote region_ace_correlations.json (analog-weight lookup)")
 
+    gen = datetime.now(timezone.utc).isoformat()
+    # One file per basin / total, lazy-loaded by the Analogs panel for the
+    # basin in view (the combined file was 6.8 MB on every tab open).
+    dm_dir = out_dir / "analog_distance_matrices"
+    dm_dir.mkdir(parents=True, exist_ok=True)
+    for b, per_month in distance_matrices.items():
+        (dm_dir / f"{b}.json").write_text(json.dumps(
+            {"basin": b, "months": per_month, "generated_utc": gen,
+             "sst_year_offset": ACE_SST_YEAR_OFFSET.get(b, 0)},
+            separators=(",", ":")))
+    log.info("  wrote %d per-basin matrices under %s", len(distance_matrices), dm_dir)
+    # The combined file keeps the six basins only: an older cached frontend
+    # and the daily job's matrix-coverage probe still read it.
     (out_dir / "analog_distance_matrices.json").write_text(
-        json.dumps({"basins": distance_matrices,
-                    "generated_utc": datetime.now(timezone.utc).isoformat()},
+        json.dumps({"basins": {b: v for b, v in distance_matrices.items()
+                               if b in ACE_BASINS},
+                    "generated_utc": gen},
                    separators=(",", ":"))
     )
     sz = (out_dir / "analog_distance_matrices.json").stat().st_size

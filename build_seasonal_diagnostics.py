@@ -471,7 +471,7 @@ def compute_preliminary_analog_distances(
     where kind+stat ∈ {raw, raw_spearman, detrended, detrended_spearman,
                        relative, relative_spearman}.
     """
-    from build_oisst_history import ACE_BASINS
+    from build_oisst_history import ACE_LABELS
 
     today = datetime.now(timezone.utc).date()
     if year is None:
@@ -507,7 +507,9 @@ def compute_preliminary_analog_distances(
     }
     out = {"month": month, "year": year, "basins": {}}
 
-    for basin in ACE_BASINS:
+    # Basins plus the NH / SH / Global totals: the Analogs panel offers all
+    # nine, and each reads its own correlation sidecars.
+    for basin in ACE_LABELS:
         out["basins"][basin] = {}
         for kind in ('raw', 'detrended', 'relative'):
             prelim = prelim_by_kind[kind]
