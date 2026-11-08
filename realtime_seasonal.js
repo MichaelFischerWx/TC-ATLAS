@@ -546,15 +546,36 @@
         });
     }
 
-    // Local-first fetch with GCS fallback. The local-first pattern lets
-    // the dev server (python3 -m http.server 8000) serve test data from
-    // data/seasonal/ without having to upload to GCS during iteration.
+    // Local-first fetch with CDN fallback, on dev servers only. The
+    // local-first pattern lets `python3 -m http.server 8000` serve test
+    // data from data/seasonal/ without an upload during iteration — but
+    // that folder is gitignored, so on tcatlas.org every local probe
+    // 404'd before the CDN answered (11 wasted round trips per visit).
+    var SEAS_LOCAL_FIRST = /^(localhost|127\.0\.0\.1|\[::1\])$|\.(localhost|test)$/
+        .test(window.location.hostname);
+
     function _fetchData(name) {
         var v = window.__v || '';
+        if (!SEAS_LOCAL_FIRST) return _fetchJSON(GCS_BASE + '/' + name + v);
         return _fetchJSON(LOCAL_BASE + '/' + name + v)
             .catch(function () {
                 return _fetchJSON(GCS_BASE + '/' + name + v);
             });
+    }
+
+    // Same policy for the static PNGs (anomaly + correlation maps).
+    function _setSeasonalImg(img, name, onload) {
+        img.onload = onload || null;
+        if (!SEAS_LOCAL_FIRST) {
+            img.onerror = null;
+            img.src = GCS_BASE + '/' + name;
+            return;
+        }
+        img.onerror = function () {
+            img.onerror = null;
+            img.src = GCS_BASE + '/' + name;
+        };
+        img.src = LOCAL_BASE + '/' + name;
     }
 
     // -------------------------------------------------------------------
@@ -816,6 +837,12 @@
         var traces = [];
 
         var isPct = (state.acePace.view === 'pct');
+        // Phones get short legend names so two entries fit per row and
+        // the wrap stays at three rows (see the legend block below).
+        var shortNames = _seasNarrow();
+        var nm = function (full, short) { return shortNames ? short : full; };
+        var liveName = (st && st.season ? st.season : 'live') +
+                       nm(' season', '');
         if (isPct) {
             // Percent-of-normal-to-date. Only defined once the climo mean
             // has actually left zero, so clip the axis to that window.
@@ -836,13 +863,13 @@
             }
             traces.push({
                 x: [startDay, 366], y: [100, 100], type: 'scatter',
-                mode: 'lines', name: 'normal (1991-2020 mean)',
+                mode: 'lines', name: nm('normal (1991-2020 mean)', 'normal'),
                 line: { color: BRAND.textDim, width: 1.4, dash: 'dash' },
                 hoverinfo: 'skip',
             });
             traces.push({
                 x: xs, y: ys, type: 'scatter', mode: 'lines',
-                name: (st && st.season ? st.season : 'live') + ' season',
+                name: liveName,
                 line: { color: BRAND.orange, width: 3 },
                 customdata: hd,
                 hovertemplate: '%{customdata}: %{y:.0f}% of normal<extra></extra>',
@@ -859,8 +886,10 @@
                     name: label, hoverinfo: 'skip',
                 });
             };
-            band('p10', 'p90', BRAND.gray, '10th-90th pct (1991-2020)');
-            band('p25', 'p75', 'rgba(140,148,160,0.30)', '25th-75th pct');
+            band('p10', 'p90', BRAND.gray,
+                 nm('10th-90th pct (1991-2020)', '10-90th pct'));
+            band('p25', 'p75', 'rgba(140,148,160,0.30)',
+                 nm('25th-75th pct', '25-75th pct'));
 
             // Record envelope — the fastest and slowest any complete
             // season has been through the same calendar date. Drawn thin
@@ -870,7 +899,7 @@
                 var rangeTxt = rp.seasons[0] + '-' + rp.seasons[1];
                 traces.push({
                     x: days, y: rp.max, type: 'scatter', mode: 'lines',
-                    name: 'record pace (' + rangeTxt + ')',
+                    name: nm('record pace (' + rangeTxt + ')', 'record pace'),
                     line: { color: 'rgba(239,68,68,0.80)', width: 1.4,
                             dash: 'dot' },
                     // hovermode is 'x unified', so the date is already in
@@ -882,7 +911,7 @@
                 });
                 traces.push({
                     x: days, y: rp.min, type: 'scatter', mode: 'lines',
-                    name: 'slowest season',
+                    name: nm('slowest season', 'slowest'),
                     line: { color: 'rgba(148,163,184,0.75)', width: 1.2,
                             dash: 'dot' },
                     hovertemplate: 'slowest: %{y:.1f}<extra></extra>',
@@ -890,7 +919,7 @@
             }
             traces.push({
                 x: days, y: cl.climo.p50, type: 'scatter', mode: 'lines',
-                name: 'median season',
+                name: nm('median season', 'median'),
                 line: { color: BRAND.textDim, width: 1.6, dash: 'dash' },
                 customdata: hoverDates,
                 hovertemplate: '%{customdata} · median: %{y:.1f}<extra></extra>',
@@ -915,7 +944,7 @@
             if (liveCurve) {
                 traces.push({
                     x: days, y: liveCurve, type: 'scatter', mode: 'lines',
-                    name: (st && st.season ? st.season : 'live') + ' season',
+                    name: liveName,
                     line: { color: BRAND.orange, width: 3 },
                     connectgaps: false,
                     customdata: hoverDates,
@@ -934,11 +963,15 @@
         var tt = order.map(function (v) { return ticktext[tickvals.indexOf(v)]; });
 
         var todayDay = Math.min(_aceTodayDay(basin), 366);
+        var narrow = _seasNarrow();
         var layout = {
             // Bottom margin has to clear the tcatlas.org watermark, which
             // the shared annotation helper places at paper y = -0.16.
-            margin: { l: 56, r: 16, t: 26, b: 58 },
-            height: 400,
+            margin: { l: narrow ? 46 : 56, r: narrow ? 8 : 16, t: 26, b: 58 },
+            // A phone wraps the legend to three rows above the plot, and
+            // Plotly grows the top margin to hold them — out of a fixed
+            // height — so give the figure that room back.
+            height: narrow ? 470 : 400,
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: BRAND.plotBg,
             font: { family: 'DM Sans, system-ui, sans-serif', color: BRAND.text },
@@ -947,8 +980,17 @@
                 bgcolor: BRAND.hoverBg, bordercolor: BRAND.hoverBorder,
                 font: { color: BRAND.hoverText, size: 12 },
             },
-            legend: { orientation: 'h', x: 0, y: 1.14,
+            // Bottom-anchored just above the plot: the legend grows UP and
+            // Plotly's margin autoexpand makes room. Top-anchored at 1.14
+            // it grew DOWN, and the six-row wrap on a phone covered the top
+            // of the chart.
+            // On a phone each entry gets a fixed 41% of the width: two
+            // per row, and the right-hand 18% stays clear for the
+            // TC-ATLAS mark that sits on the same baseline.
+            legend: Object.assign({ orientation: 'h', x: 0, xanchor: 'left',
+                      y: 1.02, yanchor: 'bottom',
                       font: { size: 10, color: BRAND.textDim } },
+                      narrow ? { entrywidth: 0.41, entrywidthmode: 'fraction' } : {}),
             xaxis: {
                 tickmode: 'array', tickvals: order, ticktext: tt,
                 range: [1, 366], gridcolor: BRAND.grid, zeroline: false,
@@ -1499,6 +1541,12 @@
             return !_isWatermarkAnnotation(a);
         });
         _scaleFontsDeep(out, fontK);
+        // A phone pins legend entries to a fraction of its narrow width;
+        // the export is at least 1400 px wide, so let them flow again.
+        if (out.legend && out.legend.entrywidthmode === 'fraction') {
+            delete out.legend.entrywidth;
+            delete out.legend.entrywidthmode;
+        }
         // Margins hold the scaled tick labels and axis titles, so they
         // have to grow with the type or the labels collide with the frame.
         var m = out.margin;
@@ -5604,6 +5652,9 @@
         }
         var sc = document.getElementById('seasonal-scatter-plot');
         if (sc && sc._fullLayout) _renderScatter();
+        // ACE pace swaps legend names/widths and figure height.
+        var ace = document.getElementById('seasonal-ace-plot');
+        if (ace && ace._fullLayout) _renderAcePace();
     }
     if (SEAS_NARROW_MQ) {
         if (SEAS_NARROW_MQ.addEventListener) SEAS_NARROW_MQ.addEventListener('change', _seasOnNarrowChange);
@@ -10017,12 +10068,7 @@
         var gridName = isRel
             ? (state.latest.anom_grid_relative || state.latest.anom_grid)
             : state.latest.anom_grid;
-        img.src = LOCAL_BASE + '/' + pngName;
-        img.onload = function () { _applyAnomZoom(); };
-        img.onerror = function () {
-            img.onerror = null;
-            img.src = GCS_BASE + '/' + pngName;
-        };
+        _setSeasonalImg(img, pngName, function () { _applyAnomZoom(); });
         _applyAnomZoom();
 
         // Under the "(relative)" tag every index is relative (region minus
@@ -10322,11 +10368,7 @@
         var stem = 'correlations/' + c.basin + '_' + mm + '_' + kindKey;
         var pngName = stem + '.png';
         var gridName = stem + '.grid.json';
-        img.src = LOCAL_BASE + '/' + pngName;
-        img.onerror = function () {
-            img.onerror = null;
-            img.src = GCS_BASE + '/' + pngName;
-        };
+        _setSeasonalImg(img, pngName);
         img.alt = c.basin + ' ACE × SST ' +
                   (c.stat === 'spearman' ? 'Spearman ρ' : 'Pearson r') +
                   ', month ' + c.month + ', ' + c.kind;

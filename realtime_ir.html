@@ -1544,11 +1544,11 @@
 
         <div class="seasonal-header">
             <div class="seasonal-title-block">
-                <h2 class="seasonal-title">Seasonal SST &amp; ACE Diagnostics</h2>
+                <h2 class="seasonal-title">Seasonal ACE, SST &amp; Environment</h2>
                 <p class="seasonal-sub">
-                    Pre-season and intra-season SST evolution from OISST v2.1,
-                    anchored against the 1991-2020 climatology and historical
-                    annual ACE (1982-present, NHC).
+                    Live ACE for every basin against 1991-2020, the ocean and
+                    atmosphere behind it (OISST, GFS, ERA5), and how past
+                    seasons' activity tracked them (IBTrACS, 1982-present).
                 </p>
             </div>
             <div class="seasonal-status" id="seasonal-status">Loading…</div>
@@ -2938,7 +2938,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261108rc1';
+        var _LAZY_ASSET_V = '?v=20261108sb1';
         var _lazyViewMods = {
             recon:       { js: ['plotly_dark.js', 'tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

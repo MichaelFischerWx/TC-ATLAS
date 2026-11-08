@@ -26,7 +26,7 @@
     gap: 24px;
     margin-bottom: 16px;
     padding-bottom: 12px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
+    border-bottom: 1px solid var(--border-light);
 }
 
 .seasonal-title-block { flex: 1; }
@@ -85,8 +85,8 @@
     font-size: 0.75rem;
     font-weight: 500;
     color: var(--text-dim, #94a3b8);
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.08);
+    background: var(--navy-light);
+    border: 1px solid var(--border-light);
     border-radius: var(--radius-lg);
     text-decoration: none;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
@@ -334,7 +334,7 @@ body.seasonal-maximized .seasonal-header {
 @media (max-width: 980px) {
     .seasonal-body { gap: 18px; }
     .seasonal-panel {
-        border-color: rgba(255,255,255,0.10);
+        border-color: var(--border-light);
         box-shadow: var(--shadow-1);
     }
     .seasonal-panel-title { font-size: 1rem; }
@@ -386,7 +386,7 @@ body.seasonal-maximized .seasonal-header {
     display: flex;
     flex-direction: column;
     background: var(--surface-raised, #161b22);
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid var(--border-light);
     border-radius: var(--radius);
     padding: 10px 12px 12px;
     min-height: 0;
@@ -492,8 +492,8 @@ body.seasonal-maximized .seasonal-header {
     min-width: 44px;
     padding: 1px 6px;
     border-radius: var(--radius-lg);
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.12);
+    background: var(--navy-light);
+    border: 1px solid var(--border-light);
     color: var(--text-dim, #94a3b8);
     font-size: 0.625rem;
     font-variant-numeric: tabular-nums;
@@ -510,8 +510,8 @@ body.seasonal-maximized .seasonal-header {
     min-width: 70px;
     padding: 1px 6px;
     border-radius: var(--radius-pill);
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.12);
+    background: var(--navy-light);
+    border: 1px solid var(--border-light);
     color: var(--text-dim, #94a3b8);
     font-size: 0.625rem;
     font-variant-numeric: tabular-nums;
@@ -669,7 +669,7 @@ body.seasonal-maximized .seasonal-header {
     padding: 2px 6px;
     background: var(--surface, #0d1117);
     color: var(--text, #e0e0e0);
-    border: 1px solid rgba(255,255,255,0.12);
+    border: 1px solid var(--border-light);
     border-radius: var(--radius-sm);
 }
 
@@ -809,7 +809,7 @@ body.seasonal-maximized .seasonal-header {
     padding: 2px 6px;
     background: var(--surface, #0d1117);
     color: var(--text, #e0e0e0);
-    border: 1px solid rgba(255,255,255,0.12);
+    border: 1px solid var(--border-light);
     border-radius: var(--radius-sm);
 }
 
@@ -958,7 +958,7 @@ body.seasonal-maximized .seasonal-header {
     font-family: inherit;
     color: var(--text-dim, #94a3b8);
     background: transparent;
-    border: 1px solid rgba(255,255,255,0.14);
+    border: 1px solid var(--border-light);
     border-radius: var(--radius-sm);
     cursor: pointer;
 }
@@ -987,7 +987,7 @@ body.seasonal-maximized .seasonal-header {
     padding: 2px 6px;
     background: var(--surface, #0d1117);
     color: var(--text, #e0e0e0);
-    border: 1px solid rgba(255,255,255,0.12);
+    border: 1px solid var(--border-light);
     border-radius: var(--radius-sm);
 }
 .seasonal-ts-plot {
@@ -1007,13 +1007,13 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-an-table th {
     text-align: left;
     padding: 6px 10px;
-    border-bottom: 1px solid rgba(255,255,255,0.18);
+    border-bottom: 1px solid var(--border-light);
     color: var(--text-dim, #a0a8b3);
     font-weight: 500;
 }
 .seasonal-an-table td {
     padding: 6px 10px;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 1px solid var(--border);
     font-variant-numeric: tabular-nums;
 }
 .seasonal-an-table tbody tr:hover {
@@ -1074,14 +1074,14 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-an-details summary:hover { color: var(--text, #e0e0e0); }
 .seasonal-an-details-body {
     padding: 6px 12px 8px;
-    background: rgba(255,255,255,0.025);
+    background: var(--navy-mid);
     border-left: 2px solid rgba(140,148,160,0.30);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     line-height: 1.5;
 }
 .seasonal-an-details-body p { margin: 4px 0; }
 .seasonal-an-details-body code {
-    background: rgba(255,255,255,0.06);
+    background: var(--border);
     padding: 1px 4px;
     border-radius: var(--radius-xs);
     font-size: 0.85em;
