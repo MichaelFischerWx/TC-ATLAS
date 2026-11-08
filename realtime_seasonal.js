@@ -99,7 +99,7 @@
               stat: 'pearson', topN: 'auto' },
         idx: { window: '10', variable: 'anom' },
         // Panel A — season ACE pace. `compare` is '' | 'record' | a year.
-        acePace: { basin: 'NA', compare: '', view: 'cum' },
+        acePace: { basin: 'NA', compare: '', view: 'cum', group: '' },
         ace_pace: null,        // parsed ace_pace_climo.json
         ace_live: null,        // /ir-monitor/seasonal/ace-live
         ace_storms: null,      // parsed ace_pace_storms.json (lazy)
@@ -848,6 +848,204 @@
         return _aceExpand(live.curve || [], today);
     }
 
+    // -------------------------------------------------------------------
+    // Panel A — seasons grouped by a climate index
+    //
+    // Every complete season since 1982 is classified by the mean of a
+    // monthly SST index over the basin's three most active months — read
+    // off the climatology itself (Aug-Oct for the Atlantic, Jul-Sep for the
+    // East Pacific, Jan-Mar for the Southern Hemisphere) — and each group's
+    // mean cumulative curve is drawn over the bands. ENSO uses the usual
+    // ±0.5 °C on Niño 3.4; the relative version (Niño 3.4 minus the
+    // 30°S-30°N mean) is rescaled to the raw anomaly's variance first, so
+    // the same thresholds apply. Relative-SST groupings split the seasons
+    // into thirds. Index data: indices_monthly.json (OISST).
+    // -------------------------------------------------------------------
+    var ACE_GROUPS = {
+        enso_rel: { label: 'ENSO phase (relative Niño 3.4)', region: 'nino34',
+                    rel: true, kind: 'enso' },
+        enso_raw: { label: 'ENSO phase (Niño 3.4 anomaly)', region: 'nino34',
+                    rel: false, kind: 'enso' },
+        atl_mdr:  { label: 'Atlantic MDR relative SST', region: 'atl_mdr',
+                    rel: true, kind: 'tercile' },
+        epac_mdr: { label: 'East Pacific MDR relative SST', region: 'epac_mdr',
+                    rel: true, kind: 'tercile' },
+        wpac_mdr: { label: 'West Pacific MDR relative SST', region: 'wpac_mdr',
+                    rel: true, kind: 'tercile' },
+    };
+    var ACE_GROUP_CLASSES = {
+        enso: [{ key: 'hi', name: 'El Niño', color: '#ef4444' },
+               { key: 'mid', name: 'Neutral', color: null },
+               { key: 'lo', name: 'La Niña', color: '#3b82f6' }],
+        tercile: [{ key: 'hi', name: 'Warm third', color: '#ef4444' },
+                  { key: 'mid', name: 'Middle third', color: null },
+                  { key: 'lo', name: 'Cool third', color: '#3b82f6' }],
+    };
+    var _aceIdxCache = { src: null, series: {} };
+    var _seasIndicesPromise = null;     // set by _activate (indices_monthly.json)
+
+    // Monthly index aligned with state.indices.dates: the relative anomaly
+    // (as the Climate Indices panel computes it) or the raw anomaly.
+    function _aceIndexSeries(g) {
+        var idx = state.indices;
+        if (!idx) return null;
+        if (_aceIdxCache.src !== idx) _aceIdxCache = { src: idx, series: {} };
+        var key = g.region + (g.rel ? ':rel' : ':raw');
+        if (!(key in _aceIdxCache.series)) {
+            _aceIdxCache.series[key] = g.rel ? _relativeAnomalySeries(g.region)
+                                             : (idx.values[g.region + '_anom'] || null);
+        }
+        return _aceIdxCache.series[key];
+    }
+
+    // The basin's calendar months in season-axis order (Jul first for SH).
+    function _aceAxisMonths(basin) {
+        return ACE_SH_BASINS[basin] ? [7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
+                                    : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    }
+
+    // Three consecutive months with the most climatological ACE.
+    function _acePeakWindow(basin) {
+        var cl = _aceBasinClimo(basin);
+        var mean = cl.climo.mean;
+        var months = _aceAxisMonths(basin);
+        var inc = months.map(function (m, k) {
+            var a = _aceSeasonDay(basin, m, 1);
+            var b = (k < 11) ? _aceSeasonDay(basin, months[k + 1], 1) : 367;
+            return mean[b - 2] - (a > 1 ? mean[a - 2] : 0);
+        });
+        var best = 0, bestSum = -1;
+        for (var k = 0; k <= 9; k++) {
+            var s = inc[k] + inc[k + 1] + inc[k + 2];
+            if (s > bestSum) { bestSum = s; best = k; }
+        }
+        return months.slice(best, best + 3);
+    }
+
+    // Mean of the index over `months` of a season (SH: Jul-Dec belong to
+    // the year before the season's name). Null if any month is missing.
+    function _aceWindowMean(basin, season, series, months) {
+        var idx = state.indices;
+        var sum = 0;
+        for (var i = 0; i < months.length; i++) {
+            var m = months[i];
+            var y = (ACE_SH_BASINS[basin] && m >= 7) ? season - 1 : season;
+            var k = idx.dates.indexOf(y + '-' + (m < 10 ? '0' : '') + m);
+            if (k < 0 || series[k] === null || series[k] === undefined) return null;
+            sum += series[k];
+        }
+        return sum / months.length;
+    }
+
+    // The season in progress on this basin's axis.
+    function _aceCurrentSeason(basin) {
+        var now = new Date();
+        var y = now.getUTCFullYear();
+        return (ACE_SH_BASINS[basin] && now.getUTCMonth() >= 6) ? y + 1 : y;
+    }
+
+    function _aceGrouping(basin, groupKey) {
+        var g = ACE_GROUPS[groupKey];
+        var cl = _aceBasinClimo(basin);
+        var series = g && cl ? _aceIndexSeries(g) : null;
+        if (!series) return null;
+        var months = _acePeakWindow(basin);
+        var current = _aceCurrentSeason(basin);
+        var first = (state.ace_pace && state.ace_pace.history_start) || 1982;
+        var rows = [];
+        for (var s = first; s < current; s++) {
+            var v = _aceWindowMean(basin, s, series, months);
+            if (v !== null) rows.push({ season: s, v: v });
+        }
+        if (rows.length < 9) return null;
+        // ENSO: rescale the relative index to the raw anomaly's spread
+        // (window means, 1991-2020) so ±0.5 °C keeps its usual meaning.
+        var scale = 1;
+        if (g.kind === 'enso' && g.rel) {
+            var raw = _aceIndexSeries({ region: g.region, rel: false });
+            var a = [], b = [];
+            rows.forEach(function (r) {
+                if (r.season < 1991 || r.season > 2020) return;
+                var w = raw ? _aceWindowMean(basin, r.season, raw, months) : null;
+                if (w !== null) { a.push(r.v); b.push(w); }
+            });
+            var sd = function (x) {
+                var mu = x.reduce(function (p, q) { return p + q; }, 0) / x.length;
+                return Math.sqrt(x.reduce(function (p, q) {
+                    return p + (q - mu) * (q - mu); }, 0) / x.length);
+            };
+            if (a.length > 5 && sd(a) > 0) scale = sd(b) / sd(a);
+        }
+        var lo, hi;
+        if (g.kind === 'enso') {
+            lo = -0.5; hi = 0.5;
+        } else {
+            var sorted = rows.map(function (r) { return r.v; })
+                .sort(function (p, q) { return p - q; });
+            var q = function (f) {
+                var x = f * (sorted.length - 1), i = Math.floor(x);
+                return sorted[i] + (x - i) * ((sorted[i + 1] !== undefined
+                    ? sorted[i + 1] : sorted[i]) - sorted[i]);
+            };
+            lo = q(1 / 3); hi = q(2 / 3);
+        }
+        var classOf = function (v) {
+            var x = v * scale;
+            if (g.kind === 'enso') return x >= hi ? 'hi' : (x <= lo ? 'lo' : 'mid');
+            return x > hi ? 'hi' : (x <= lo ? 'lo' : 'mid');
+        };
+        var groups = ACE_GROUP_CLASSES[g.kind].map(function (c) {
+            return { key: c.key, name: c.name, color: c.color || BRAND.textDim,
+                     seasons: [], curve: null, total: 0 };
+        });
+        var byKey = {};
+        groups.forEach(function (gr) { byKey[gr.key] = gr; });
+        rows.forEach(function (r) { byKey[classOf(r.v)].seasons.push(r.season); });
+        groups.forEach(function (gr) {
+            if (!gr.seasons.length) return;
+            var acc = new Array(366).fill(0);
+            gr.seasons.forEach(function (s) {
+                var c = cl.years[String(s)];
+                if (!c) return;              // a season with no ACE at all
+                var d = _aceExpand(c, null);
+                for (var i = 0; i < 366; i++) acc[i] += d[i];
+            });
+            gr.curve = acc.map(function (x) { return x / gr.seasons.length; });
+            gr.total = gr.curve[365];
+        });
+        // Where the season in progress falls: its own window when complete,
+        // else the latest three months on record ("so far").
+        var cur = _aceWindowMean(basin, current, series, months);
+        var curMonths = months, partial = false;
+        if (cur === null) {
+            var idx = state.indices, last = -1;
+            for (var k = idx.dates.length - 1; k >= 0; k--) {
+                if (series[k] !== null && series[k] !== undefined) { last = k; break; }
+            }
+            if (last >= 2) {
+                cur = (series[last] + series[last - 1] + series[last - 2]) / 3;
+                curMonths = [idx.dates[last - 2], idx.dates[last]].map(function (d) {
+                    return parseInt(d.split('-')[1], 10);
+                });
+                partial = true;
+            }
+        }
+        return {
+            group: g, months: months, scale: scale, groups: groups,
+            first: rows[0].season, last: rows[rows.length - 1].season,
+            current: (cur === null) ? null : {
+                season: current, value: cur * scale, cls: classOf(cur),
+                partial: partial, months: curMonths,
+            },
+        };
+    }
+
+    function _aceMonthSpan(months) {
+        var a = _MONTH_NAMES_FULL[months[0] - 1];
+        var b = _MONTH_NAMES_FULL[months[months.length - 1] - 1];
+        return a === b ? a : a + '-' + b;
+    }
+
     function _renderAcePace() {
         var el = document.getElementById('seasonal-ace-plot');
         if (!el || typeof Plotly === 'undefined') return;
@@ -872,6 +1070,9 @@
         var traces = [];
 
         var isPct = (state.acePace.view === 'pct');
+        // Grouping by a climate index applies to the cumulative view.
+        var grouping = (state.acePace.group && !isPct && state.indices)
+            ? _aceGrouping(basin, state.acePace.group) : null;
         // Phones get short legend names so two entries fit per row and
         // the wrap stays at three rows (see the legend block below).
         var shortNames = _seasNarrow();
@@ -926,10 +1127,31 @@
             band('p25', 'p75', 'rgba(140,148,160,0.30)',
                  nm('25th-75th pct', '25-75th pct'));
 
+            // Grouped view: one mean curve per class (El Niño / neutral /
+            // La Niña, or warm / middle / cool thirds) replaces the median
+            // and record lines, which would otherwise crowd the chart.
+            if (grouping) {
+                grouping.groups.forEach(function (gr) {
+                    if (!gr.curve) return;
+                    var isCur = grouping.current && grouping.current.cls === gr.key;
+                    traces.push({
+                        x: days, y: gr.curve, type: 'scatter', mode: 'lines',
+                        name: nm(gr.name + ' (' + gr.seasons.length + '): ' +
+                                 gr.total.toFixed(0),
+                                 gr.name + ' ' + gr.total.toFixed(0)),
+                        line: { color: gr.color, width: isCur ? 2.6 : 1.6,
+                                dash: isCur ? 'solid' : 'dash' },
+                        customdata: hoverDates,
+                        hovertemplate: '%{customdata} · ' + gr.name +
+                            ' mean: %{y:.1f}<extra></extra>',
+                    });
+                });
+            }
+
             // Record envelope — the fastest and slowest any complete
             // season has been through the same calendar date. Drawn thin
             // and dotted so it reads as a boundary, not another season.
-            var rp = cl.record_pace;
+            var rp = grouping ? null : cl.record_pace;
             if (rp) {
                 var rangeTxt = rp.seasons[0] + '-' + rp.seasons[1];
                 traces.push({
@@ -952,7 +1174,7 @@
                     hovertemplate: 'slowest: %{y:.1f}<extra></extra>',
                 });
             }
-            traces.push({
+            if (!grouping) traces.push({
                 x: days, y: cl.climo.p50, type: 'scatter', mode: 'lines',
                 name: nm('median season', 'median'),
                 line: { color: BRAND.textDim, width: 1.6, dash: 'dash' },
@@ -1024,8 +1246,10 @@
             // On a phone each entry gets a fixed 41% of the width: two
             // per row, and the right-hand 18% stays clear for the
             // TC-ATLAS mark that sits on the same baseline.
+            // Wide: lifted to 1.07 so a full-width row (the grouped view
+            // has eight entries) clears the TC-ATLAS mark at 1.02.
             legend: Object.assign({ orientation: 'h', x: 0, xanchor: 'left',
-                      y: 1.02, yanchor: 'bottom',
+                      y: narrow ? 1.02 : 1.07, yanchor: 'bottom',
                       font: { size: 10, color: BRAND.textDim } },
                       narrow ? { entrywidth: 0.41, entrywidthmode: 'fraction' } : {}),
             xaxis: {
@@ -1062,9 +1286,47 @@
         seasNewPlot(el, traces, layout,
                     { responsive: true, displaylogo: false });
 
+        // Grouped view: the classes sorted by mean season total, and where
+        // the season in progress falls.
+        var groupHtml = '';
+        if (grouping) {
+            var g = grouping.group;
+            var how = g.kind === 'enso'
+                ? (g.rel ? 'relative Niño 3.4' : 'Niño 3.4 anomaly') + ', ' +
+                  _aceMonthSpan(grouping.months) + ' mean, ±0.5 °C' +
+                  (g.rel ? ' after rescaling to the raw anomaly\'s spread (×' +
+                   grouping.scale.toFixed(2) + ')' : '')
+                : g.label + ', ' + _aceMonthSpan(grouping.months) +
+                  ' mean, split into thirds';
+            var ranked = grouping.groups.filter(function (gr) { return gr.curve; })
+                .sort(function (a, b) { return b.total - a.total; });
+            var cur = grouping.current;
+            var curName = '';
+            if (cur) {
+                grouping.groups.forEach(function (gr) {
+                    if (gr.key === cur.cls) curName = gr.name;
+                });
+            }
+            groupHtml = '<strong>Seasons grouped by ' +
+                (g.kind === 'enso' ? 'ENSO phase' : g.label) + '</strong> (' +
+                how + '; complete seasons ' +
+                _aceSeasonLabel(basin, grouping.first) + ' to ' +
+                _aceSeasonLabel(basin, grouping.last) +
+                '), by mean season ACE: ' +
+                ranked.map(function (gr) {
+                    return '<span style="color:' + gr.color + '">' + gr.name +
+                        '</span> ' + gr.total.toFixed(0) + ' (' +
+                        gr.seasons.length + ' seasons)';
+                }).join(' · ') +
+                (cur ? '. ' + _aceSeasonLabel(basin, cur.season) +
+                    (cur.partial ? ' so far' : '') + ': ' + curName + ' (' +
+                    (cur.value >= 0 ? '+' : '') + cur.value.toFixed(2) + ' °C, ' +
+                    _aceMonthSpan(cur.months) + ')' : '') +
+                '.<br>';
+        }
         if (note) {
             if (!st || st.ace === null) {
-                note.textContent = cl.name + ': live season-to-date ACE ' +
+                note.innerHTML = groupHtml + cl.name + ': live season-to-date ACE ' +
                     'unavailable (the b-deck feed did not respond).';
             } else {
                 var rankTxt = '';
@@ -1078,7 +1340,7 @@
                         : ('ahead of ' + st.rank.below + ' of ' + st.rank.n +
                            ' 1991-2020 seasons on this date (' + pctOrd + ')');
                 }
-                note.innerHTML =
+                note.innerHTML = groupHtml +
                     '<strong>' + cl.name + ' ' +
                     _aceSeasonLabel(basin, st.season) + ':</strong> ' +
                     st.ace.toFixed(1) + ' ACE through ' +
@@ -1312,13 +1574,32 @@
             });
         }
         var vsel = document.getElementById('seasonal-ace-view');
+        var gsel = document.getElementById('seasonal-ace-group');
+        // Grouping is a cumulative-view feature; grey it out for % of normal.
+        var syncGroupEnabled = function () {
+            if (gsel) gsel.disabled = (state.acePace.view === 'pct');
+        };
         if (vsel) {
             vsel.addEventListener('change', function () {
                 state.acePace.view = vsel.value;
+                syncGroupEnabled();
                 _renderAcePace();
                 _ga('rt_seasonal_ace_view', { value: vsel.value });
             });
         }
+        if (gsel) {
+            gsel.addEventListener('change', function () {
+                state.acePace.group = gsel.value;
+                // The index file normally lands long before anyone opens
+                // this menu; if not, draw once it does.
+                if (gsel.value && !state.indices && _seasIndicesPromise) {
+                    _seasIndicesPromise.then(_renderAcePace, function () {});
+                }
+                _renderAcePace();
+                _ga('rt_seasonal_ace_group', { value: gsel.value });
+            });
+        }
+        syncGroupEnabled();
     }
 
     // -------------------------------------------------------------------
@@ -10646,6 +10927,7 @@
         _evoPopulateYearPicker();
         _setStatus('Loading indices…');
         var p1 = _fetchData('indices_monthly.json').then(function (j) { state.indices = j; });
+        _seasIndicesPromise = p1;
         var p2 = _fetchData('ace_annual.json').then(function (j) { state.ace = j; });
         var p3 = _fetchData('latest.json').then(
             function (j) { state.latest = j; },

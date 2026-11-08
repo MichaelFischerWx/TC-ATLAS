@@ -1595,6 +1595,17 @@
                             <option value="record">Record season</option>
                         </select>
                     </label>
+                    <label>Group seasons by
+                        <select id="seasonal-ace-group"
+                                title="Sort the complete seasons since 1982 by a climate index over the basin's three most active months (from the climatology: Aug-Oct for the Atlantic, Jan-Mar for the Southern Hemisphere), and draw each group's mean cumulative ACE. ENSO uses ±0.5 °C on Niño 3.4; relative SST splits the seasons into thirds.">
+                            <option value="" selected>None</option>
+                            <option value="enso_rel">ENSO (relative Niño 3.4)</option>
+                            <option value="enso_raw">ENSO (Niño 3.4 anomaly)</option>
+                            <option value="atl_mdr">Atlantic MDR relative SST</option>
+                            <option value="epac_mdr">East Pacific MDR relative SST</option>
+                            <option value="wpac_mdr">West Pacific MDR relative SST</option>
+                        </select>
+                    </label>
                     <label>View
                         <select id="seasonal-ace-view"
                                 title="Cumulative ACE, or the live season expressed as a percentage of the climatological median for the same calendar day.">
@@ -2934,7 +2945,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261108ha1';
+        var _LAZY_ASSET_V = '?v=20261108eg1';
         var _lazyViewMods = {
             recon:       { js: ['plotly_dark.js', 'tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
