@@ -402,7 +402,12 @@ body.seasonal-maximized .seasonal-header {
        phone viewport, breaking the entire mobile layout. */
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 14px;
-    grid-auto-rows: minmax(280px, auto);
+    /* Rows size to their content. A 280 px row minimum used to sit here; it
+       was invisible while every row was a tall panel, but the section
+       heads ("Now", "Predictors", ...) are grid rows too and each got
+       ~260 px of blank space under it. Panels are all taller than that
+       and align-items: start never stretched them, so nothing else moves. */
+    grid-auto-rows: auto;
     /* Each panel sizes to its own content — without this, a short panel
        in a row (e.g. Panel E with N=3 analogs) lets its tall row-mate
        (Panel F) overflow its own border because the grid cell collapses

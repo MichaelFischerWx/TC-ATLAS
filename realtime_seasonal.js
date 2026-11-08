@@ -242,6 +242,28 @@
     // The title is pinned to the plot's top edge (paper ref) with a pad
     // that clears the credit block; _exportLayout scales that pad with
     // the export type. Untitled charts just get room above the plot.
+    // Plotly annotations never wrap, so a long credit line ran off the
+    // figure's edge. Break each line at spaces to `max` characters.
+    function _wrapCreditLine(text, max) {
+        if (text.length <= max) return text;
+        var out = [], line = '';
+        text.split(' ').forEach(function (w) {
+            if (line && (line + ' ' + w).length > max) { out.push(line); line = w; }
+            else line = line ? line + ' ' + w : w;
+        });
+        if (line) out.push(line);
+        return out.join('<br>');
+    }
+
+    // Export copies may carry fuller credit lines than the screen shows
+    // (phones get the short version): drop the on-screen block, re-apply.
+    function _replaceDataCredit(layout, parts, box, centered) {
+        layout.annotations = (layout.annotations || []).filter(function (a) {
+            return a.name !== 'data-credit';
+        });
+        _applyDataCredit(layout, parts, box, centered);
+    }
+
     function _applyDataCredit(layout, parts, el, centered) {
         var size = 10;
         var plotW = ((el && el.clientWidth) || 800) -
@@ -250,8 +272,13 @@
         // ~0.55 em per glyph; keep 20% headroom because the export
         // scales type a little faster than it widens the figure.
         var fits = oneLine.length * size * 0.55 <= plotW * 0.8;
-        var text = fits ? oneLine : parts.join('<br>');
-        var nLines = fits ? 1 : parts.length;
+        // DM Sans runs ~0.45 em per glyph (measured on a saved PNG); keep a
+        // little headroom on each line.
+        var maxChars = Math.max(40, Math.floor(plotW / (size * 0.47) * 0.92));
+        var text = fits ? oneLine : parts.map(function (p) {
+            return _wrapCreditLine(p, maxChars);
+        }).join('<br>');
+        var nLines = text.split('<br>').length;
         var creditH = Math.round(nLines * size * 1.3);
         if (layout.title && layout.title.text) {
             var titleSize = (layout.title.font && layout.title.font.size) || 15;
@@ -1263,7 +1290,7 @@
             band('p10', 'p90', BRAND.gray,
                  nm('10th-90th pct (1991-2020)', '10-90th pct'));
             band('p25', 'p75', 'rgba(140,148,160,0.30)',
-                 nm('25th-75th pct', '25-75th pct'));
+                 nm('25th-75th pct (1991-2020)', '25-75th pct'));
 
             // Grouped view: one mean curve per class (El Niño / neutral /
             // La Niña, or warm / middle / cool thirds) replaces the median
@@ -1314,7 +1341,7 @@
             }
             if (!grouping) traces.push({
                 x: days, y: cl.climo.p50, type: 'scatter', mode: 'lines',
-                name: nm('median season', 'median'),
+                name: nm('median (1991-2020)', 'median'),
                 line: { color: BRAND.textDim, width: 1.6, dash: 'dash' },
                 customdata: hoverDates,
                 hovertemplate: '%{customdata} · median: %{y:.1f}<extra></extra>',
@@ -1423,6 +1450,88 @@
         Plotly.purge(el);
         seasNewPlot(el, traces, layout,
                     { responsive: true, displaylogo: false });
+
+        // A saved PNG travels without the chips and note around it, so it
+        // carries its own title and credit lines: what is plotted, the
+        // season and date, record standing, the climatology / grouping
+        // periods, and the ACE definition and sources (_addPlotSaveBtn).
+        var seasonLbl = (st && st.season) ? _aceSeasonLabel(basin, st.season) : '';
+        var title = cl.name + ' ACE' + (seasonLbl ? ' · ' + seasonLbl +
+            (isPct ? ' season as % of the 1991-2020 mean to date'
+                   : ' season to date') : '') +
+            ((st && st.ace !== null) ? ' (through ' + _aceDayLabel(basin, st.today) + ')' : '');
+        var credit = [];
+        if (st && st.ace !== null) {
+            credit.push(seasonLbl + ': ' + st.ace.toFixed(1) + ' ACE from ' +
+                st.storms + ' storm' + (st.storms === 1 ? '' : 's') +
+                (st.pct !== null ? ', ' + Math.round(st.pct) +
+                    '% of the 1991-2020 mean to date (' + st.meanToDate.toFixed(1) + ')' : '') +
+                (!st.rank ? ''
+                    : (st.rank.below === st.rank.n)
+                        ? ', above all ' + st.rank.n + ' 1991-2020 seasons for the date'
+                    : (st.rank.below === 0 && !st.rank.ties)
+                        ? ', below all ' + st.rank.n + ' 1991-2020 seasons for the date'
+                    : ', ' + _ordinal(Math.round(st.rank.pct)) + ' percentile for the date'));
+            var recParts = [];
+            if (st.rec && st.rec.max > 0) {
+                var span = st.rec.span[0] + '-' + st.rec.span[1];
+                recParts.push(st.rec.aheadOfRecord
+                    ? 'RECORD PACE: ahead of every complete ' + span + ' season on this date ' +
+                      '(previous high ' + st.rec.max.toFixed(1) + ', ' +
+                      _aceSeasonLabel(basin, st.rec.maxSeason) + ')'
+                    : 'Not record pace: the ' + span + ' high for this date is ' +
+                      st.rec.max.toFixed(1) + ' (' + _aceSeasonLabel(basin, st.rec.maxSeason) + ')');
+            }
+            if (cl.record) {
+                recParts.push('season record ' + cl.record.ace.toFixed(1) + ' (' +
+                    _aceSeasonLabel(basin, cl.record.season) + ')' +
+                    (st.ace > cl.record.ace ? ', already exceeded' : ''));
+            }
+            if (recParts.length) credit.push(recParts.join(' · '));
+        }
+        var bandsTxt = 'shading: 10th-90th and 25th-75th percentiles of the ' +
+            (cl.n_climo_seasons || 30) + ' seasons of 1991-2020';
+        if (isPct) {
+            credit.push('Line: season-to-date ACE divided by the 1991-2020 mean ' +
+                'to date; dashed = 100%');
+        } else if (grouping) {
+            var gg = grouping.group;
+            credit.push('Group means of the complete ' +
+                _aceSeasonLabel(basin, grouping.first) + '-' +
+                _aceSeasonLabel(basin, grouping.last) + ' seasons by ' +
+                (gg.kind === 'enso'
+                    ? 'ENSO phase (relative Niño 3.4, ' + _aceMonthSpan(grouping.months) +
+                      ' mean, ±0.5 °C after ×' + grouping.scale.toFixed(2) + ' rescaling)'
+                    : gg.label + ' (' + _aceMonthSpan(grouping.months) + ' mean, thirds)') +
+                '; legend = group (seasons): mean season total · ' + bandsTxt);
+        } else {
+            credit.push('Dashed: 1991-2020 median · ' + bandsTxt +
+                (cl.record_pace ? ' · dotted: fastest and slowest complete ' +
+                    cl.record_pace.seasons[0] + '-' + cl.record_pace.seasons[1] +
+                    ' seasons on each date' : ''));
+        }
+        var cmpS = state.acePace.compare;
+        if (cmpS && !isPct) {
+            var cmpY = (cmpS === 'record') ? cl.record.season : parseInt(cmpS, 10);
+            credit[credit.length - 1] += ' · blue: the ' + _aceSeasonLabel(basin, cmpY) +
+                ' season' + (cmpS === 'record' ? ' (season record)' : '');
+        }
+        var ACE_TOTAL_SHORT = { NH: 'NA + EP + WP + NI, Jan-Dec', SH: 'SI + SP, Jul-Jun',
+                                GL: 'all six basins, calendar year' };
+        credit.push((ACE_TOTAL_SHORT[basin] ? basin + ' = ' + ACE_TOTAL_SHORT[basin] + ' · ' : '') +
+            'ACE = 10⁻⁴ Σ v² over 6-hourly tropical/subtropical points ≥ 34 kt, ' +
+            '1-minute NHC/JTWC winds · IBTrACS v04r01; live ATCF best tracks' +
+            ((st && st.through) ? ' through ' + st.through.replace('T', ' ') : ''));
+        el._seasExportDecorate = function (lay, box) {
+            lay.title = { text: title, font: { size: 16, color: BRAND.text } };
+            // The title and credit lines own the top of the export, so the
+            // legend moves under the axis (the lockup sits bottom-right).
+            lay.legend = { orientation: 'h', x: 0, xanchor: 'left',
+                           y: -0.09, yanchor: 'top',
+                           font: { size: 11, color: BRAND.textDim } };
+            lay.margin = Object.assign({}, lay.margin, { b: 96 });
+            _applyDataCredit(lay, credit, box || el);
+        };
 
         // Grouped view: the classes sorted by mean season total, and where
         // the season in progress falls.
@@ -2205,9 +2314,17 @@
                 // Render from a DETACHED copy of the figure rather than
                 // relayout-ing the live one: no flicker, no restore step,
                 // and the export can carry bigger fonts than the panel.
+                // Charts can add export-only title / credit lines.
+                var srcLayout = plot.layout;
+                if (typeof plot._seasExportDecorate === 'function') {
+                    srcLayout = JSON.parse(JSON.stringify(plot.layout));
+                    // Fonts scale by fontK on export, so lines are wrapped
+                    // for the export's width in unscaled units.
+                    plot._seasExportDecorate(srcLayout, { clientWidth: w / fontK });
+                }
                 var fig = {
                     data: _exportData(plot.data, fontK),
-                    layout: _exportLayout(plot.layout, fontK, isDark),
+                    layout: _exportLayout(srcLayout, fontK, isDark),
                 };
                 return window.Plotly.toImage(fig, {
                     format: 'png', width: w, height: h, scale: scale });
@@ -2672,12 +2789,19 @@
         layout.geo2 = _insetGeoLayout();
         var relNote = state.scatter.variable === 'sst_rel'
             ? ' ' + _relativeSstNote() : '';
-        _applyDataCredit(layout, (narrow ? [titleWhat] : []).concat([OISST_CREDIT_MONTHLY,
+        var scCredit = (narrow ? [titleWhat] : []).concat([OISST_CREDIT_MONTHLY,
             'X: ' + _regionDomainText(state.scatter.x) + relNote,
             'Y: ' + _regionDomainText(state.scatter.y) + relNote +
-            ' (area-weighted means)']), el, true);
+            ' (area-weighted means)']);
+        var scColor = 'Color: ' + (ACE_BASIN_LABEL[aceBasin] || aceBasin) + ' ACE of ' +
+            (shSeason ? 'the season starting that July' : 'that season') +
+            ' (IBTrACS, 1-minute NHC/JTWC winds)';
+        _applyDataCredit(layout, narrow ? scCredit : scCredit.concat([scColor]), el, true);
         seasReact(el, allTraces, layout,
                      { responsive: true, displaylogo: false });
+        el._seasExportDecorate = function (lay, box) {
+            _replaceDataCredit(lay, scCredit.concat([scColor]), box, true);
+        };
     }
 
     // Builds the inset-map traces + geo subplot layout for Panel C.
@@ -5742,9 +5866,11 @@
         // ENSO ±0.5 °C reference lines stay in every mode. The tab defines
         // ENSO on the RELATIVE anomaly (the default here); in Raw and
         // Detrended they are eyeballing guides.
+        var idxNarrow = _seasNarrow();
+        var idxTitle = 'Atlantic + Pacific climate indices' + titleTag;
         var layout = {
-            title: { text: 'Atlantic + Pacific climate indices' + titleTag,
-                     font: { size: 14 } },
+            title: { text: idxNarrow ? 'Climate indices' + titleTag : idxTitle,
+                     font: { size: idxNarrow ? 13 : 14 } },
             xaxis: { zeroline: false },
             yaxis: { title: 'SST ' + vLabel, zeroline: true,
                      zerolinecolor: BRAND.gridZero },
@@ -5776,8 +5902,24 @@
             ],
             annotations: _watermarkAnnotations(),
         };
+        // Say what the anomalies are relative to and what the dotted lines
+        // mean, so a saved PNG stands on its own. A phone shows the title
+        // alone (seven wrapped credit lines left no room for the plot); its
+        // saves still get the full lines.
+        var idxCredit = [OISST_CREDIT_MONTHLY,
+            (v === 'sst_dt') ? 'departures from each calendar month\'s linear trend, 1982-present'
+            : (v === 'sst_rel') ? 'anomalies vs 1991-2020, ' + _relativeSstNote()
+            : 'anomalies vs the 1991-2020 monthly climatology',
+            'dotted: ±0.5 °C El Niño / La Niña thresholds' +
+            (v === 'sst_rel' ? ' (relative Niño 3.4, the ENSO definition used on this tab)' : '') +
+            ' · stars: current month, preliminary'];
+        if (!idxNarrow) _applyDataCredit(layout, idxCredit, el);
         seasReact(el, traces, layout,
                      { responsive: true, displaylogo: false });
+        el._seasExportDecorate = function (lay, box) {
+            lay.title = Object.assign({}, lay.title, { text: idxTitle });
+            _replaceDataCredit(lay, idxCredit, box);
+        };
     }
 
     // -------------------------------------------------------------------
@@ -6209,6 +6351,9 @@
         // ACE pace swaps legend names/widths and figure height.
         var ace = document.getElementById('seasonal-ace-plot');
         if (ace && ace._fullLayout) _renderAcePace();
+        // Climate indices swap title length and credit lines.
+        var ix = document.getElementById('seasonal-idx-plot');
+        if (ix && ix._fullLayout) _renderIndices();
     }
     if (SEAS_NARROW_MQ) {
         if (SEAS_NARROW_MQ.addEventListener) SEAS_NARROW_MQ.addEventListener('change', _seasOnNarrowChange);
