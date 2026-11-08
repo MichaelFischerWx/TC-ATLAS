@@ -323,6 +323,134 @@
     }
 
     // -------------------------------------------------------------------
+    // Segmented toggles for the two- to four-way choices. The <select>
+    // stays (hidden) as the single source of truth: a button click sets
+    // it and dispatches `change`, so every existing handler runs as
+    // before, and the instance's `value` / `selectedIndex` / `disabled`
+    // setters are wrapped so programmatic changes (e.g. the evolution map
+    // forcing Monthly for a monthly-only variable) repaint the buttons.
+    // -------------------------------------------------------------------
+    var SEG_SHORT = {
+        'seasonal-ace-view':      { cum: 'Cumulative', pct: '% of normal' },
+        'seasonal-ts-history':    { all: 'All years', recent10: 'Last 10', none: 'Climatology only' },
+        'seasonal-ts-resolution': { monthly: 'Monthly', daily: 'Daily' },
+        'seasonal-evo-mode':      { raw: 'Raw', anomaly: 'Anomaly' },
+        'seasonal-evo-resolution': { monthly: 'Monthly', daily: 'Daily' },
+        'seasonal-scatter-var':   { sst: 'Absolute', anom: 'Anomaly', sst_dt: 'Detrended', sst_rel: 'Relative' },
+        'seasonal-corr-kind':     { relative: 'Relative', raw: 'Raw', detrended: 'Detrended' },
+        'seasonal-corr-stat':     { pearson: 'Pearson', spearman: 'Spearman' },
+        'seasonal-an-kind':       { raw: 'Raw', detrended: 'Detrended', relative: 'Relative' },
+        'seasonal-an-stat':       { pearson: 'Pearson', spearman: 'Spearman' },
+        'seasonal-idx-var':       { anom: 'Raw', sst_dt: 'Detrended', sst_rel: 'Relative' },
+        'seasonal-idx-window':    { '5': '5 yr', '10': '10 yr', '20': '20 yr', all: 'All' },
+    };
+
+    function _segmentize(id) {
+        var sel = document.getElementById(id);
+        if (!sel || sel._seg) return;
+        var short = SEG_SHORT[id] || {};
+        var wrap = document.createElement('span');
+        wrap.className = 'seas-seg';
+        wrap.setAttribute('role', 'group');
+        var lab = sel.closest('label');
+        if (lab) {
+            var t = (lab.firstChild && lab.firstChild.nodeType === 3)
+                ? lab.firstChild.textContent.trim() : '';
+            if (t) wrap.setAttribute('aria-label', t);
+        }
+        Array.prototype.forEach.call(sel.options, function (o) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = short[o.value] || o.textContent;
+            b.title = o.textContent + (sel.title ? ' \u2014 ' + sel.title : '');
+            b.setAttribute('data-value', o.value);
+            b.addEventListener('click', function (e) {
+                e.preventDefault();
+                if (sel.disabled || sel.value === o.value) return;
+                sel.value = o.value;
+                sel.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+            wrap.appendChild(b);
+        });
+        sel.classList.add('seas-seg-src');
+        sel.setAttribute('aria-hidden', 'true');
+        sel.tabIndex = -1;
+        sel.parentNode.insertBefore(wrap, sel.nextSibling);
+        sel._seg = wrap;
+        var sync = function () {
+            var v = Object.getOwnPropertyDescriptor(
+                HTMLSelectElement.prototype, 'value').get.call(sel);
+            var dis = Object.getOwnPropertyDescriptor(
+                HTMLSelectElement.prototype, 'disabled').get.call(sel);
+            Array.prototype.forEach.call(wrap.children, function (b) {
+                var on = b.getAttribute('data-value') === v;
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-pressed', on ? 'true' : 'false');
+                b.disabled = dis;
+            });
+        };
+        ['value', 'selectedIndex', 'disabled'].forEach(function (prop) {
+            var d = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, prop);
+            if (!d || !d.set) return;
+            Object.defineProperty(sel, prop, {
+                configurable: true,
+                get: function () { return d.get.call(sel); },
+                set: function (v) { d.set.call(sel, v); sync(); },
+            });
+        });
+        sel.addEventListener('change', sync);
+        sync();
+    }
+
+    // -------------------------------------------------------------------
+    // Tab-wide basin picker (sub-nav). Sets every panel that has a basin
+    // to the same one in a single step; each panel's own control still
+    // works afterwards. Totals (NH / SH / Global) go wherever a panel has
+    // them; panels without them map to the closest view (all tracks on the
+    // evolution map, the global SST map).
+    // -------------------------------------------------------------------
+    var BASIN_ZOOM = { NA: 'atlantic', EP: 'epac', WP: 'wpac' };
+    var BASIN_REGION = { NA: 'atl_mdr', EP: 'epac_mdr', WP: 'wpac_mdr' };
+
+    function _setSelectIf(id, value) {
+        var sel = document.getElementById(id);
+        if (!sel || !value || sel.value === value) return;
+        var ok = Array.prototype.some.call(sel.options, function (o) {
+            return o.value === value;
+        });
+        if (!ok) return;
+        sel.value = value;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    function _applyBasinEverywhere(b) {
+        if (!b) return;
+        // Panel A — the chips pick the basin.
+        if (_aceBasinClimo(b)) {
+            state.acePace.basin = b;
+            _populateAceCompare();
+            _renderAcePace();
+            _renderAceChips();
+        }
+        _setSelectIf('seasonal-anom-zoom', BASIN_ZOOM[b] || 'global');
+        _setSelectIf('seasonal-ts-region', BASIN_REGION[b]);
+        _setSelectIf('seasonal-evo-basin', ACE_TOTAL_TIP[b] ? 'ALL' : b);
+        _setSelectIf('seasonal-scatter-ace', b);
+        _setSelectIf('seasonal-corr-basin', b);
+        _setSelectIf('seasonal-an-basin', b);
+    }
+
+    function _wireBasinPicker() {
+        var sel = document.getElementById('seasonal-basin-all');
+        if (!sel || sel._wired) return;
+        sel._wired = true;
+        sel.addEventListener('change', function () {
+            _applyBasinEverywhere(sel.value);
+            _ga('rt_seasonal_basin_all', { basin: sel.value || 'per_panel' });
+        });
+    }
+
+    // -------------------------------------------------------------------
     // Panel maximize-to-fullscreen affordance (mobile UX V1).
     // Each .seasonal-panel gets a small ⛶ button in its top-right corner
     // (sits next to the existing save / download button). Tap → the panel
@@ -2179,6 +2307,12 @@
         var selects = clonedDoc.querySelectorAll('select');
         for (var i = 0; i < selects.length; i++) {
             var sel = selects[i];
+            // A segmented toggle already shows its value; drop the hidden
+            // source select rather than printing it a second time.
+            if (sel.classList.contains('seas-seg-src')) {
+                sel.parentNode.removeChild(sel);
+                continue;
+            }
             var opt = sel.options[sel.selectedIndex];
             var label = opt ? opt.textContent : '';
             var span = clonedDoc.createElement('span');
@@ -5098,7 +5232,7 @@
             html += '<tr>' +
                 '<td>' + (i + 1) + '</td>' +
                 '<td>' + r.year + '</td>' +
-                '<td>' + r.dist.toFixed(3) + '</td>' +
+                '<td>' + r.dist.toFixed(1) + '</td>' +
                 '<td' + aceCls + '>' + (aceVal !== null ? aceVal.toFixed(1) : '—') + '</td>' +
                 '<td>' + (storms !== null && storms !== undefined ? storms : '—') + '</td>' +
                 '</tr>';
@@ -5122,7 +5256,7 @@
             html += '<tr class="an-avg-row">' +
                 '<td>—</td>' +
                 '<td>Average (top ' + n + ')</td>' +
-                '<td>' + (distAcc / n).toFixed(3) + '</td>' +
+                '<td>' + (distAcc / n).toFixed(1) + '</td>' +
                 '<td>' + meanAce + '</td>' +
                 '<td>' + meanStorms + '</td>' +
                 '</tr>';
@@ -10903,6 +11037,8 @@
         _refreshTheme();
         _wireThemeReactivity();
         _wireSubnav();
+        _wireBasinPicker();
+        Object.keys(SEG_SHORT).forEach(_segmentize);
         _injectMaximizeButtons();
         _bindScatterControls();
         _bindCorrelationControls();

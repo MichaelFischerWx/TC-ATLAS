@@ -1532,14 +1532,35 @@
              secondary tab bar above (no gap from a header in between).
              Sticky pinned so it stays accessible as the user scrolls. -->
         <nav class="seasonal-subnav" aria-label="Seasonal panels">
-            <a href="#seasonal-panel-ace-pace" data-target="seasonal-panel-ace-pace">Season ACE pace</a>
-            <a href="#seasonal-panel-anom-map" data-target="seasonal-panel-anom-map">Live anomaly</a>
-            <a href="#seasonal-panel-timeseries" data-target="seasonal-panel-timeseries">Regional environment</a>
-            <a href="#seasonal-panel-evolution" data-target="seasonal-panel-evolution">Seasonal evolution</a>
-            <a href="#seasonal-panel-scatter" data-target="seasonal-panel-scatter">SST × ACE</a>
-            <a href="#seasonal-panel-correlation" data-target="seasonal-panel-correlation">Correlation map</a>
-            <a href="#seasonal-panel-analogs" data-target="seasonal-panel-analogs">Analog seasons</a>
+            <label class="seasonal-basin-pick" title="Switch every panel on this tab to one basin (or hemisphere) at once. Each panel can still be changed on its own."><span>Basin</span>
+                <select id="seasonal-basin-all">
+                    <option value="" selected>Per panel</option>
+                    <optgroup label="Basins">
+                        <option value="NA">North Atlantic</option>
+                        <option value="EP">East Pacific</option>
+                        <option value="WP">West Pacific</option>
+                        <option value="NI">North Indian</option>
+                        <option value="SI">South Indian</option>
+                        <option value="SP">South Pacific</option>
+                    </optgroup>
+                    <optgroup label="Totals">
+                        <option value="NH">Northern Hemisphere</option>
+                        <option value="SH">Southern Hemisphere</option>
+                        <option value="GL">Global</option>
+                    </optgroup>
+                </select>
+            </label>
+            <span class="seasonal-subnav-group" aria-hidden="true">Now</span>
+            <a href="#seasonal-panel-ace-pace" data-target="seasonal-panel-ace-pace">ACE pace</a>
+            <a href="#seasonal-panel-anom-map" data-target="seasonal-panel-anom-map">Live SST</a>
             <a href="#seasonal-panel-indices" data-target="seasonal-panel-indices">Climate indices</a>
+            <span class="seasonal-subnav-group" aria-hidden="true">In context</span>
+            <a href="#seasonal-panel-timeseries" data-target="seasonal-panel-timeseries">Regional</a>
+            <a href="#seasonal-panel-evolution" data-target="seasonal-panel-evolution">Evolution map</a>
+            <span class="seasonal-subnav-group" aria-hidden="true">Predictors</span>
+            <a href="#seasonal-panel-scatter" data-target="seasonal-panel-scatter">SST &times; ACE</a>
+            <a href="#seasonal-panel-analogs" data-target="seasonal-panel-analogs">Analogs</a>
+            <a href="#seasonal-panel-correlation" data-target="seasonal-panel-correlation">Correlation map</a>
         </nav>
 
         <div class="seasonal-header">
@@ -1556,34 +1577,24 @@
 
         <div class="seasonal-body">
 
-            <!-- Panel A: Season ACE pace — where the live season sits inside
-                 the climatological distribution of cumulative ACE. Climo
-                 bands come from ace_pace_climo.json (IBTrACS, 1991-2020);
-                 the live curve comes from /ir-monitor/seasonal/ace-live
-                 (operational ATCF b-decks) so it is current to the last
-                 synoptic hour rather than to IBTrACS's ingest lag. -->
+            <h2 class="seasonal-section-head" id="seasonal-sec-now">
+                <span class="seasonal-section-name">Now</span>
+                <span class="seasonal-section-blurb">where this season stands, and the ocean and atmosphere today</span>
+            </h2>
+
             <section class="seasonal-panel" id="seasonal-panel-ace-pace">
                 <h3 class="seasonal-panel-title">
                     Season ACE Pace
-                    <span class="seasonal-panel-subtitle">live vs 1991-2020 climatology</span>
+                    <span class="seasonal-panel-subtitle">live vs 1991-2020</span>
                 </h3>
-                <p class="seasonal-panel-desc">
-                    Cumulative Accumulated Cyclone Energy through the season,
-                    against the climatological spread for the same calendar
-                    day. The shaded bands are the 10th-90th and 25th-75th
-                    percentiles of 1991-2020 seasons; the heavy line is the
-                    live season built from operational NHC/JTWC best tracks
-                    (ACE = 10⁻⁴ Σ v², 6-hourly synoptic points at ≥ 34 kt
-                    while tropical or subtropical). Southern Hemisphere
-                    basins run July-June (2026-27 = July 2026 to June 2027).
-                    The totals sum the basins season by season: N Hemisphere
-                    = NA + EP + WP + NI (January-December), S Hemisphere =
-                    SI + SP (July-June), Global = the calendar year, with
-                    Southern Hemisphere storms counted on their own dates.
-                    The curve therefore advances in 6-hourly
-                    steps: a storm at 65 kt adds 0.42 per step (1.7/day),
-                    one at 130 kt adds 1.69 per step (6.8/day).
-                </p>
+                <p class="seasonal-panel-lede">Season-to-date ACE for each basin and hemisphere, against the 1991-2020 spread for the same date.</p>
+                <details class="seasonal-method">
+                    <summary>Method</summary>
+                    <div class="seasonal-method-body">
+                        <p>Cumulative Accumulated Cyclone Energy through the season, against the climatological spread for the same calendar day. The shaded bands are the 10th-90th and 25th-75th percentiles of 1991-2020 seasons; the heavy line is the live season built from operational NHC/JTWC best tracks (ACE = 10⁻⁴ Σ v², 6-hourly synoptic points at ≥ 34 kt while tropical or subtropical). Southern Hemisphere basins run July-June (2026-27 = July 2026 to June 2027). The totals sum the basins season by season: N Hemisphere = NA + EP + WP + NI (January-December), S Hemisphere = SI + SP (July-June), Global = the calendar year, with Southern Hemisphere storms counted on their own dates. The curve therefore advances in 6-hourly steps: a storm at 65 kt adds 0.42 per step (1.7/day), one at 130 kt adds 1.69 per step (6.8/day).</p>
+                        <p><strong>Group seasons by</strong> sorts every complete season since 1982 by a monthly SST index averaged over the basin's three most active months (read off the climatology: August-October for the Atlantic, January-March for the Southern Hemisphere) and draws each group's mean cumulative ACE. ENSO phase uses the usual &plusmn;0.5 &deg;C on Ni&ntilde;o 3.4; the relative version (Ni&ntilde;o 3.4 minus the 30&deg;S-30&deg;N mean) is first rescaled to the raw anomaly's spread. Relative SST splits the seasons into thirds.</p>
+                    </div>
+                </details>
                 <div class="seasonal-ace-chips" id="seasonal-ace-chips"></div>
                 <!-- The chips above pick the basin (or hemispheric / global
                      total); a Basin dropdown here only duplicated them. -->
@@ -1628,9 +1639,19 @@
                 </div>
             </section>
 
-            <!-- Panel B: Live SST anomaly map (global by default) -->
             <section class="seasonal-panel" id="seasonal-panel-anom-map">
-                <h3 class="seasonal-panel-title">Live SST &amp; Atmosphere</h3>
+                <h3 class="seasonal-panel-title">
+                    Live SST &amp; Atmosphere
+                    <span class="seasonal-panel-subtitle">OISST today &middot; GFS</span>
+                </h3>
+                <p class="seasonal-panel-lede">Today's sea surface temperature or deep-layer shear against the 1991-2020 climatology.</p>
+                <details class="seasonal-method">
+                    <summary>Method</summary>
+                    <div class="seasonal-method-body">
+                        <p>SST: NOAA OISST v2.1 (0.25&deg;, daily) minus the 1991-2020 monthly climatology interpolated to the day. The relative anomaly also subtracts the 30&deg;S-30&deg;N mean anomaly (Vecchi and Soden 2007), which takes out the near-uniform tropical warming so what is left is the pattern that matters for TC potential intensity.</p>
+                        <p>Atmosphere: deep-layer (200-850 hPa) shear from the latest GFS analysis minus the ERA5 1991-2020 climatology for the month, or that climatology itself for any calendar month.</p>
+                    </div>
+                </details>
                 <div class="seasonal-ts-controls">
                     <label>Variable
                         <select id="seasonal-anom-var" title="SST and atmospheric anomalies — both relative to the same 1991-2020 climatology. SST uses today's OISST; the atmosphere uses the latest GFS analysis cycle.">
@@ -1688,9 +1709,56 @@
                 <div class="seasonal-source" id="seasonal-anom-source"></div>
             </section>
 
-            <!-- Panel C: Regional environment evolution time series -->
+            <section class="seasonal-panel" id="seasonal-panel-indices">
+                <h3 class="seasonal-panel-title">
+                    Climate Indices
+                    <span class="seasonal-panel-subtitle">OISST monthly</span>
+                </h3>
+                <p class="seasonal-panel-lede">Ni&ntilde;o 3.4, the AMO box and the Atlantic Meridional Mode over recent years.</p>
+                <details class="seasonal-method">
+                    <summary>Method</summary>
+                    <div class="seasonal-method-body">
+                        <p>Derived from the same OISST record as the SST panels on this tab. ENSO horizontal markers at ±0.5 °C anomaly are the conventional El Niño / La Niña thresholds. AMM proxy = North Tropical Atlantic SST anomaly − Tropical South Atlantic SST anomaly (sign-of-the-gradient version of Vimont &amp; Kossin 2007).</p>
+                    </div>
+                </details>
+                <div class="seasonal-ts-controls">
+                    <label>Variable
+                        <select id="seasonal-idx-var" title="Same convention as the other Seasonal-tab panels. Raw anomaly = monthly SST minus 1991-2020 climo. Detrended = year-deviation from a per-(region, month) linear-in-year trend. Relative (Vecchi-Soden 2007) = anomaly of (region SST − 30°S-30°N mean SST), so the global tropical warming signal is removed.">
+                            <option value="anom" selected>Raw anomaly vs 1991-2020</option>
+                            <option value="sst_dt">Detrended (per-month linear-in-year)</option>
+                            <option value="sst_rel">Relative anomaly (Vecchi-Soden 2007)</option>
+                        </select>
+                    </label>
+                    <label>Window
+                        <select id="seasonal-idx-window">
+                            <option value="5">Last 5 years</option>
+                            <option value="10" selected>Last 10 years</option>
+                            <option value="20">Last 20 years</option>
+                            <option value="all">Full record 1982-present</option>
+                        </select>
+                    </label>
+                </div>
+                <div id="seasonal-idx-plot" class="seasonal-ts-plot"></div>
+            </section>
+
+            <h2 class="seasonal-section-head" id="seasonal-sec-context">
+                <span class="seasonal-section-name">This season in context</span>
+                <span class="seasonal-section-blurb">this year against every year since 1982</span>
+            </h2>
+
             <section class="seasonal-panel" id="seasonal-panel-timeseries">
-                <h3 class="seasonal-panel-title">Regional Environment Evolution</h3>
+                <h3 class="seasonal-panel-title">
+                    Regional Environment Evolution
+                    <span class="seasonal-panel-subtitle">OISST &middot; ERA5</span>
+                </h3>
+                <p class="seasonal-panel-lede">How one region's ocean or atmosphere has evolved this year, against every year since 1982.</p>
+                <details class="seasonal-method">
+                    <summary>Method</summary>
+                    <div class="seasonal-method-body">
+                        <p>SST variables are OISST v2.1 region means (area-weighted, 1982-present). The shaded envelope is the 1991-2020 mean &plusmn; one standard deviation, smoothed over 7 days in the Daily view. Relative SST subtracts the 30&deg;S-30&deg;N mean (Vecchi and Soden 2007).</p>
+                        <p>Environment variables are ERA5 monthly means (1991-present); deep-layer shear is the monthly mean of daily |V<sub>200</sub> &minus; V<sub>850</sub>|, and the Daily view reads the ERA5 daily archive. Hover a variable in the menu for its definition.</p>
+                    </div>
+                </details>
                 <div class="seasonal-ts-controls">
                     <label>Region
                         <select id="seasonal-ts-region">
@@ -1763,33 +1831,18 @@
                 <div id="seasonal-ts-plot" class="seasonal-ts-plot"></div>
             </section>
 
-            <!-- Panel D: Seasonal Evolution animation. Scrubs through
-                 any past season's ERA5 environmental field with IBTrACS
-                 TC tracks overlaid, materializing as the slider advances.
-                 Stage 1: deep-layer shear only (raw or 1991-2020 anomaly).
-                 Field tiles come from the era5_daily archive built by
-                 build_era5_daily_archive.py; tracks come from the same
-                 ibtracs_storms.json the TC Climatology page already loads. -->
             <section class="seasonal-panel" id="seasonal-panel-evolution">
                 <h3 class="seasonal-panel-title">
                     Seasonal Evolution
-                    <span class="seasonal-panel-subtitle">ERA5 00Z analysis snapshot</span>
+                    <span class="seasonal-panel-subtitle">ERA5 00Z &middot; IBTrACS</span>
                 </h3>
-                <p class="seasonal-panel-desc">
-                    Scrub through any past TC season with the chosen ERA5
-                    environmental field underneath and IBTrACS storm
-                    tracks materializing as the time slider advances.
-                    All daily-archive variables (shear, level winds,
-                    vorticity, divergence) read the 00Z synoptic
-                    snapshot — no daily-mean smearing of transient
-                    features. Storms remain on the map after landfall as
-                    long as they retain a true-TC nature
-                    (TS/TD/HU/TC/SS/SD); they fade once classified
-                    extratropical or dissipated. Anomaly mode subtracts
-                    the 1991-2020 climatology so you see how a given
-                    season's environment compared to normal at each
-                    time step.
-                </p>
+                <p class="seasonal-panel-lede">Replay any past season: an ERA5 field underneath, IBTrACS tracks drawing in as the slider advances.</p>
+                <details class="seasonal-method">
+                    <summary>Method</summary>
+                    <div class="seasonal-method-body">
+                        <p>Scrub through any past TC season with the chosen ERA5 environmental field underneath and IBTrACS storm tracks materializing as the time slider advances. All daily-archive variables (shear, level winds, vorticity, divergence) read the 00Z synoptic snapshot — no daily-mean smearing of transient features. Storms remain on the map after landfall as long as they retain a true-TC nature (TS/TD/HU/TC/SS/SD); they fade once classified extratropical or dissipated. Anomaly mode subtracts the 1991-2020 climatology so you see how a given season's environment compared to normal at each time step.</p>
+                    </div>
+                </details>
                 <div class="seasonal-ts-controls">
                     <label>Year
                         <select id="seasonal-evo-year"
@@ -1836,23 +1889,28 @@
                             <option value="SP">South Pacific</option>
                         </select>
                     </label>
-                    <label>Track depth
-                        <select id="seasonal-evo-track-depth" title="How many days of TC track to show at each frame.">
-                            <option value="cumulative" selected>Cumulative this season</option>
-                            <option value="trailing15">Trailing 15 days</option>
-                            <option value="active">Active on this date only</option>
-                        </select>
-                    </label>
-                    <label>Resolution
-                        <select id="seasonal-evo-resolution" title="Monthly: 12 frames per year, monthly-mean shear underneath. Daily: 365 frames per year, daily shear underneath (~63 MB in browser memory). Pick Daily for synoptic-scale evolution; Monthly for season-overview.">
-                            <option value="monthly" selected>Monthly (12 frames)</option>
-                            <option value="daily">Daily (365 frames)</option>
-                        </select>
-                        <button type="button" id="seasonal-evo-toggle-hd"
-                                class="seasonal-evo-toggle seasonal-evo-hd-btn"
-                                data-hd-mode="auto"
-                                title="Resolution selection — click to cycle Auto → 1° lock → HD lock → Auto. Auto promotes to 0.25° native when you zoom in below ~3000 sq° of viewport; otherwise stays at 1°. Locks override the auto-selection.">Res: Auto</button>
-                    </label>
+                    <details class="seas-more">
+                        <summary>More options</summary>
+                        <div class="seas-more-body">
+                            <label>Track depth
+                                <select id="seasonal-evo-track-depth" title="How many days of TC track to show at each frame.">
+                                    <option value="cumulative" selected>Cumulative this season</option>
+                                    <option value="trailing15">Trailing 15 days</option>
+                                    <option value="active">Active on this date only</option>
+                                </select>
+                            </label>
+                            <label>Resolution
+                                <select id="seasonal-evo-resolution" title="Monthly: 12 frames per year, monthly-mean shear underneath. Daily: 365 frames per year, daily shear underneath (~63 MB in browser memory). Pick Daily for synoptic-scale evolution; Monthly for season-overview.">
+                                    <option value="monthly" selected>Monthly (12 frames)</option>
+                                    <option value="daily">Daily (365 frames)</option>
+                                </select>
+                                <button type="button" id="seasonal-evo-toggle-hd"
+                                        class="seasonal-evo-toggle seasonal-evo-hd-btn"
+                                        data-hd-mode="auto"
+                                        title="Resolution selection — click to cycle Auto → 1° lock → HD lock → Auto. Auto promotes to 0.25° native when you zoom in below ~3000 sq° of viewport; otherwise stays at 1°. Locks override the auto-selection.">Res: Auto</button>
+                            </label>
+                        </div>
+                    </details>
                     <label>Overlays
                         <span class="seasonal-evo-toggle-group" id="seasonal-evo-overlays">
                             <button type="button" id="seasonal-evo-toggle-tracks"
@@ -1923,9 +1981,23 @@
                 <div class="seasonal-evo-legend" id="seasonal-evo-legend"></div>
             </section>
 
-            <!-- Panel E: 2D phase-space scatter -->
+            <h2 class="seasonal-section-head" id="seasonal-sec-predictors">
+                <span class="seasonal-section-name">Predictors</span>
+                <span class="seasonal-section-blurb">how pre-season SST has tracked seasonal ACE</span>
+            </h2>
+
             <section class="seasonal-panel" id="seasonal-panel-scatter">
-                <h3 class="seasonal-panel-title">Pre-season SST × Annual ACE</h3>
+                <h3 class="seasonal-panel-title">
+                    Pre-season SST &times; Annual ACE
+                    <span class="seasonal-panel-subtitle">OISST &middot; IBTrACS</span>
+                </h3>
+                <p class="seasonal-panel-lede">Each dot is one year: SST in two regions in the chosen month, colored by that year's ACE.</p>
+                <details class="seasonal-method">
+                    <summary>Method</summary>
+                    <div class="seasonal-method-body">
+                        <p>Region means of OISST v2.1 monthly SST (area-weighted). Detrended removes a linear trend for each calendar month; relative subtracts the 30&deg;S-30&deg;N mean SST (Vecchi and Soden 2007). Marker color is the season's ACE from IBTrACS. The star is the current year, preliminary while its month is still in progress.</p>
+                    </div>
+                </details>
                 <div class="seasonal-scatter-controls">
                     <label>X-axis
                         <select id="seasonal-scatter-x">
@@ -2013,16 +2085,121 @@
                 <div id="seasonal-scatter-plot" class="seasonal-scatter-plot"></div>
             </section>
 
-            <!-- Panel F: ACE × SST correlation map (interactive toggle) -->
+            <section class="seasonal-panel" id="seasonal-panel-analogs">
+                <h3 class="seasonal-panel-title">
+                    Analog Seasons
+                    <span class="seasonal-panel-subtitle">OISST &middot; IBTrACS</span>
+                </h3>
+                <p class="seasonal-panel-lede">The past years whose SST pattern in the target month looks most like the target year's, with what their seasons did.</p>
+                <details class="seasonal-method">
+                    <summary>Method</summary>
+                    <div class="seasonal-method-body">
+                        <div id="seasonal-an-details-body">
+                            <p id="seasonal-an-method-desc">Top-10 historical analogs to the target year/month. <strong>Grid-weighted by |r|</strong> (default and recommended) compares the full SST anomaly field pixel-by-pixel, weighting each pixel by its absolute correlation with the chosen basin's ACE — no region definitions and no overlap. The other two methods operate on the 14 fixed region-mean values (which have some overlap, e.g. Atl basin contains MDR); use them if you want a faster mental model or to compare.</p>
+                            <p>For the selected target year + month, each historical year's region-mean SST anomaly vector is compared to the target's vector. Smaller distance = more similar SST pattern.</p>
+                            <p><strong>Correlation-weighted distance:</strong> <code>d = √Σ wᵢ · (anomᵢ - target_anomᵢ)²</code>, where the weight <code>wᵢ = |r(SST_region_i, ACE_basin)|</code> is the absolute Pearson correlation between region <em>i</em>'s monthly SST and the chosen basin's annual ACE (1982-present). Regions with little linkage to ACE (small |r|) contribute little. Weights are re-computed per basin × month × raw|detrended.</p>
+                            <p id="seasonal-an-weights-summary"></p>
+                        </div>
+                    </div>
+                </details>
+                <div class="seasonal-ts-controls">
+                    <label>Target year
+                        <select id="seasonal-an-year"></select>
+                    </label>
+                    <label>Target month
+                        <select id="seasonal-an-month">
+                            <option value="1">January</option>
+                            <option value="2">February</option>
+                            <option value="3">March</option>
+                            <option value="4">April</option>
+                            <option value="5" selected>May</option>
+                            <option value="6">June</option>
+                            <option value="7">July</option>
+                            <option value="8">August</option>
+                            <option value="9">September</option>
+                            <option value="10">October</option>
+                            <option value="11">November</option>
+                            <option value="12">December</option>
+                        </select>
+                    </label>
+                    <label title="The basin whose ACE weights the SST comparison and fills the ACE column.">ACE basin
+                        <select id="seasonal-an-basin">
+                            <option value="NA" selected>North Atlantic (NA)</option>
+                            <option value="EP">East Pacific (EP)</option>
+                            <option value="WP">West Pacific (WP)</option>
+                            <option value="NI">North Indian (NI)</option>
+                            <option value="SI">South Indian (SI)</option>
+                            <option value="SP">South Pacific (SP)</option>
+                        </select>
+                    </label>
+                    <details class="seas-more">
+                        <summary>More options</summary>
+                        <div class="seas-more-body">
+                            <label>Method
+                                <select id="seasonal-an-method">
+                                    <option value="grid_weighted" selected>Grid-weighted by |r| (recommended)</option>
+                                    <option value="corr_weighted">Correlation-weighted region means</option>
+                                    <option value="euclidean">Unweighted region-mean Euclidean</option>
+                                </select>
+                            </label>
+                            <label>Detrending
+                                <select id="seasonal-an-kind" title="Vecchi-Soden relative SST (region anomaly minus tropical mean) tends to yield higher analog-LOO skill than raw or detrended for ACE forecasting, so it's the default. Toggle to compare.">
+                                    <option value="raw">Raw</option>
+                                    <option value="detrended">Detrended (linear trend removed)</option>
+                                    <option value="relative" selected>Relative (Vecchi-Soden 2007)</option>
+                                </select>
+                            </label>
+                            <label>Statistic
+                                <select id="seasonal-an-stat" title="Pearson r weights linear SST↔&#xFE0E;ACE coupling. Spearman ρ uses rank-correlation: robust to outlier seasons and captures monotonic-but-nonlinear coupling. Toggle to compare LOO skill at the bottom of the table.">
+                                    <option value="pearson" selected>Pearson r</option>
+                                    <option value="spearman">Spearman ρ</option>
+                                </select>
+                            </label>
+                            <label>N analogs
+                                <select id="seasonal-an-topn" title="How many of the closest historical years to average. 'Auto' sweeps 3-20 and picks the N with the lowest leave-one-out MAE for the current basin × month × kind × stat combination.">
+                                    <option value="auto" selected>Auto (best LOO MAE)</option>
+                                    <option value="3">3</option>
+                                    <option value="5">5</option>
+                                    <option value="7">7</option>
+                                    <option value="10">10</option>
+                                    <option value="15">15</option>
+                                    <option value="20">20</option>
+                                </select>
+                            </label>
+                            <label>Region set
+                                <select id="seasonal-an-regions">
+                                    <option value="all" selected>All 14 regions</option>
+                                    <option value="atlantic_enso">Atlantic + ENSO</option>
+                                    <option value="atlantic">Atlantic only</option>
+                                </select>
+                            </label>
+                        </div>
+                    </details>
+                </div>
+                <table class="seasonal-an-table" id="seasonal-an-table">
+                    <thead>
+                        <tr><th>#</th><th>Year</th><th>Distance</th>
+                            <th id="seasonal-an-ace-th">NA ACE</th>
+                            <th>Storms</th></tr>
+                    </thead>
+                    <tbody id="seasonal-an-tbody"></tbody>
+                </table>
+                <div class="seasonal-an-skill" id="seasonal-an-skill"></div>
+            </section>
+
             <section class="seasonal-panel" id="seasonal-panel-correlation">
-                <h3 class="seasonal-panel-title">ACE × SST Correlation</h3>
-                <p class="seasonal-panel-desc">
-                    Pixel-wise Pearson correlation between monthly SST and
-                    annual basin ACE (1982-present). Red = warm SST coincides
-                    with active seasons; blue = warm SST coincides with quiet
-                    seasons. Toggle <em>raw</em> vs <em>detrended</em> to
-                    separate shared long-term warming from year-to-year coupling.
-                </p>
+                <h3 class="seasonal-panel-title">
+                    ACE &times; SST Correlation
+                    <span class="seasonal-panel-subtitle">OISST &middot; IBTrACS</span>
+                </h3>
+                <p class="seasonal-panel-lede">Where SST in a given month has gone with active (red) or quiet (blue) seasons since 1982.</p>
+                <details class="seasonal-method">
+                    <summary>Method</summary>
+                    <div class="seasonal-method-body">
+                        <p>Pixel-wise Pearson correlation between monthly SST and annual basin ACE (1982-present). Red = warm SST coincides with active seasons; blue = warm SST coincides with quiet seasons. Toggle <em>raw</em> vs <em>detrended</em> to separate shared long-term warming from year-to-year coupling.</p>
+                        <p>Relative SST (the default) subtracts the 30&deg;S-30&deg;N mean, the Vecchi and Soden (2007) framing in which a basin's activity follows its SST relative to the rest of the tropics. Spearman &rho; correlates ranks, which is robust to one or two extreme seasons.</p>
+                    </div>
+                </details>
                 <div class="seasonal-corr-controls">
                     <label>Basin
                         <select id="seasonal-corr-basin">
@@ -2082,149 +2259,6 @@
                     <span>r = +0.7</span>
                 </div>
                 <div class="seasonal-source">Data: NOAA/NCEI OISST v2.1 (0.25°, monthly means) SST · ACE from IBTrACS v04r01 (NOAA/NCEI)</div>
-            </section>
-
-            <!-- Panel G: Analog seasons ranking -->
-            <section class="seasonal-panel" id="seasonal-panel-analogs">
-                <h3 class="seasonal-panel-title">Analog Seasons</h3>
-                <p class="seasonal-panel-desc" id="seasonal-an-method-desc">
-                    Top-10 historical analogs to the target year/month.
-                    <strong>Grid-weighted by |r|</strong> (default and
-                    recommended) compares the full SST anomaly field
-                    pixel-by-pixel, weighting each pixel by its absolute
-                    correlation with the chosen basin's ACE — no region
-                    definitions and no overlap. The other two methods
-                    operate on the 14 fixed region-mean values (which
-                    have some overlap, e.g. Atl basin contains MDR); use
-                    them if you want a faster mental model or to compare.
-                </p>
-                <div class="seasonal-ts-controls">
-                    <label>Target year
-                        <select id="seasonal-an-year"></select>
-                    </label>
-                    <label>Target month
-                        <select id="seasonal-an-month">
-                            <option value="1">January</option>
-                            <option value="2">February</option>
-                            <option value="3">March</option>
-                            <option value="4">April</option>
-                            <option value="5" selected>May</option>
-                            <option value="6">June</option>
-                            <option value="7">July</option>
-                            <option value="8">August</option>
-                            <option value="9">September</option>
-                            <option value="10">October</option>
-                            <option value="11">November</option>
-                            <option value="12">December</option>
-                        </select>
-                    </label>
-                    <label>Method
-                        <select id="seasonal-an-method">
-                            <option value="grid_weighted" selected>Grid-weighted by |r| (recommended)</option>
-                            <option value="corr_weighted">Correlation-weighted region means</option>
-                            <option value="euclidean">Unweighted region-mean Euclidean</option>
-                        </select>
-                    </label>
-                    <label>ACE basin (weights + ACE column)
-                        <select id="seasonal-an-basin">
-                            <option value="NA" selected>North Atlantic (NA)</option>
-                            <option value="EP">East Pacific (EP)</option>
-                            <option value="WP">West Pacific (WP)</option>
-                            <option value="NI">North Indian (NI)</option>
-                            <option value="SI">South Indian (SI)</option>
-                            <option value="SP">South Pacific (SP)</option>
-                        </select>
-                    </label>
-                    <label>Detrending
-                        <select id="seasonal-an-kind" title="Vecchi-Soden relative SST (region anomaly minus tropical mean) tends to yield higher analog-LOO skill than raw or detrended for ACE forecasting, so it's the default. Toggle to compare.">
-                            <option value="raw">Raw</option>
-                            <option value="detrended">Detrended (linear trend removed)</option>
-                            <option value="relative" selected>Relative (Vecchi-Soden 2007)</option>
-                        </select>
-                    </label>
-                    <label>Statistic
-                        <select id="seasonal-an-stat" title="Pearson r weights linear SST↔&#xFE0E;ACE coupling. Spearman ρ uses rank-correlation: robust to outlier seasons and captures monotonic-but-nonlinear coupling. Toggle to compare LOO skill at the bottom of the table.">
-                            <option value="pearson" selected>Pearson r</option>
-                            <option value="spearman">Spearman ρ</option>
-                        </select>
-                    </label>
-                    <label>N analogs
-                        <select id="seasonal-an-topn" title="How many of the closest historical years to average. 'Auto' sweeps 3-20 and picks the N with the lowest leave-one-out MAE for the current basin × month × kind × stat combination.">
-                            <option value="auto" selected>Auto (best LOO MAE)</option>
-                            <option value="3">3</option>
-                            <option value="5">5</option>
-                            <option value="7">7</option>
-                            <option value="10">10</option>
-                            <option value="15">15</option>
-                            <option value="20">20</option>
-                        </select>
-                    </label>
-                    <label>Region set
-                        <select id="seasonal-an-regions">
-                            <option value="all" selected>All 14 regions</option>
-                            <option value="atlantic_enso">Atlantic + ENSO</option>
-                            <option value="atlantic">Atlantic only</option>
-                        </select>
-                    </label>
-                </div>
-                <table class="seasonal-an-table" id="seasonal-an-table">
-                    <thead>
-                        <tr><th>#</th><th>Year</th><th>Distance</th>
-                            <th id="seasonal-an-ace-th">NA ACE</th>
-                            <th>Storms</th></tr>
-                    </thead>
-                    <tbody id="seasonal-an-tbody"></tbody>
-                </table>
-                <div class="seasonal-an-skill" id="seasonal-an-skill"></div>
-                <details class="seasonal-an-details">
-                    <summary>How analogs are computed</summary>
-                    <div class="seasonal-an-details-body" id="seasonal-an-details-body">
-                        <p>For the selected target year + month, each historical
-                        year's region-mean SST anomaly vector is compared to
-                        the target's vector. Smaller distance = more similar
-                        SST pattern.</p>
-                        <p><strong>Correlation-weighted distance:</strong>
-                        <code>d = √Σ wᵢ · (anomᵢ - target_anomᵢ)²</code>,
-                        where the weight <code>wᵢ = |r(SST_region_i, ACE_basin)|</code>
-                        is the absolute Pearson correlation between region <em>i</em>'s
-                        monthly SST and the chosen basin's annual ACE
-                        (1982-present). Regions with little linkage to ACE
-                        (small |r|) contribute little. Weights are
-                        re-computed per basin × month × raw|detrended.</p>
-                        <p id="seasonal-an-weights-summary"></p>
-                    </div>
-                </details>
-            </section>
-
-            <!-- Panel H: Climate-index multi-trace time series -->
-            <section class="seasonal-panel" id="seasonal-panel-indices">
-                <h3 class="seasonal-panel-title">Climate Indices</h3>
-                <p class="seasonal-panel-desc">
-                    Derived from the same OISST record as Panels A-E. ENSO
-                    horizontal markers at ±0.5 °C anomaly are the
-                    conventional El Niño / La Niña thresholds. AMM proxy =
-                    North Tropical Atlantic SST anomaly − Tropical South
-                    Atlantic SST anomaly (sign-of-the-gradient version of
-                    Vimont &amp; Kossin 2007).
-                </p>
-                <div class="seasonal-ts-controls">
-                    <label>Variable
-                        <select id="seasonal-idx-var" title="Same convention as the other Seasonal-tab panels. Raw anomaly = monthly SST minus 1991-2020 climo. Detrended = year-deviation from a per-(region, month) linear-in-year trend. Relative (Vecchi-Soden 2007) = anomaly of (region SST − 30°S-30°N mean SST), so the global tropical warming signal is removed.">
-                            <option value="anom" selected>Raw anomaly vs 1991-2020</option>
-                            <option value="sst_dt">Detrended (per-month linear-in-year)</option>
-                            <option value="sst_rel">Relative anomaly (Vecchi-Soden 2007)</option>
-                        </select>
-                    </label>
-                    <label>Window
-                        <select id="seasonal-idx-window">
-                            <option value="5">Last 5 years</option>
-                            <option value="10" selected>Last 10 years</option>
-                            <option value="20">Last 20 years</option>
-                            <option value="all">Full record 1982-present</option>
-                        </select>
-                    </label>
-                </div>
-                <div id="seasonal-idx-plot" class="seasonal-ts-plot"></div>
             </section>
 
             <!-- ERA5 environmental variables are surfaced *inside*
@@ -2945,7 +2979,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261108eg1';
+        var _LAZY_ASSET_V = '?v=20261108ly1';
         var _lazyViewMods = {
             recon:       { js: ['plotly_dark.js', 'tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

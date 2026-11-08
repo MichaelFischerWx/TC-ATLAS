@@ -92,6 +92,38 @@
     transition: background 0.15s, color 0.15s, border-color 0.15s;
     white-space: nowrap;
 }
+/* Group labels between the chips ("Now", "In context", "Predictors"). */
+.seasonal-subnav-group {
+    flex: 0 0 auto;
+    align-self: center;
+    margin: 0 0 0 8px;
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim, #94a3b8);
+}
+/* Tab-wide basin picker, first in the bar. */
+.seasonal-basin-pick {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 6px;
+    padding-right: 10px;
+    border-right: 1px solid var(--border-light);
+    font-size: 0.75rem;
+    color: var(--text-dim, #94a3b8);
+}
+.seasonal-basin-pick select {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 3px 6px;
+    background: var(--surface, #0d1117);
+    color: var(--text, #e0e0e0);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+}
 .seasonal-subnav a:hover {
     color: var(--text, #e0e0e0);
     background: var(--um-green-tint);
@@ -401,9 +433,135 @@ body.seasonal-maximized .seasonal-header {
    anomaly map left a ragged row — the two have very different natural
    heights — and the year axis was cramped at half width. */
 #seasonal-panel-ace-pace { grid-column: 1 / -1; }
-#seasonal-panel-scatter { grid-column: 1 / -1; }
+/* Regional environment runs a full calendar-year axis like the ACE pace
+   chart, so it gets the full width; the scatter reads better closer to
+   square and pairs with the analog table. */
+#seasonal-panel-timeseries { grid-column: 1 / -1; }
 #seasonal-panel-correlation { grid-column: 1 / -1; }
 #seasonal-panel-evolution { grid-column: 1 / -1; }
+
+/* Section heads: "Now", "This season in context", "Predictors". */
+.seasonal-section-head {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    margin: 10px 0 -4px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border-light);
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text, #e0e0e0);
+}
+.seasonal-section-head:first-child { margin-top: 0; }
+.seasonal-section-blurb {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--text-dim, #a0a8b3);
+}
+
+/* One panel head everywhere: title + pill, a one-sentence lede, and the
+   method text tucked into a disclosure that starts closed. */
+.seasonal-panel-lede {
+    margin: -2px 0 6px;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    color: var(--text, #e0e0e0);
+    max-width: 900px;
+}
+.seasonal-method { margin: 0 0 10px; font-size: 0.75rem; }
+.seasonal-method summary {
+    display: inline-block;
+    cursor: pointer;
+    color: var(--text-dim, #a0a8b3);
+    list-style: none;
+    padding: 1px 0;
+}
+.seasonal-method summary::-webkit-details-marker { display: none; }
+.seasonal-method summary::before {
+    content: '';
+    display: inline-block;
+    width: 6px; height: 6px;
+    margin: 0 6px 1px 1px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform .12s ease;
+}
+.seasonal-method[open] summary::before { transform: rotate(45deg); }
+.seasonal-method summary:hover { color: var(--text, #e0e0e0); }
+.seasonal-method-body {
+    margin-top: 6px;
+    padding: 6px 12px 8px;
+    background: var(--navy-mid);
+    border-left: 2px solid var(--border-light);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    line-height: 1.5;
+    color: var(--text-dim, #a0a8b3);
+    max-width: 900px;
+}
+.seasonal-method-body p { margin: 4px 0; }
+.seasonal-method-body code {
+    background: var(--border);
+    padding: 1px 4px;
+    border-radius: var(--radius-xs);
+    font-size: 0.85em;
+}
+
+/* Two- to four-way choices as segmented toggles. The <select> stays in
+   the DOM (hidden) as the source of truth, so every existing handler and
+   programmatic `.value =` keeps working. */
+.seas-seg-src { display: none !important; }
+.seas-seg {
+    display: inline-flex;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    overflow: hidden;
+    vertical-align: middle;
+}
+.seas-seg button {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 2px 9px;
+    background: transparent;
+    color: var(--text-dim, #a0a8b3);
+    border: 0;
+    border-left: 1px solid var(--border-light);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.seas-seg button:first-child { border-left: 0; }
+.seas-seg button:hover:not(.active, :disabled) {
+    background: var(--um-green-tint);
+    color: var(--text, #e0e0e0);
+}
+.seas-seg button.active { background: var(--sel-fill); color: var(--sel-ink); }
+.seas-seg button:disabled { cursor: not-allowed; opacity: 0.5; }
+.seas-seg button:focus-visible { outline: 2px solid var(--sel-fill); outline-offset: -2px; }
+
+/* "More options": rarely changed settings behind a disclosure; opening it
+   drops them onto their own row of the control bar. */
+.seas-more { font-size: 0.75rem; color: var(--text-dim, #a0a8b3); }
+.seas-more summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 2px 8px;
+    border: 1px dashed var(--border-light);
+    border-radius: var(--radius);
+    white-space: nowrap;
+}
+.seas-more summary::-webkit-details-marker { display: none; }
+.seas-more summary:hover { color: var(--text, #e0e0e0); border-color: var(--sel-fill); }
+.seas-more[open] { flex-basis: 100%; }
+.seas-more[open] summary { border-style: solid; display: inline-block; margin-bottom: 8px; }
+.seas-more-body {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 18px;
+}
+.seas-more-body label { display: flex; align-items: center; gap: 6px; }
 
 /* Panel C — Seasonal Evolution animation */
 .seasonal-evo-wrap {
@@ -578,6 +736,8 @@ body.seasonal-maximized .seasonal-header {
    00Z synoptic-snapshot source so the title visibly distinguishes
    from the legacy 4×-daily-mean build. */
 .seasonal-panel-subtitle {
+    display: inline-block;
+    white-space: nowrap;
     margin-left: 10px;
     padding: 2px 8px;
     border-radius: var(--radius-pill);
