@@ -57,7 +57,14 @@ google-cloud-storage>=2.14
 # requires a parquet engine (pyarrow is what the matching daily Cloud
 # Run Job already uses).
 pandas>=2.0
-pyarrow>=15.0
+# pyarrow CAPPED (2026-11-08): 26.0.0 (released 2026-10-09) refuses to import
+# under NumPy < 2.0 ("pyarrow requires NumPy 2.0 or newer"), and numpy is capped
+# <2.0 above. pip can't see the conflict (pyarrow doesn't declare numpy), so
+# from revision 00584 (2026-10-11) pandas found no parquet engine and
+# /seasonal/daily, /daily/shear and /daily/winds all returned 503. 25.0.1 is the
+# newest release that imports under numpy 1.x; lift the cap with the numpy cap.
+# The Dockerfile import check fails the build if this ever regresses.
+pyarrow>=15.0,<26
 
 # ASGI
 gunicorn>=21.2

@@ -27,6 +27,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# Fail the build, not the endpoint: pyarrow is imported lazily by
+# pandas.read_parquet, so an install that can't import it (pyarrow 26 under
+# numpy<2) deployed cleanly and 503'd the Seasonal daily series for 4 weeks.
+RUN python -c "import pyarrow.parquet"
 
 # ── Application code + data files ──
 COPY tc_radar_api.py .
