@@ -10025,15 +10025,22 @@
         };
         _applyAnomZoom();
 
-        var mdrVal = isRel && state.latest.indices.atl_mdr_anom_rel !== undefined
-                   ? state.latest.indices.atl_mdr_anom_rel
-                   : state.latest.indices.atl_mdr_anom;
+        // Under the "(relative)" tag every index is relative (region minus
+        // the tropical mean), as in the Climate Indices panel; only MDR
+        // used to be, so AMO and Niño 3.4 showed raw anomalies. Falls back
+        // to the raw anomaly if a latest.json lacks the _rel key.
+        var capIdx = state.latest.indices;
+        var capVal = function (region) {
+            var v = (isRel && capIdx[region + '_anom_rel'] !== undefined)
+                ? capIdx[region + '_anom_rel'] : capIdx[region + '_anom'];
+            return (typeof v === 'number') ? v.toFixed(2) : '?';
+        };
         var modeTag = isRel ? '(relative)' : '';
         cap.textContent = 'Valid ' + state.latest.valid_date +
             '  ' + modeTag +
-            '  |  MDR anom ' + (mdrVal !== undefined ? mdrVal.toFixed(2) : '?') + ' °C' +
-            '  |  AMO anom ' + state.latest.indices.atl_amo_anom.toFixed(2) + ' °C' +
-            '  |  Niño 3.4 anom ' + state.latest.indices.nino34_anom.toFixed(2) + ' °C';
+            '  |  MDR anom ' + capVal('atl_mdr') + ' °C' +
+            '  |  AMO anom ' + capVal('atl_amo') + ' °C' +
+            '  |  Niño 3.4 anom ' + capVal('nino34') + ' °C';
 
         // Load hover sidecar (small JSON, 1° grid of anomaly °C). Fail
         // silently — without it, the map still renders, the tooltip just
