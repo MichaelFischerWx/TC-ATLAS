@@ -102,7 +102,8 @@
         an: { year: null, month: 5, regions: 'all',
               method: 'grid_weighted', basin: 'NA', kind: 'relative',
               stat: 'pearson', topN: 'auto' },
-        idx: { window: '10', variable: 'anom' },
+        // Relative by default: the ENSO definition used across the tab.
+        idx: { window: '10', variable: 'sst_rel' },
         // Panel A — season ACE pace. `compare` is '' | 'record' | a year.
         acePace: { basin: 'NA', compare: '', view: 'cum', group: '' },
         ace_pace: null,        // parsed ace_pace_climo.json
@@ -201,8 +202,9 @@
     var ERA5_CREDIT_DAILY = 'Data: ECMWF ERA5 reanalysis (Copernicus C3S), daily';
     var ERA5_CREDIT_MONTHLY = 'Data: ECMWF ERA5 reanalysis (Copernicus C3S), monthly means';
     // Tropical-mean band used by the relative-SST variants (mirrors
-    // TROPICAL_MEAN_LAT_MIN/MAX × LON_MIN/MAX in build_oisst_history.py).
-    var OISST_TROPICAL_BOX = [-30.0, 30.0, 100.0, 360.0];
+    // TROPICAL_MEAN_LAT_MIN/MAX in build_oisst_history.py). All longitudes
+    // since 2026-10; it was 100-360°E before, and this label kept saying so.
+    var OISST_TROPICAL_BOX = [-30.0, 30.0, 0.0, 360.0];
 
     function _fmtLatRange(s, n) {
         function one(v) { return v === 0 ? '0°' : Math.abs(v) + (v > 0 ? '°N' : '°S'); }
@@ -229,8 +231,10 @@
     }
     function _relativeSstNote() {
         var t = OISST_TROPICAL_BOX;
-        return 'minus the ' + _fmtLatRange(t[0], t[1]) + ', ' +
-               _fmtLonRange(t[2], t[3]) + ' tropical mean';
+        // _fmtLonRange can't express a full circle (0-360 reads "0°–0°").
+        return 'minus the ' + _fmtLatRange(t[0], t[1]) + ' tropical mean ' +
+               ((t[3] - t[2] >= 360) ? 'over all longitudes'
+                                     : '(' + _fmtLonRange(t[2], t[3]) + ')');
     }
 
     // Put the credit lines between the title and the plot. `parts` are
@@ -346,7 +350,7 @@
         'seasonal-corr-stat':     { pearson: 'Pearson', spearman: 'Spearman' },
         'seasonal-an-kind':       { raw: 'Raw', detrended: 'Detrended', relative: 'Relative' },
         'seasonal-an-stat':       { pearson: 'Pearson', spearman: 'Spearman' },
-        'seasonal-idx-var':       { anom: 'Raw', sst_dt: 'Detrended', sst_rel: 'Relative' },
+        'seasonal-idx-var':       { sst_rel: 'Relative', anom: 'Raw', sst_dt: 'Detrended' },
         'seasonal-idx-window':    { '5': '5 yr', '10': '10 yr', '20': '20 yr', all: 'All' },
     };
 
@@ -995,10 +999,11 @@
     // into thirds. Index data: indices_monthly.json (OISST).
     // -------------------------------------------------------------------
     var ACE_GROUPS = {
+        // ENSO is always defined on RELATIVE Niño 3.4 (minus the 30°S-30°N
+        // mean), so the tropics-wide warming trend can't push recent seasons
+        // toward El Niño or early ones toward La Niña.
         enso_rel: { label: 'ENSO phase (relative Niño 3.4)', region: 'nino34',
                     rel: true, kind: 'enso' },
-        enso_raw: { label: 'ENSO phase (Niño 3.4 anomaly)', region: 'nino34',
-                    rel: false, kind: 'enso' },
         atl_mdr:  { label: 'Atlantic MDR relative SST', region: 'atl_mdr',
                     rel: true, kind: 'tercile' },
         epac_mdr: { label: 'East Pacific MDR relative SST', region: 'epac_mdr',
@@ -5729,15 +5734,14 @@
             .concat(styledTrace('AMM (NTA−TSA)', '#5db95d', amm.slice(iStart)));
 
         var vLabel = (v === 'sst_dt') ? 'detrended (°C)'
-                   : (v === 'sst_rel') ? 'relative-SST anomaly (°C, Vecchi-Soden)'
+                   : (v === 'sst_rel') ? 'relative anomaly (°C)'
                    : 'anomaly vs 1991-2020 (°C)';
         var titleTag = (v === 'sst_dt') ? ' — detrended'
                      : (v === 'sst_rel') ? ' — relative SST'
                      : '';
-        // ENSO ±0.5 °C reference lines stay regardless of mode — they're
-        // useful eyeballing thresholds in any anomaly framing, even if
-        // they're literally the El Niño / La Niña convention only in
-        // the raw anomaly mode.
+        // ENSO ±0.5 °C reference lines stay in every mode. The tab defines
+        // ENSO on the RELATIVE anomaly (the default here); in Raw and
+        // Detrended they are eyeballing guides.
         var layout = {
             title: { text: 'Atlantic + Pacific climate indices' + titleTag,
                      font: { size: 14 } },

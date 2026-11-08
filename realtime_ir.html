@@ -1592,7 +1592,7 @@
                     <summary>Method</summary>
                     <div class="seasonal-method-body">
                         <p>Cumulative Accumulated Cyclone Energy through the season, against the climatological spread for the same calendar day. The shaded bands are the 10th-90th and 25th-75th percentiles of 1991-2020 seasons; the heavy line is the live season built from operational NHC/JTWC best tracks (ACE = 10⁻⁴ Σ v², 6-hourly synoptic points at ≥ 34 kt while tropical or subtropical). Southern Hemisphere basins run July-June (2026-27 = July 2026 to June 2027). The totals sum the basins season by season: N Hemisphere = NA + EP + WP + NI (January-December), S Hemisphere = SI + SP (July-June), Global = the calendar year, with Southern Hemisphere storms counted on their own dates. The curve therefore advances in 6-hourly steps: a storm at 65 kt adds 0.42 per step (1.7/day), one at 130 kt adds 1.69 per step (6.8/day).</p>
-                        <p><strong>Group seasons by</strong> sorts every complete season since 1982 by a monthly SST index averaged over the basin's three most active months (read off the climatology: August-October for the Atlantic, January-March for the Southern Hemisphere) and draws each group's mean cumulative ACE. ENSO phase uses the usual &plusmn;0.5 &deg;C on Ni&ntilde;o 3.4; the relative version (Ni&ntilde;o 3.4 minus the 30&deg;S-30&deg;N mean) is first rescaled to the raw anomaly's spread. Relative SST splits the seasons into thirds.</p>
+                        <p><strong>Group seasons by</strong> sorts every complete season since 1982 by a monthly SST index averaged over the basin's three most active months (read off the climatology: August-October for the Atlantic, January-March for the Southern Hemisphere) and draws each group's mean cumulative ACE. ENSO phase is always defined on <em>relative</em> Ni&ntilde;o 3.4 (Ni&ntilde;o 3.4 minus the 30&deg;S-30&deg;N mean SST), so the tropics-wide warming trend does not push recent seasons toward El Ni&ntilde;o or past ones toward La Ni&ntilde;a. Removing the tropical mean narrows the index slightly, so it is rescaled to the raw anomaly's 1991-2020 spread before the usual &plusmn;0.5 &deg;C thresholds are applied (the same idea as NOAA's relative ONI). MDR relative SST splits the seasons into thirds.</p>
                     </div>
                 </details>
                 <div class="seasonal-ace-chips" id="seasonal-ace-chips"></div>
@@ -1608,10 +1608,9 @@
                     </label>
                     <label>Group seasons by
                         <select id="seasonal-ace-group"
-                                title="Sort the complete seasons since 1982 by a climate index over the basin's three most active months (from the climatology: Aug-Oct for the Atlantic, Jan-Mar for the Southern Hemisphere), and draw each group's mean cumulative ACE. ENSO uses ±0.5 °C on Niño 3.4; relative SST splits the seasons into thirds.">
+                                title="Sort the complete seasons since 1982 by a climate index over the basin's three most active months (from the climatology: Aug-Oct for the Atlantic, Jan-Mar for the Southern Hemisphere), and draw each group's mean cumulative ACE. ENSO phase uses relative Niño 3.4 (minus the 30°S-30°N mean SST, so the tropics-wide warming trend does not push recent seasons toward El Niño) with ±0.5 °C thresholds; MDR relative SST splits the seasons into thirds.">
                             <option value="" selected>None</option>
-                            <option value="enso_rel">ENSO (relative Niño 3.4)</option>
-                            <option value="enso_raw">ENSO (Niño 3.4 anomaly)</option>
+                            <option value="enso_rel">ENSO phase (relative Niño 3.4)</option>
                             <option value="atl_mdr">Atlantic MDR relative SST</option>
                             <option value="epac_mdr">East Pacific MDR relative SST</option>
                             <option value="wpac_mdr">West Pacific MDR relative SST</option>
@@ -1718,15 +1717,15 @@
                 <details class="seasonal-method">
                     <summary>Method</summary>
                     <div class="seasonal-method-body">
-                        <p>Derived from the same OISST record as the SST panels on this tab. ENSO horizontal markers at ±0.5 °C anomaly are the conventional El Niño / La Niña thresholds. AMM proxy = North Tropical Atlantic SST anomaly − Tropical South Atlantic SST anomaly (sign-of-the-gradient version of Vimont &amp; Kossin 2007).</p>
+                        <p>Derived from the same OISST record as the SST panels on this tab. The dashed lines at ±0.5 °C are the El Niño / La Niña thresholds. The panel opens on relative anomalies (each region minus the 30°S-30°N mean), the ENSO definition used across this tab, so ENSO is judged against the rest of the tropics rather than a warming baseline; Raw and Detrended are one click away. AMM proxy = North Tropical Atlantic SST anomaly − Tropical South Atlantic SST anomaly (sign-of-the-gradient version of Vimont &amp; Kossin 2007).</p>
                     </div>
                 </details>
                 <div class="seasonal-ts-controls">
                     <label>Variable
                         <select id="seasonal-idx-var" title="Same convention as the other Seasonal-tab panels. Raw anomaly = monthly SST minus 1991-2020 climo. Detrended = year-deviation from a per-(region, month) linear-in-year trend. Relative (Vecchi-Soden 2007) = anomaly of (region SST − 30°S-30°N mean SST), so the global tropical warming signal is removed.">
-                            <option value="anom" selected>Raw anomaly vs 1991-2020</option>
+                            <option value="sst_rel" selected>Relative anomaly (Vecchi-Soden 2007)</option>
+                            <option value="anom">Raw anomaly vs 1991-2020</option>
                             <option value="sst_dt">Detrended (per-month linear-in-year)</option>
-                            <option value="sst_rel">Relative anomaly (Vecchi-Soden 2007)</option>
                         </select>
                     </label>
                     <label>Window
@@ -3001,7 +3000,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261108ab1';
+        var _LAZY_ASSET_V = '?v=20261108tm1';
         var _lazyViewMods = {
             recon:       { js: ['plotly_dark.js', 'tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
