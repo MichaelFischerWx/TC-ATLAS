@@ -55,6 +55,11 @@
 
     var GCS_BASE = 'https://cdn.tcatlas.org/seasonal';   // R2 (Phase 2a); kept fresh by tc-atlas-r2-mirror job
     var LOCAL_BASE = 'data/seasonal';
+    // Correlation maps keep their names across rebuilds and Cloudflare
+    // caches PNGs at the edge (an hour-old WP map was still served after the
+    // 2026-11-08 rebuild), so their URLs carry this version. Bump it after
+    // every `build_oisst_history.py --step correlations` upload.
+    var SEAS_CORR_VER = '20261108';
     // Same hostname realtime_ir.js uses for /ir-monitor/* endpoints; we
     // call /seasonal/daily off it for the Daily Panel B view.
     var API_BASE = 'https://api.tcatlas.org';
@@ -1734,6 +1739,50 @@
     // Panel C — MDR × AMO scatter colored by annual ACE
     // -------------------------------------------------------------------
 
+    // Annual ACE for the season paired with SST year `y` (SST x ACE,
+    // correlation map, analogs). ace_basins_annual.json carries the
+    // pace-panel definition (1-minute NHC/JTWC winds) for the six basins
+    // and the NH / SH / Global totals, with storm counts, keyed by IBTrACS
+    // season; `sst_year_offset` says which season pairs with SST year Y —
+    // for the Southern Hemisphere, Y + 1: the season that STARTS in July.
+    // An older cached file without it falls back to the previous lookups.
+    function _aceAnnualNew() {
+        var a = state.ace_basins;
+        return !!(a && a.sst_year_offset && a.basins);
+    }
+    function _aceAnnual(basin, y) {
+        y = parseInt(y, 10);
+        if (_aceAnnualNew()) {
+            var rec = state.ace_basins.basins[basin];
+            if (!rec) return null;
+            var season = y + (state.ace_basins.sst_year_offset[basin] || 0);
+            var v = rec.years[String(season)];
+            if (v === undefined || v === null) return null;
+            return { ace: v, season: season,
+                     storms: rec.storms ? rec.storms[String(season)] : null };
+        }
+        if (basin === 'NA') {
+            var r = state.ace && state.ace.years[y];
+            return r ? { ace: r.ace, storms: r.named_storms_contrib, season: y } : null;
+        }
+        var b = state.ace_basins && state.ace_basins.basins[basin];
+        var v2 = (b && b.years) ? b.years[String(y)] : undefined;
+        return (v2 === undefined || v2 === null) ? null
+            : { ace: v2, storms: null, season: y };
+    }
+    // Every season total on file for a basin (colorbar range, terciles).
+    function _aceAnnualSeries(basin) {
+        if (_aceAnnualNew() || basin !== 'NA') {
+            var rec = state.ace_basins && state.ace_basins.basins[basin];
+            return rec ? Object.keys(rec.years).map(function (k) {
+                return { season: parseInt(k, 10), ace: rec.years[k] };
+            }) : [];
+        }
+        return Object.keys(state.ace.years).map(function (k) {
+            return { season: parseInt(k, 10), ace: state.ace.years[k].ace };
+        });
+    }
+
     function _buildScatterData() {
         if (!state.indices || !state.ace) return null;
 
@@ -1749,24 +1798,18 @@
         var dates = idx.dates;
         var prelim = idx.preliminary || [];
         var nDays = idx.preliminary_n_days || [];
-        var points = { year: [], x: [], y: [], ace: [], storms: [] };
+        var points = { year: [], x: [], y: [], ace: [], storms: [], season: [] };
         var currentYear = (new Date()).getUTCFullYear();
         var currentPt = null;
         var currentProj = null;
 
-        // ACE color source: NA uses ace_annual.json (carries storm count);
-        // other basins use ace_basins_annual.json (ACE only). Mirrors the
-        // basin-ACE lookup in the Panel F analog builder.
+        // ACE color source: see _aceAnnual (one definition for every basin
+        // and total; Southern Hemisphere seasons start the July after).
         var aceBasin = state.scatter.aceBasin || 'NA';
         function _aceFor(year) {
-            if (aceBasin === 'NA') {
-                var r = state.ace.years[year];
-                return r ? { ace: r.ace, storms: r.named_storms_contrib }
-                         : { ace: null, storms: null };
-            }
-            var b = state.ace_basins && state.ace_basins.basins[aceBasin];
-            var v = (b && b.years) ? b.years[year] : undefined;
-            return { ace: (v === undefined ? null : v), storms: null };
+            var r = _aceAnnual(aceBasin, year);
+            return r ? { ace: r.ace, storms: r.storms, season: r.season }
+                     : { ace: null, storms: null, season: null };
         }
 
         // Mapping from base variable to its "projected" sibling.
@@ -1810,6 +1853,7 @@
             points.y.push(ys[i]);
             points.ace.push(ace);
             points.storms.push(storms);
+            points.season.push(aceInfo.season);
         }
         return { points: points, current: currentPt, currentProj: currentProj,
                  xKey: xKey, yKey: yKey, aceBasin: aceBasin };
@@ -2442,6 +2486,7 @@
     var ACE_BASIN_LABEL = {
         NA: 'Atlantic', EP: 'E. Pacific', WP: 'W. Pacific',
         NI: 'N. Indian', SI: 'S. Indian', SP: 'S. Pacific',
+        NH: 'N. Hemisphere', SH: 'S. Hemisphere', GL: 'Global',
     };
 
     function _axisTitle(key, region) {
@@ -2476,11 +2521,9 @@
         // series so it's stable as the user changes month/region.
         var aceBasin = bundle.aceBasin || 'NA';
         var aceLabel = (ACE_BASIN_LABEL[aceBasin] || aceBasin) + ' ACE';
-        var allAce = (aceBasin === 'NA')
-            ? Object.keys(state.ace.years).map(function (y) { return state.ace.years[y].ace; })
-            : ((state.ace_basins && state.ace_basins.basins[aceBasin] &&
-                state.ace_basins.basins[aceBasin].years)
-                ? Object.values(state.ace_basins.basins[aceBasin].years) : []);
+        var allAce = _aceAnnualSeries(aceBasin).map(function (r) { return r.ace; });
+        var shSeason = !!ACE_SH_BASINS[aceBasin] && _aceAnnualNew();
+        var hasStorms = _aceAnnualNew() || aceBasin === 'NA';
         var aceMax = allAce.filter(function (v) { return typeof v === 'number' && isFinite(v); })
                            .reduce(function (a, b) { return Math.max(a, b); }, 1);
         var cmax = Math.max(25, Math.ceil(aceMax / 25) * 25);
@@ -2489,7 +2532,8 @@
             type: 'scatter', mode: 'markers',
             x: bundle.points.x, y: bundle.points.y,
             customdata: bundle.points.year.map(function (y, i) {
-                return [y, bundle.points.ace[i], bundle.points.storms[i]];
+                return [y, bundle.points.ace[i], bundle.points.storms[i],
+                        _aceSeasonLabel(aceBasin, bundle.points.season[i])];
             }),
             marker: {
                 size: 12,
@@ -2506,7 +2550,8 @@
                 '<b>%{customdata[0]}</b><br>' +
                 'X: %{x:.2f}<br>Y: %{y:.2f}<br>' +
                 aceLabel + ': %{customdata[1]}' +
-                (aceBasin === 'NA' ? '<br>Storms: %{customdata[2]}' : '') +
+                (shSeason ? ' (%{customdata[3]} season)' : '') +
+                (hasStorms ? '<br>Storms: %{customdata[2]}' : '') +
                 '<extra></extra>',
             name: 'History',
         };
@@ -4726,6 +4771,33 @@
         return null;
     }
 
+    // Grid-weighted analog matrices, one file per basin / total, loaded the
+    // first time that basin is shown (the combined file was 6.8 MB on every
+    // tab open). Falls back to the combined six-basin file if the per-basin
+    // one is missing (an older upload).
+    var _dmLoading = {};
+    var _dmTried = {};          // basin -> load attempted (success or not)
+    function _dmFor(basin) {
+        if (state.dm && state.dm[basin]) return state.dm[basin];
+        var all = state.distance_matrices;
+        return (all && all.basins && all.basins[basin]) || null;
+    }
+    function _loadDm(basin) {
+        if (_dmFor(basin)) return Promise.resolve();
+        if (_dmLoading[basin]) return _dmLoading[basin];
+        state.dm = state.dm || {};
+        _dmLoading[basin] = _fetchData('analog_distance_matrices/' + basin + '.json')
+            .then(function (j) { state.dm[basin] = j.months; })
+            .catch(function () {
+                if (state.distance_matrices) return;
+                return _fetchData('analog_distance_matrices.json').then(
+                    function (j) { state.distance_matrices = j; },
+                    function () {});
+            })
+            .then(function () { delete _dmLoading[basin]; _dmTried[basin] = true; });
+        return _dmLoading[basin];
+    }
+
     function _buildAnalogs() {
         if (!state.indices || !state.ace) return null;
         var idx = state.indices;
@@ -4741,8 +4813,8 @@
 
         // --- Grid-weighted (default): use the precomputed n_year × n_year
         //     pairwise distance matrix from analog_distance_matrices.json.
-        if (method === 'grid_weighted' && state.distance_matrices) {
-            var dm = state.distance_matrices.basins[basin];
+        if (method === 'grid_weighted' && _dmFor(basin)) {
+            var dm = _dmFor(basin);
             var mEntry = dm && dm[String(month)];
             if (mEntry) {
                 var idxOfYear = mEntry.years.indexOf(targetYear);
@@ -4919,10 +4991,7 @@
         var aceVec = {};
         // Source the year list from the distance-matrix when available
         // (grid_weighted), else from the indices.
-        var seed = (state.distance_matrices
-                    && state.distance_matrices.basins[basin]
-                    && state.distance_matrices.basins[basin][String(month)])
-                 || null;
+        var seed = (_dmFor(basin) && _dmFor(basin)[String(month)]) || null;
         var seedYears = seed ? seed.years : null;
         if (seedYears) {
             seedYears.forEach(function (y) {
@@ -5166,27 +5235,47 @@
         var ace_th = document.getElementById('seasonal-an-ace-th');
         if (!tbody) return;
         var basin = state.an.basin;
-        if (ace_th) ace_th.textContent = basin + ' ACE';
+        // Only the grid-weighted method needs the matrix; once a load has
+        // been tried, render regardless and let _buildAnalogs report it.
+        if (!_dmFor(basin) && !_dmTried[basin]) {
+            tbody.innerHTML = '<tr><td colspan="5" style="opacity:.6">' +
+                'Loading analog distances…</td></tr>';
+            _loadDm(basin).then(function () {
+                // Only redraw if this basin is still the one in view.
+                if (state.an.basin === basin) _renderAnalogs();
+            });
+            return;
+        }
 
-        // ACE source: for NA use the existing ace_annual.json (it ships
-        // storm count too); for other basins use ace_basins_annual.json
-        // and storms is unavailable.
-        var aceLookup;
-        if (basin === 'NA') {
-            aceLookup = function (y) {
-                var r = state.ace.years[y];
-                return r ? { ace: r.ace, storms: r.named_storms_contrib } : null;
-            };
-        } else if (state.ace_basins) {
-            var basinRec = state.ace_basins.basins[basin];
-            aceLookup = function (y) {
-                // JSON keys are strings; coerce.
-                var v = basinRec && basinRec.years[String(y)];
-                return (v !== undefined && v !== null)
-                    ? { ace: v, storms: null } : null;
-            };
-        } else {
-            aceLookup = function () { return null; };
+        // ACE source: _aceAnnual — one definition for every basin and
+        // total, storm counts included, and for the Southern Hemisphere the
+        // season that starts the July after the analog year's SST.
+        // A season still in progress has only a partial total; as an analog
+        // (or in the skill score) it would read as a quiet year, so it is
+        // left out.
+        var curSeason = _aceCurrentSeason(basin);
+        var aceLookup = function (y) {
+            var r = _aceAnnual(basin, y);
+            return (r && r.season >= curSeason) ? null : r;
+        };
+        // Above / below normal = the 1991-2020 terciles of this basin's
+        // season totals (fixed cut-offs went stale with the 1-minute winds).
+        var climo = _aceAnnualSeries(basin).filter(function (r) {
+            return r.season >= 1991 && r.season <= 2020;
+        }).map(function (r) { return r.ace; }).sort(function (a, b) { return a - b; });
+        var tercile = function (f) {
+            if (!climo.length) return null;
+            var x = f * (climo.length - 1), i = Math.floor(x);
+            return climo[i] + (x - i) * ((climo[i + 1] !== undefined ? climo[i + 1] : climo[i]) - climo[i]);
+        };
+        var aceHi = tercile(2 / 3), aceLo = tercile(1 / 3);
+        if (ace_th) {
+            ace_th.textContent = basin + ' ACE';
+            ace_th.title = (ACE_SH_BASINS[basin] && _aceAnnualNew()
+                ? 'ACE of the season that starts the July after the analog year. '
+                : '') + (aceHi !== null
+                ? 'Orange: above the 1991-2020 upper third (' + aceHi.toFixed(0) +
+                  '); blue: below the lower third (' + aceLo.toFixed(0) + ').' : '');
         }
 
         // Resolve N BEFORE building analogs, so the table reflects the
@@ -5213,6 +5302,10 @@
             // Clear weights summary too
             var summary0 = document.getElementById('seasonal-an-weights-summary');
             if (summary0) summary0.innerHTML = '';
+            // ...and the skill box, which otherwise kept the previous
+            // basin's numbers under a "no analogs" message.
+            var skill0 = document.getElementById('seasonal-an-skill');
+            if (skill0) skill0.innerHTML = '';
             return;
         }
         var html = '';
@@ -5222,18 +5315,24 @@
             var ace = aceLookup(r.year);
             var aceVal = ace ? ace.ace : null;
             var storms = ace ? ace.storms : null;
-            // Basin-aware "active vs quiet" thresholds (NHC uses ACE>175 for
-            // hyperactive Atlantic; other basins have different climatologies).
-            var BASIN_HI = {NA: 175, EP: 200, WP: 280, NI: 60, SI: 130, SP: 130};
-            var BASIN_LO = {NA: 60,  EP: 70,  WP: 175, NI: 15, SI: 60,  SP: 60};
-            var aceCls = (aceVal === null) ? ''
-                       : (aceVal >= (BASIN_HI[basin] || 175)) ? ' class="an-ace-hi"'
-                       : (aceVal <= (BASIN_LO[basin] || 60)) ? ' class="an-ace-lo"' : '';
+            var aceCls = (aceVal === null || aceHi === null) ? ''
+                       : (aceVal > aceHi) ? ' class="an-ace-hi"'
+                       : (aceVal < aceLo) ? ' class="an-ace-lo"' : '';
+            var seasonTag = (ace && ACE_SH_BASINS[basin] && _aceAnnualNew())
+                ? ' <span class="an-season">' + _aceSeasonLabel(basin, ace.season) + '</span>' : '';
+            if (!ace) {
+                // Left out of the averages above; say why rather than "—".
+                var rawAce = _aceAnnual(basin, r.year);
+                if (rawAce && rawAce.season >= curSeason) {
+                    seasonTag = '<span class="an-season">in progress</span>';
+                }
+            }
             html += '<tr>' +
                 '<td>' + (i + 1) + '</td>' +
                 '<td>' + r.year + '</td>' +
                 '<td>' + r.dist.toFixed(1) + '</td>' +
-                '<td' + aceCls + '>' + (aceVal !== null ? aceVal.toFixed(1) : '—') + '</td>' +
+                '<td' + aceCls + '>' + (aceVal !== null ? aceVal.toFixed(1)
+                    : (seasonTag ? '' : '—')) + seasonTag + '</td>' +
                 '<td>' + (storms !== null && storms !== undefined ? storms : '—') + '</td>' +
                 '</tr>';
             distAcc += r.dist;
@@ -6412,9 +6511,13 @@
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .catch(function () { return null; });
         }
+        // The legacy 4x-daily era5_daily/ prefix is gone from GCS (checked
+        // 2026-11-08: no objects), so its manifest only ever returned 403 —
+        // one failed request per visit. The merge below still works with
+        // a null legacy manifest.
         _evoState.manifestPromise = Promise.all([
             fetchOne(EVO_ARCHIVE_BASE_NEW),
-            fetchOne(EVO_ARCHIVE_BASE_LEGACY),
+            Promise.resolve(null),
         ]).then(function (results) {
             var mNew = results[0], mLegacy = results[1];
             _evoState.manifest_new    = mNew;
@@ -10819,7 +10922,7 @@
         var stem = 'correlations/' + c.basin + '_' + mm + '_' + kindKey;
         var pngName = stem + '.png';
         var gridName = stem + '.grid.json';
-        _setSeasonalImg(img, pngName);
+        _setSeasonalImg(img, pngName + '?v=' + SEAS_CORR_VER);
         img.alt = c.basin + ' ACE × SST ' +
                   (c.stat === 'spearman' ? 'Spearman ρ' : 'Pearson r') +
                   ', month ' + c.month + ', ' + c.kind;
@@ -11077,10 +11180,9 @@
             function (j) { state.ace_basins = j; },
             function () { state.ace_basins = null; }
         );
-        var p6 = _fetchData('analog_distance_matrices.json').then(
-            function (j) { state.distance_matrices = j; },
-            function () { state.distance_matrices = null; }
-        );
+        // Analog matrices load per basin on demand (_loadDm); start the
+        // default basin's now so the panel is ready when it scrolls in.
+        var p6 = _loadDm(state.an.basin || 'NA');
         // Optional preliminary-year distance vector. If present, the
         // grid-weighted analog method can produce real rankings for
         // the current year on the current month instead of "no data".

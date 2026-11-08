@@ -1995,7 +1995,7 @@
                 <details class="seasonal-method">
                     <summary>Method</summary>
                     <div class="seasonal-method-body">
-                        <p>Region means of OISST v2.1 monthly SST (area-weighted). Detrended removes a linear trend for each calendar month; relative subtracts the 30&deg;S-30&deg;N mean SST (Vecchi and Soden 2007). Marker color is the season's ACE from IBTrACS. The star is the current year, preliminary while its month is still in progress.</p>
+                        <p>Region means of OISST v2.1 monthly SST (area-weighted). Detrended removes a linear trend for each calendar month; relative subtracts the 30&deg;S-30&deg;N mean SST (Vecchi and Soden 2007). Marker color is the season's ACE from IBTrACS with 1-minute NHC/JTWC winds, the same definition as the Season ACE Pace panel. For the Southern Hemisphere (South Indian, South Pacific and the SH total) each year pairs with the season that starts that July, so the SST really is pre-season. The star is the current year, preliminary while its month is still in progress.</p>
                     </div>
                 </details>
                 <div class="seasonal-scatter-controls">
@@ -2073,12 +2073,19 @@
                     </label>
                     <label>Color by ACE
                         <select id="seasonal-scatter-ace" title="Which basin's Accumulated Cyclone Energy shades the markers. Lets you ask e.g. 'does May Atlantic SST relate to West Pacific ACE?' The colorbar scale auto-fits the selected basin.">
-                            <option value="NA" selected>North Atlantic (NA)</option>
-                            <option value="EP">East Pacific (EP)</option>
-                            <option value="WP">West Pacific (WP)</option>
-                            <option value="NI">North Indian (NI)</option>
-                            <option value="SI">South Indian (SI)</option>
-                            <option value="SP">South Pacific (SP)</option>
+                            <optgroup label="Basins">
+                                <option value="NA" selected>North Atlantic (NA)</option>
+                                <option value="EP">East Pacific (EP)</option>
+                                <option value="WP">West Pacific (WP)</option>
+                                <option value="NI">North Indian (NI)</option>
+                                <option value="SI">South Indian (SI)</option>
+                                <option value="SP">South Pacific (SP)</option>
+                            </optgroup>
+                            <optgroup label="Totals">
+                                <option value="NH">Northern Hemisphere (NH)</option>
+                                <option value="SH">Southern Hemisphere (SH)</option>
+                                <option value="GL">Global (GL)</option>
+                            </optgroup>
                         </select>
                     </label>
                 </div>
@@ -2095,7 +2102,7 @@
                     <summary>Method</summary>
                     <div class="seasonal-method-body">
                         <div id="seasonal-an-details-body">
-                            <p id="seasonal-an-method-desc">Top-10 historical analogs to the target year/month. <strong>Grid-weighted by |r|</strong> (default and recommended) compares the full SST anomaly field pixel-by-pixel, weighting each pixel by its absolute correlation with the chosen basin's ACE — no region definitions and no overlap. The other two methods operate on the 14 fixed region-mean values (which have some overlap, e.g. Atl basin contains MDR); use them if you want a faster mental model or to compare.</p>
+                            <p id="seasonal-an-method-desc">Top-10 historical analogs to the target year/month. <strong>Grid-weighted by |r|</strong> (default and recommended) compares the full SST anomaly field pixel-by-pixel, weighting each pixel by its absolute correlation with the chosen basin's ACE — no region definitions and no overlap. The other two methods operate on the 14 fixed region-mean values (which have some overlap, e.g. Atl basin contains MDR); use them if you want a faster mental model or to compare. The ACE column is the analog year's season total (1-minute NHC/JTWC winds); for the Southern Hemisphere it is the season that starts the July after, shown as e.g. 1997-98. Orange and blue mark seasons above the upper and below the lower third of 1991-2020.</p>
                             <p>For the selected target year + month, each historical year's region-mean SST anomaly vector is compared to the target's vector. Smaller distance = more similar SST pattern.</p>
                             <p><strong>Correlation-weighted distance:</strong> <code>d = √Σ wᵢ · (anomᵢ - target_anomᵢ)²</code>, where the weight <code>wᵢ = |r(SST_region_i, ACE_basin)|</code> is the absolute Pearson correlation between region <em>i</em>'s monthly SST and the chosen basin's annual ACE (1982-present). Regions with little linkage to ACE (small |r|) contribute little. Weights are re-computed per basin × month × raw|detrended.</p>
                             <p id="seasonal-an-weights-summary"></p>
@@ -2124,12 +2131,19 @@
                     </label>
                     <label title="The basin whose ACE weights the SST comparison and fills the ACE column.">ACE basin
                         <select id="seasonal-an-basin">
-                            <option value="NA" selected>North Atlantic (NA)</option>
-                            <option value="EP">East Pacific (EP)</option>
-                            <option value="WP">West Pacific (WP)</option>
-                            <option value="NI">North Indian (NI)</option>
-                            <option value="SI">South Indian (SI)</option>
-                            <option value="SP">South Pacific (SP)</option>
+                            <optgroup label="Basins">
+                                <option value="NA" selected>North Atlantic (NA)</option>
+                                <option value="EP">East Pacific (EP)</option>
+                                <option value="WP">West Pacific (WP)</option>
+                                <option value="NI">North Indian (NI)</option>
+                                <option value="SI">South Indian (SI)</option>
+                                <option value="SP">South Pacific (SP)</option>
+                            </optgroup>
+                            <optgroup label="Totals">
+                                <option value="NH">Northern Hemisphere (NH)</option>
+                                <option value="SH">Southern Hemisphere (SH)</option>
+                                <option value="GL">Global (GL)</option>
+                            </optgroup>
                         </select>
                     </label>
                     <details class="seas-more">
@@ -2198,17 +2212,25 @@
                     <div class="seasonal-method-body">
                         <p>Pixel-wise Pearson correlation between monthly SST and annual basin ACE (1982-present). Red = warm SST coincides with active seasons; blue = warm SST coincides with quiet seasons. Toggle <em>raw</em> vs <em>detrended</em> to separate shared long-term warming from year-to-year coupling.</p>
                         <p>Relative SST (the default) subtracts the 30&deg;S-30&deg;N mean, the Vecchi and Soden (2007) framing in which a basin's activity follows its SST relative to the rest of the tropics. Spearman &rho; correlates ranks, which is robust to one or two extreme seasons.</p>
+                        <p>ACE is the IBTrACS season total with 1-minute NHC/JTWC winds, the definition the Season ACE Pace panel uses, and only completed seasons enter the correlation. For the Southern Hemisphere (South Indian, South Pacific and the SH total) each year's SST pairs with the season that starts that July.</p>
                     </div>
                 </details>
                 <div class="seasonal-corr-controls">
                     <label>Basin
                         <select id="seasonal-corr-basin">
-                            <option value="NA" selected>North Atlantic (NA)</option>
-                            <option value="EP">East Pacific (EP)</option>
-                            <option value="WP">West Pacific (WP)</option>
-                            <option value="NI">North Indian (NI)</option>
-                            <option value="SI">South Indian (SI)</option>
-                            <option value="SP">South Pacific (SP)</option>
+                            <optgroup label="Basins">
+                                <option value="NA" selected>North Atlantic (NA)</option>
+                                <option value="EP">East Pacific (EP)</option>
+                                <option value="WP">West Pacific (WP)</option>
+                                <option value="NI">North Indian (NI)</option>
+                                <option value="SI">South Indian (SI)</option>
+                                <option value="SP">South Pacific (SP)</option>
+                            </optgroup>
+                            <optgroup label="Totals">
+                                <option value="NH">Northern Hemisphere (NH)</option>
+                                <option value="SH">Southern Hemisphere (SH)</option>
+                                <option value="GL">Global (GL)</option>
+                            </optgroup>
                         </select>
                     </label>
                     <label>Month
@@ -2979,7 +3001,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261108ly1';
+        var _LAZY_ASSET_V = '?v=20261108ab1';
         var _lazyViewMods = {
             recon:       { js: ['plotly_dark.js', 'tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

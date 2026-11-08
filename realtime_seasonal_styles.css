@@ -1219,6 +1219,13 @@ body.seasonal-maximized .seasonal-header {
 }
 .seasonal-an-table .an-ace-hi { color: #ff7a59; font-weight: 600; }
 .seasonal-an-table .an-ace-lo { color: #6da8e6; }
+/* Southern Hemisphere ACE cells name the season they belong to. */
+.seasonal-an-table .an-season {
+    margin-left: 4px;
+    font-size: 0.6875rem;
+    font-weight: 400;
+    color: var(--text-dim, #a0a8b3);
+}
 
 /* Bottom "Average" row: bolded, with a top border to separate from the
    ranking rows above. The arithmetic mean of the top-10 analogs serves
