@@ -251,6 +251,18 @@
     function _wrapCreditLine(text, max) {
         if (text.length <= max) return text;
         var out = [], line = '';
+        // Break between " · " phrases when each fits a line, so a wrap
+        // never strands the end of one ("by this / date)").
+        var phrases = text.split(' · ');
+        if (phrases.length > 1 &&
+            phrases.every(function (p) { return p.length <= max; })) {
+            phrases.forEach(function (p) {
+                if (line && (line + ' · ' + p).length > max) { out.push(line); line = p; }
+                else line = line ? line + ' · ' + p : p;
+            });
+            out.push(line);
+            return out.join('<br>');
+        }
         text.split(' ').forEach(function (w) {
             if (line && (line + ' ' + w).length > max) { out.push(line); line = w; }
             else line = line ? line + ' ' + w : w;
@@ -1215,6 +1227,151 @@
         return a === b ? a : a + '-' + b;
     }
 
+    // Grouped view's status clause: the season against the mean curve of
+    // its own class (the heavier line), e.g. "El Niño season, 138% of the
+    // El Niño mean to date".
+    function _aceGroupStanding(grouping, st) {
+        var cur = grouping.current;
+        if (!cur || !st || st.ace === null) return null;
+        var gr = null;
+        grouping.groups.forEach(function (g) { if (g.key === cur.cls) gr = g; });
+        if (!gr || !gr.curve) return null;
+        var enso = grouping.group.kind === 'enso';
+        var name = (enso && gr.key === 'mid') ? 'ENSO-neutral' : gr.name;
+        var lead = name + (cur.partial ? ' so far' : ' season');
+        var mean = gr.curve[st.today - 1];
+        // Same floor as % of normal: no ratio against a near-zero mean.
+        if (!(mean >= 1.0 && mean >= 0.02 * gr.total)) return lead;
+        return lead + ', ' + Math.round(100 * st.ace / mean) + '% of the ' +
+            (enso ? name : name.toLowerCase()) + ' mean to date';
+    }
+
+    // Saved PNG only: the live season's ACE split by storm, as one
+    // full-height share column in the right margin. The largest storms get
+    // labeled segments (largest on top); the rest share one gray block at
+    // the base. It is a share scale, not the ACE axis, so a quiet season
+    // still gets a legible column. Runs on the finished export layout,
+    // where margins and fonts are already in export pixels. Labels use the
+    // system font the PNG rasterizer falls back to, so measured widths
+    // match what gets drawn.
+    var ACE_COL_MAX_NAMED = 8;
+    var ACE_COL_MIN_SHARE = 0.04;
+    var EXPORT_SYSTEM_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, ' +
+                             'Helvetica, Arial, sans-serif';
+    var _measureCtx = null;
+    function _textPx(text, sizePx) {
+        if (!_measureCtx) _measureCtx = document.createElement('canvas').getContext('2d');
+        _measureCtx.font = sizePx + 'px ' + EXPORT_SYSTEM_FONT;
+        return _measureCtx.measureText(text).width;
+    }
+
+    function _aceStormColumn(lay, opts, basin) {
+        var live = _aceLiveBasin(basin);
+        var recs = ((live && live.storm_detail) || []).filter(function (r) {
+            return r.ace > 0;
+        });
+        // One storm is the whole season — nothing to split.
+        if (recs.length < 2 || !lay.margin) return;
+        var sum = recs.reduce(function (a, r) { return a + r.ace; }, 0);
+        var ranked = recs.slice().sort(function (a, b) { return b.ace - a.ace; });
+        var nNamed = 0;
+        while (nNamed < Math.min(ranked.length, ACE_COL_MAX_NAMED) &&
+               (nNamed === 0 || ranked[nNamed].ace >= ACE_COL_MIN_SHARE * sum)) {
+            nNamed++;
+        }
+        // A lone leftover storm reads better named than as "1 others".
+        if (ranked.length - nNamed === 1) nNamed++;
+
+        var fk = opts.fontK || 1;
+        var m = lay.margin;
+        var plotH = opts.height - (m.t || 0) - (m.b || 0);
+        var size = Math.round(9 * fk);
+        var L = Math.round(size * 1.4);             // label pitch
+        if (!(plotH > 6 * L)) return;
+        var gap = Math.round(8 * fk), colW = Math.round(8 * fk);
+        var conn = Math.round(7 * fk);
+        var labelX = gap + colW + conn + 3;
+        var head = 'Share by storm';
+
+        // Bottom-up: the gray block, then the named storms smallest first,
+        // filling the plot height under one line kept for the header.
+        var colH = plotH - L * 1.2;
+        var segs = [];
+        var rest = ranked.slice(nNamed);
+        if (rest.length) {
+            segs.push({ other: true, name: rest.length + ' others',
+                        ace: rest.reduce(function (a, r) { return a + r.ace; }, 0) });
+        }
+        for (var n = nNamed - 1; n >= 0; n--) {
+            segs.push({ rank: n, name: ranked[n].name || ranked[n].id || 'UNNAMED',
+                        ace: ranked[n].ace });
+        }
+        var y = 0;
+        segs.forEach(function (s) {
+            s.p0 = y;
+            y += colH * s.ace / sum;
+            s.p1 = y;
+            s.val = s.ace.toFixed(1) + ' · ' + Math.round(100 * s.ace / sum) + '%';
+        });
+
+        // Labels sit beside their segments, pushed apart only as far as a
+        // thin segment needs and kept inside the plot's height.
+        var items = segs.map(function (s) {
+            return { seg: s, target: (s.p0 + s.p1) / 2 };
+        });
+        var lo = L / 2, hi = colH - L / 2;
+        var i;
+        for (i = 0; i < items.length; i++) {
+            items[i].pos = Math.max(items[i].target, i ? items[i - 1].pos + L : lo);
+        }
+        for (i = items.length - 1; i >= 0; i--) {
+            var cap = (i === items.length - 1) ? hi : items[i + 1].pos - L;
+            if (items[i].pos > cap) items[i].pos = cap;
+        }
+        if (items[0].pos < lo - 1) return;          // too many labels for the height
+
+        var bg = opts.isDark ? '#0d1117' : '#ffffff';
+        var dim = BRAND.textDim;
+        lay.shapes = lay.shapes || [];
+        lay.annotations = lay.annotations || [];
+        var px = function (v) { return v / plotH; };
+        lay.annotations.push({
+            xref: 'paper', x: 1, xanchor: 'left', xshift: gap,
+            yref: 'paper', y: 1, yanchor: 'top', showarrow: false,
+            text: head,
+            font: { size: size, color: dim, family: EXPORT_SYSTEM_FONT },
+        });
+        var maxW = _textPx(head, size) + gap - labelX;
+        items.forEach(function (it) {
+            var s = it.seg;
+            lay.shapes.push({
+                type: 'rect', xref: 'paper', xsizemode: 'pixel', xanchor: 1,
+                x0: gap, x1: gap + colW, yref: 'paper', y0: px(s.p0), y1: px(s.p1),
+                fillcolor: s.other
+                    ? (opts.isDark ? 'rgba(148,163,184,0.40)' : 'rgba(100,116,139,0.32)')
+                    : (s.rank % 2 ? '#fdba74' : BRAND.orange),
+                line: { color: bg, width: Math.max(1, Math.round(fk * 0.6)) },
+            });
+            lay.shapes.push({
+                type: 'line', xref: 'paper', xsizemode: 'pixel', xanchor: 1,
+                x0: gap + colW + 2, x1: gap + colW + conn,
+                yref: 'paper', y0: px(it.target), y1: px(it.pos),
+                line: { color: dim, width: 1 },
+            });
+            maxW = Math.max(maxW, _textPx(s.name + ' ' + s.val, size));
+            lay.annotations.push({
+                xref: 'paper', x: 1, xanchor: 'left', xshift: labelX,
+                yref: 'paper', y: px(it.pos), yanchor: 'middle', showarrow: false,
+                align: 'left',
+                text: (s.other ? '<span style="color:' + dim + '">' + s.name + '</span>'
+                               : s.name) +
+                      ' <span style="color:' + dim + '">' + s.val + '</span>',
+                font: { size: size, color: BRAND.text, family: EXPORT_SYSTEM_FONT },
+            });
+        });
+        m.r = Math.max(m.r || 0, Math.ceil(labelX + maxW * 1.06 + 10 * fk));
+    }
+
     function _renderAcePace() {
         var el = document.getElementById('seasonal-ace-plot');
         if (!el || typeof Plotly === 'undefined') return;
@@ -1457,9 +1614,11 @@
 
         // A saved PNG travels without the chips around it, so it carries a
         // title (what, which season, through when) and ONE status line:
-        // where the season stands and whether it is on record pace. The
-        // legend already names the periods behind the median, bands and
-        // record lines — don't repeat them here.
+        // where the season stands and whether it is on record pace — or,
+        // in the grouped view, which draws no record lines, how it runs
+        // against its own group's mean. The legend already names the
+        // periods behind the median, bands and record lines — don't
+        // repeat them here.
         var seasonLbl = (st && st.season) ? _aceSeasonLabel(basin, st.season) : '';
         var title = cl.name + ' ACE' + (seasonLbl ? ' · ' + seasonLbl + ' season' +
             (isPct ? ' as % of normal' : '') : '') +
@@ -1473,7 +1632,10 @@
                     : (st.rank.below === 0 && !st.rank.ties) ? 'below every 1991-2020 season'
                     : _ordinal(Math.round(st.rank.pct)) + ' percentile');
             }
-            if (cl.record && st.ace > cl.record.ace) {
+            if (grouping) {
+                var phase = _aceGroupStanding(grouping, st);
+                if (phase) bits.push(phase);
+            } else if (cl.record && st.ace > cl.record.ace) {
                 bits.push('new season record (was ' + cl.record.ace.toFixed(1) + ', ' +
                     _aceSeasonLabel(basin, cl.record.season) + ')');
             } else if (st.rec && st.rec.max > 0) {
@@ -1501,6 +1663,9 @@
                            font: { size: 11, color: BRAND.textDim } };
             lay.margin = Object.assign({}, lay.margin, { b: 96 });
             _applyDataCredit(lay, credit, box || el);
+        };
+        el._seasExportFinish = function (lay, opts) {
+            _aceStormColumn(lay, opts, basin);
         };
 
         // Grouped view: the classes sorted by mean season total, and where
@@ -2292,9 +2457,16 @@
                     // for the export's width in unscaled units.
                     plot._seasExportDecorate(srcLayout, { clientWidth: w / fontK });
                 }
+                var expLayout = _exportLayout(srcLayout, fontK, isDark);
+                // Last pass on the finished layout (fonts scaled, margins
+                // final) for anything placed in export pixels.
+                if (typeof plot._seasExportFinish === 'function') {
+                    plot._seasExportFinish(expLayout, { width: w, height: h,
+                                                        fontK: fontK, isDark: isDark });
+                }
                 var fig = {
                     data: _exportData(plot.data, fontK),
-                    layout: _exportLayout(srcLayout, fontK, isDark),
+                    layout: expLayout,
                 };
                 return window.Plotly.toImage(fig, {
                     format: 'png', width: w, height: h, scale: scale });
