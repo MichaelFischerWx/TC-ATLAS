@@ -25028,11 +25028,25 @@
     // The shared TCToast: id replaces a previous announcement still on
     // screen, and the page's tcToastBottom() keeps it above the dock (at the
     // top of the map it covered the band switcher for its whole 8 s).
+    var _genesisNoticeEl = null;     // the arrival notice on screen (TCToast.show returns it)
+    var _genesisNoticeHeld = null;   // {n, auto}: an arrival that came while the map was hidden
     function _genesisAnnounceArrival(nDisturbances, isAutoRefresh) {
         if (!map) return;
+        // The map and its genesis poll run behind whichever tab the page opened
+        // on (a refresh on #seasonal still builds the map). Hold the notice
+        // until the Global Map is on screen; _irOnViewSwitch shows it then.
+        // _irPendingView covers a deep link whose tab module is still loading
+        // (data-view reads "map" until it lands).
+        var pend = window._irPendingView;
+        if (document.documentElement.getAttribute('data-view') !== 'map' ||
+            (pend && pend !== 'map')) {
+            _genesisNoticeHeld = { n: nDisturbances, auto: !!isAutoRefresh };
+            return;
+        }
+        _genesisNoticeHeld = null;
         var plural = nDisturbances === 1 ? '' : 's';
         var lead = isAutoRefresh ? 'Updated forecast · ' : '';
-        TCToast.show('DeepMind ' + _genesisVariantMemberTag() + ' ensemble guidance, not observed disturbances · tap a marker for details ·', {
+        _genesisNoticeEl = TCToast.show('DeepMind ' + _genesisVariantMemberTag() + ' ensemble guidance, not observed disturbances · tap a marker for details ·', {
             id: 'rt-genesis',
             title: lead + nDisturbances + ' genesis cluster' + plural,
             duration: 8000,
@@ -25040,6 +25054,18 @@
             action: { label: 'methods', onClick: function () { window._irOpenGenesisMethods(); } }
         });
         _ga('rt_genesis_toast', { n_disturbances: nDisturbances, auto: !!isAutoRefresh });
+    }
+    function _genesisShowHeldNotice() {
+        var h = _genesisNoticeHeld;
+        _genesisNoticeHeld = null;
+        if (!h || !_rtGenesisVisible) return;
+        _genesisAnnounceArrival(h.n, h.auto);
+    }
+    function _genesisDropNotice() {
+        var t = _genesisNoticeEl;
+        _genesisNoticeEl = null;
+        // TCToast has no hide call; its own timer copes with a removed node.
+        if (t && t.parentNode) t.parentNode.removeChild(t);
     }
 
     function _loadGenesis(isAutoRefresh) {
@@ -26549,11 +26575,21 @@
         _envHoverSeq++;
         if (_envHoverTip) _envHoverTip.style.display = 'none';
     }
-    // Every RT tab switch (realtime_ir.html _switchIRViewNow) and a hidden page
-    // drop both cursor readouts: they are position:fixed on <body>, so a box
-    // left showing would float over whatever tab comes next.
+    // Tab switches and a hidden page drop both cursor readouts: they are
+    // position:fixed on <body>, so a box left showing would float over
+    // whatever tab comes next.
     function _irHideHoverTips() { _inspectHideTip(); _hideEnvHoverTip(); }
-    window._irHideHoverTips = _irHideHoverTips;
+    // Called on every RT tab switch (realtime_ir.html _switchIRViewNow), after
+    // data-view names the new view. Leaving the Global Map drops its
+    // transients (cursor readouts, the genesis notice); coming back shows a
+    // genesis notice that was held while the map was hidden.
+    window._irOnViewSwitch = function (view) {
+        try {
+            _irHideHoverTips();
+            if (view === 'map') _genesisShowHeldNotice();
+            else _genesisDropNotice();
+        } catch (e) { console.warn('[RT Monitor] view-switch cleanup failed', e); }
+    };
     document.addEventListener('visibilitychange', function () {
         if (document.hidden) _irHideHoverTips();
     });

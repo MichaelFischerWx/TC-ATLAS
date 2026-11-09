@@ -229,6 +229,10 @@
         if (!b) return label;
         return label + ' ' + _fmtLatRange(b[0], b[1]) + ', ' + _fmtLonRange(b[2], b[3]);
     }
+    // Chart-header form of _relativeSstNote().
+    function _relativeSstShort() {
+        return 'relative to the ' + _fmtLatRange(OISST_TROPICAL_BOX[0], OISST_TROPICAL_BOX[1]) + ' mean';
+    }
     function _relativeSstNote() {
         var t = OISST_TROPICAL_BOX;
         // _fmtLonRange can't express a full circle (0-360 reads "0°–0°").
@@ -1451,77 +1455,43 @@
         seasNewPlot(el, traces, layout,
                     { responsive: true, displaylogo: false });
 
-        // A saved PNG travels without the chips and note around it, so it
-        // carries its own title and credit lines: what is plotted, the
-        // season and date, record standing, the climatology / grouping
-        // periods, and the ACE definition and sources (_addPlotSaveBtn).
+        // A saved PNG travels without the chips around it, so it carries a
+        // title (what, which season, through when) and ONE status line:
+        // where the season stands and whether it is on record pace. The
+        // legend already names the periods behind the median, bands and
+        // record lines — don't repeat them here.
         var seasonLbl = (st && st.season) ? _aceSeasonLabel(basin, st.season) : '';
-        var title = cl.name + ' ACE' + (seasonLbl ? ' · ' + seasonLbl +
-            (isPct ? ' season as % of the 1991-2020 mean to date'
-                   : ' season to date') : '') +
-            ((st && st.ace !== null) ? ' (through ' + _aceDayLabel(basin, st.today) + ')' : '');
+        var title = cl.name + ' ACE' + (seasonLbl ? ' · ' + seasonLbl + ' season' +
+            (isPct ? ' as % of normal' : '') : '') +
+            ((st && st.ace !== null) ? ', through ' + _aceDayLabel(basin, st.today) : '');
         var credit = [];
         if (st && st.ace !== null) {
-            credit.push(seasonLbl + ': ' + st.ace.toFixed(1) + ' ACE from ' +
-                st.storms + ' storm' + (st.storms === 1 ? '' : 's') +
-                (st.pct !== null ? ', ' + Math.round(st.pct) +
-                    '% of the 1991-2020 mean to date (' + st.meanToDate.toFixed(1) + ')' : '') +
-                (!st.rank ? ''
-                    : (st.rank.below === st.rank.n)
-                        ? ', above all ' + st.rank.n + ' 1991-2020 seasons for the date'
-                    : (st.rank.below === 0 && !st.rank.ties)
-                        ? ', below all ' + st.rank.n + ' 1991-2020 seasons for the date'
-                    : ', ' + _ordinal(Math.round(st.rank.pct)) + ' percentile for the date'));
-            var recParts = [];
-            if (st.rec && st.rec.max > 0) {
-                var span = st.rec.span[0] + '-' + st.rec.span[1];
-                recParts.push(st.rec.aheadOfRecord
-                    ? 'RECORD PACE: ahead of every complete ' + span + ' season on this date ' +
-                      '(previous high ' + st.rec.max.toFixed(1) + ', ' +
-                      _aceSeasonLabel(basin, st.rec.maxSeason) + ')'
-                    : 'Not record pace: the ' + span + ' high for this date is ' +
-                      st.rec.max.toFixed(1) + ' (' + _aceSeasonLabel(basin, st.rec.maxSeason) + ')');
+            var bits = [st.ace.toFixed(1) + ' ACE'];
+            if (st.pct !== null) bits.push(Math.round(st.pct) + '% of the 1991-2020 normal');
+            if (st.rank) {
+                bits.push((st.rank.below === st.rank.n) ? 'above every 1991-2020 season'
+                    : (st.rank.below === 0 && !st.rank.ties) ? 'below every 1991-2020 season'
+                    : _ordinal(Math.round(st.rank.pct)) + ' percentile');
             }
-            if (cl.record) {
-                recParts.push('season record ' + cl.record.ace.toFixed(1) + ' (' +
-                    _aceSeasonLabel(basin, cl.record.season) + ')' +
-                    (st.ace > cl.record.ace ? ', already exceeded' : ''));
+            if (cl.record && st.ace > cl.record.ace) {
+                bits.push('new season record (was ' + cl.record.ace.toFixed(1) + ', ' +
+                    _aceSeasonLabel(basin, cl.record.season) + ')');
+            } else if (st.rec && st.rec.max > 0) {
+                var recSeason = _aceSeasonLabel(basin, st.rec.maxSeason);
+                bits.push(st.rec.aheadOfRecord
+                    ? 'record pace (ahead of ' + recSeason + ', ' + st.rec.max.toFixed(1) + ' by this date)'
+                    : 'not record pace (' + recSeason + ' had ' + st.rec.max.toFixed(1) + ' by this date)');
             }
-            if (recParts.length) credit.push(recParts.join(' · '));
+            credit.push(bits.join(' · '));
         }
-        var bandsTxt = 'shading: 10th-90th and 25th-75th percentiles of the ' +
-            (cl.n_climo_seasons || 30) + ' seasons of 1991-2020';
-        if (isPct) {
-            credit.push('Line: season-to-date ACE divided by the 1991-2020 mean ' +
-                'to date; dashed = 100%');
-        } else if (grouping) {
+        if (grouping && !isPct) {
             var gg = grouping.group;
-            credit.push('Group means of the complete ' +
-                _aceSeasonLabel(basin, grouping.first) + '-' +
+            credit.push('Groups: complete ' + _aceSeasonLabel(basin, grouping.first) + '-' +
                 _aceSeasonLabel(basin, grouping.last) + ' seasons by ' +
                 (gg.kind === 'enso'
-                    ? 'ENSO phase (relative Niño 3.4, ' + _aceMonthSpan(grouping.months) +
-                      ' mean, ±0.5 °C after ×' + grouping.scale.toFixed(2) + ' rescaling)'
-                    : gg.label + ' (' + _aceMonthSpan(grouping.months) + ' mean, thirds)') +
-                '; legend = group (seasons): mean season total · ' + bandsTxt);
-        } else {
-            credit.push('Dashed: 1991-2020 median · ' + bandsTxt +
-                (cl.record_pace ? ' · dotted: fastest and slowest complete ' +
-                    cl.record_pace.seasons[0] + '-' + cl.record_pace.seasons[1] +
-                    ' seasons on each date' : ''));
+                    ? 'ENSO phase (relative Niño 3.4, ' + _aceMonthSpan(grouping.months) + ', ±0.5 °C)'
+                    : gg.label + ' thirds (' + _aceMonthSpan(grouping.months) + ')'));
         }
-        var cmpS = state.acePace.compare;
-        if (cmpS && !isPct) {
-            var cmpY = (cmpS === 'record') ? cl.record.season : parseInt(cmpS, 10);
-            credit[credit.length - 1] += ' · blue: the ' + _aceSeasonLabel(basin, cmpY) +
-                ' season' + (cmpS === 'record' ? ' (season record)' : '');
-        }
-        var ACE_TOTAL_SHORT = { NH: 'NA + EP + WP + NI, Jan-Dec', SH: 'SI + SP, Jul-Jun',
-                                GL: 'all six basins, calendar year' };
-        credit.push((ACE_TOTAL_SHORT[basin] ? basin + ' = ' + ACE_TOTAL_SHORT[basin] + ' · ' : '') +
-            'ACE = 10⁻⁴ Σ v² over 6-hourly tropical/subtropical points ≥ 34 kt, ' +
-            '1-minute NHC/JTWC winds · IBTrACS v04r01; live ATCF best tracks' +
-            ((st && st.through) ? ' through ' + st.through.replace('T', ' ') : ''));
         el._seasExportDecorate = function (lay, box) {
             lay.title = { text: title, font: { size: 16, color: BRAND.text } };
             // The title and credit lines own the top of the export, so the
@@ -2787,20 +2757,19 @@
         var insetTraces = _scatterInsetBuildTraces();
         var allTraces = traces.concat(insetTraces);
         layout.geo2 = _insetGeoLayout();
-        var relNote = state.scatter.variable === 'sst_rel'
-            ? ' ' + _relativeSstNote() : '';
-        var scCredit = (narrow ? [titleWhat] : []).concat([OISST_CREDIT_MONTHLY,
-            'X: ' + _regionDomainText(state.scatter.x) + relNote,
-            'Y: ' + _regionDomainText(state.scatter.y) + relNote +
-            ' (area-weighted means)']);
-        var scColor = 'Color: ' + (ACE_BASIN_LABEL[aceBasin] || aceBasin) + ' ACE of ' +
-            (shSeason ? 'the season starting that July' : 'that season') +
-            ' (IBTrACS, 1-minute NHC/JTWC winds)';
-        _applyDataCredit(layout, narrow ? scCredit : scCredit.concat([scColor]), el, true);
+        // One line: the two boxes (the title names the variable and month,
+        // the colorbar the basin). A Southern Hemisphere basin adds which
+        // season the color pairs with.
+        var scLine = 'X: ' + _regionDomainText(state.scatter.x) +
+            ' · Y: ' + _regionDomainText(state.scatter.y) +
+            (state.scatter.variable === 'sst_rel' ? ' · both ' + _relativeSstShort() : '');
+        var scParts = [scLine].concat(shSeason ? ['color: ACE of the season starting that July'] : []);
+        var scHead = narrow ? [titleWhat] : [];
+        _applyDataCredit(layout, scHead.concat(narrow ? [scLine] : scParts), el, true);
         seasReact(el, allTraces, layout,
                      { responsive: true, displaylogo: false });
         el._seasExportDecorate = function (lay, box) {
-            _replaceDataCredit(lay, scCredit.concat([scColor]), box, true);
+            _replaceDataCredit(lay, scHead.concat(scParts), box, true);
         };
     }
 
@@ -5906,13 +5875,11 @@
         // mean, so a saved PNG stands on its own. A phone shows the title
         // alone (seven wrapped credit lines left no room for the plot); its
         // saves still get the full lines.
-        var idxCredit = [OISST_CREDIT_MONTHLY,
-            (v === 'sst_dt') ? 'departures from each calendar month\'s linear trend, 1982-present'
-            : (v === 'sst_rel') ? 'anomalies vs 1991-2020, ' + _relativeSstNote()
-            : 'anomalies vs the 1991-2020 monthly climatology',
-            'dotted: ±0.5 °C El Niño / La Niña thresholds' +
-            (v === 'sst_rel' ? ' (relative Niño 3.4, the ENSO definition used on this tab)' : '') +
-            ' · stars: current month, preliminary'];
+        var idxCredit = [
+            (v === 'sst_dt') ? 'OISST departures from each month\'s linear trend'
+            : (v === 'sst_rel') ? 'OISST anomalies vs 1991-2020, ' + _relativeSstShort()
+            : 'OISST anomalies vs 1991-2020',
+            'dotted: ±0.5 °C ENSO thresholds · (P) preliminary'];
         if (!idxNarrow) _applyDataCredit(layout, idxCredit, el);
         seasReact(el, traces, layout,
                      { responsive: true, displaylogo: false });
