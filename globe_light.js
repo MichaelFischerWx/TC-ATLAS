@@ -68,7 +68,8 @@
     var elong = Math.acos(Math.max(-1, Math.min(1, cosE)));
     moon.illum = (1 - Math.cos(elong)) / 2;
     moon.waxing = wrap180((m.lam - sLam) / RAD) > 0;
-    return { sun: sun, moon: moon, date: date };
+    var gmst = ((gmstDeg(d) % 360) + 360) % 360;
+    return { sun: sun, moon: moon, date: date, gmst: gmst * RAD };   // gmst: radians, turns sky (RA) into the globe frame
   }
 
   // MapLibre's atmosphere uses u_sun_pos = -cartesian(light.position), rotated
@@ -251,5 +252,174 @@
     };
   }
 
-  window.GlobeLight = { bodies: bodies, atmosphereLight: atmosphereLight, createLayer: createLayer };
+  // ── sky: stars, sun, moon ─────────────────────────────────────────────────
+  // Drawn FIRST (inserted before the style's background layer), so the globe
+  // itself hides whatever is behind it — the sun can set behind the limb.
+  // Positions go through the globe camera matrix (mainMatrix, unit = one Earth
+  // radius, origin = Earth's center):
+  //   stars and sun are directions (w = 0, at infinity),
+  //   the moon is a real point 60.3 Earth radii out (w = 1), so its parallax
+  //   against the stars is right for wherever the camera sits.
+  // Sizes are true angular sizes (sun and moon ~0.53°), with a glare halo
+  // around the sun so it reads at any zoom.
+  var STAR_VS =
+    'attribute vec3 a_star;uniform mat4 u_m;uniform float u_gmst;uniform float u_px;' +
+    'varying float v_b;varying vec3 v_c;' +
+    'void main(){float lon=a_star.x-u_gmst;float dec=a_star.y;' +
+    'vec4 c=u_m*vec4(sin(lon)*cos(dec),sin(dec),cos(lon)*cos(dec),0.0);' +
+    'if(c.w<=0.0){gl_Position=vec4(2.0,2.0,2.0,1.0);gl_PointSize=1.0;v_b=0.0;v_c=vec3(0.0);return;}' +
+    'gl_Position=vec4(c.xy/c.w,0.0,1.0);' +
+    'float m=a_star.z;v_b=clamp(1.15-m*0.17,0.12,1.0);' +
+    'gl_PointSize=max(1.0,2.8-m*0.33)*u_px;' +
+    'float h=fract(sin(a_star.x*91.7+a_star.y*13.1)*43758.5);' +
+    'v_c=h<0.18?vec3(0.72,0.82,1.0):(h>0.9?vec3(1.0,0.86,0.70):vec3(1.0));}';
+  var STAR_FS =
+    'precision mediump float;varying float v_b;varying vec3 v_c;' +
+    'void main(){float r=length(gl_PointCoord-0.5)*2.0;float a=v_b*(1.0-smoothstep(0.35,1.0,r));' +
+    'gl_FragColor=vec4(v_c*a,a);}';
+  // Billboard for sun and moon: a_corner in [-1,1]², u_rad = half-size in px.
+  var BODY_VS =
+    'attribute vec2 a_corner;uniform mat4 u_m;uniform vec4 u_pos;uniform vec3 u_toward;' +
+    'uniform vec2 u_vp;uniform float u_rad;varying vec2 v_px;varying vec2 v_dir;' +
+    'void main(){vec4 c=u_m*u_pos;' +
+    'if(c.w<=0.0){gl_Position=vec4(2.0,2.0,2.0,1.0);v_px=vec2(0.0);v_dir=vec2(1.0,0.0);return;}' +
+    'vec2 ndc=c.xy/c.w;' +
+    // Screen direction toward the sun from this body (moon phase orientation).
+    'vec4 q=u_m*vec4(u_pos.xyz+u_toward*5.0,u_pos.w);vec2 d=(q.xy/max(q.w,1e-6)-ndc)*u_vp;' +
+    'v_dir=length(d)>1e-6?normalize(d):vec2(1.0,0.0);' +
+    'v_px=a_corner*u_rad;gl_Position=vec4(ndc+v_px*2.0/u_vp,0.0,1.0);}';
+  var SUN_FS =
+    'precision mediump float;varying vec2 v_px;uniform float u_core;uniform float u_win;' +
+    'void main(){float d=length(v_px);' +
+    'float disk=1.0-smoothstep(u_core-1.0,u_core+1.0,d);' +
+    'float glow=0.55*exp(-d/(u_core*2.0))+0.22*exp(-d/(u_core*7.0))+0.07*exp(-d/(u_core*22.0));' +
+    'float ang=atan(v_px.y,v_px.x);' +
+    'float rays=0.10*exp(-d/(u_core*12.0))*pow(abs(cos(ang*3.0)),60.0);' +
+    // Fade the far glare to zero inside the billboard so its square edge never shows.
+    // (u_win = the billboard half-size; a separate name because a uniform shared by
+    // both stages must match precision, and the vertex stage's u_rad is highp.)
+    'float win=1.0-smoothstep(u_win*0.45,u_win*0.98,d);' +
+    'float I=clamp(disk+(glow+rays)*win,0.0,1.0);' +
+    'vec3 col=mix(vec3(1.0,0.86,0.62),vec3(1.0,0.98,0.94),clamp(disk+glow*0.8,0.0,1.0));' +
+    'gl_FragColor=vec4(col*I,I);}';
+  var MOON_FS =
+    'precision mediump float;varying vec2 v_px;varying vec2 v_dir;uniform float u_core;' +
+    'uniform float u_cosi;uniform float u_illum;' +
+    'void main(){vec2 p=v_px/u_core;float r=length(p);' +
+    'float halo=0.10*u_illum*exp(-max(r-1.0,0.0)*1.6);' +
+    'if(r>1.0){gl_FragColor=vec4(vec3(0.85,0.88,0.95)*halo,halo);return;}' +
+    'float x=dot(p,v_dir);float y=dot(p,vec2(-v_dir.y,v_dir.x));float z=sqrt(max(0.0,1.0-r*r));' +
+    'float sini=sqrt(max(0.0,1.0-u_cosi*u_cosi));' +
+    'float lit=smoothstep(-0.04,0.04,x*sini+z*u_cosi);' +
+    'float shade=mix(0.05,0.92*(0.75+0.25*z),lit);' +            // earthshine on the dark side, limb darkening on the lit
+    'float edge=1.0-smoothstep(0.92,1.0,r);' +
+    'float a=edge;gl_FragColor=vec4(vec3(0.93,0.92,0.88)*shade*a,a);}';
+
+  function createSkyLayer(opts) {
+    opts = opts || {};
+    var map = null, gl = null, starBuf = null, quadBuf = null, nStars = 0, P = {};
+    var b = null;
+
+    function link(vs, fs, names) {
+      var p = gl.createProgram();
+      gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vs));
+      gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error('[globeSky] link: ' + gl.getProgramInfoLog(p)); return null; }
+      var loc = {};
+      names.forEach(function (n) {
+        loc[n] = n.indexOf('a_') === 0 ? gl.getAttribLocation(p, n) : gl.getUniformLocation(p, n);
+      });
+      return { prog: p, loc: loc };
+    }
+    // Seeded random sky (same stars every visit), fixed in RA/Dec so it turns
+    // with sidereal time like the sun does. ~1600 stars, mostly faint.
+    function starData(n) {
+      var seed = 914117, a = new Float32Array(n * 3);
+      function rnd() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+      for (var i = 0; i < n; i++) {
+        a[i * 3] = rnd() * 2 * Math.PI;
+        a[i * 3 + 1] = Math.asin(2 * rnd() - 1);
+        a[i * 3 + 2] = 0.5 + 6.0 * Math.pow(rnd(), 0.32);   // magnitude-ish, 0.5 (rare) .. 6.5
+      }
+      return a;
+    }
+
+    var layer = {
+      id: opts.id || 'globe-sky', type: 'custom', ml5: true,
+      onAdd: function (m, g) {
+        map = m; gl = g;
+        var stars = starData(opts.stars || 1600); nStars = stars.length / 3;
+        starBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, starBuf); gl.bufferData(gl.ARRAY_BUFFER, stars, gl.STATIC_DRAW);
+        quadBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
+        P.star = link(STAR_VS, STAR_FS, ['a_star', 'u_m', 'u_gmst', 'u_px']);
+        var bodyU = ['a_corner', 'u_m', 'u_pos', 'u_toward', 'u_vp', 'u_rad', 'u_core', 'u_win'];
+        P.sun = link(BODY_VS, SUN_FS, bodyU);
+        P.moon = link(BODY_VS, MOON_FS, bodyU.concat(['u_cosi', 'u_illum']));
+      },
+      render: function (g, arg) {
+        if (!gl || !b || !arg || !arg.defaultProjectionData) return;
+        var pd = arg.defaultProjectionData;
+        if (!(pd.projectionTransition > 0.99)) return;   // a sky only makes sense on the globe
+        var M = pd.mainMatrix, W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+        var fov = ((map.transform && map.transform.fov) || 36.87) * Math.PI / 180;
+        var f = (H / 2) / Math.tan(fov / 2);                 // px per radian at screen center
+        var dpr = (window.devicePixelRatio || 1);
+        gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.disable(gl.DEPTH_TEST);
+        // stars
+        var S = P.star;
+        if (S) {
+          gl.useProgram(S.prog);
+          gl.bindBuffer(gl.ARRAY_BUFFER, starBuf);
+          gl.enableVertexAttribArray(S.loc.a_star);
+          gl.vertexAttribPointer(S.loc.a_star, 3, gl.FLOAT, false, 0, 0);
+          gl.uniformMatrix4fv(S.loc.u_m, false, M);
+          gl.uniform1f(S.loc.u_gmst, b.gmst);
+          gl.uniform1f(S.loc.u_px, Math.min(2, dpr));
+          gl.drawArrays(gl.POINTS, 0, nStars);
+          gl.disableVertexAttribArray(S.loc.a_star);
+        }
+        function body(Q, pos, w, core, rad, extra) {
+          if (!Q) return;
+          gl.useProgram(Q.prog);
+          gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+          gl.enableVertexAttribArray(Q.loc.a_corner);
+          gl.vertexAttribPointer(Q.loc.a_corner, 2, gl.FLOAT, false, 0, 0);
+          gl.uniformMatrix4fv(Q.loc.u_m, false, M);
+          gl.uniform4f(Q.loc.u_pos, pos[0], pos[1], pos[2], w);
+          gl.uniform3f(Q.loc.u_toward, b.sun.vec[0], b.sun.vec[1], b.sun.vec[2]);
+          gl.uniform2f(Q.loc.u_vp, W, H);
+          gl.uniform1f(Q.loc.u_rad, rad);
+          gl.uniform1f(Q.loc.u_core, core);
+          if (Q.loc.u_win) gl.uniform1f(Q.loc.u_win, rad);
+          if (extra) extra(Q.loc);
+          gl.drawArrays(gl.TRIANGLES, 0, 6);
+          gl.disableVertexAttribArray(Q.loc.a_corner);
+        }
+        // Moon: true angular radius 0.26° (min 2.5 px so a thin crescent stays findable).
+        var mv = b.moon.vec, mcore = Math.max(2.5 * dpr, f * Math.tan(0.259 * RAD));
+        body(P.moon, [mv[0] * 60.27, mv[1] * 60.27, mv[2] * 60.27], 1, mcore, mcore * 4, function (l) {
+          gl.uniform1f(l.u_cosi, 2 * b.moon.illum - 1);
+          gl.uniform1f(l.u_illum, b.moon.illum);
+        });
+        // Sun: true angular radius 0.267°, glare out to ~30 radii.
+        var score = Math.max(3 * dpr, f * Math.tan(0.2665 * RAD));
+        body(P.sun, b.sun.vec, 0, score, score * 30, null);
+      },
+      onRemove: function () {
+        if (!gl) return;
+        [starBuf, quadBuf].forEach(function (x) { if (x) gl.deleteBuffer(x); });
+        Object.keys(P).forEach(function (k) { if (P[k]) gl.deleteProgram(P[k].prog); });
+        P = {}; gl = null; map = null;
+      }
+    };
+    return {
+      layer: layer,
+      setBodies: function (bb) { b = bb; if (map) map.triggerRepaint(); }
+    };
+  }
+
+  window.GlobeLight = { bodies: bodies, atmosphereLight: atmosphereLight, createLayer: createLayer, createSkyLayer: createSkyLayer };
 })();

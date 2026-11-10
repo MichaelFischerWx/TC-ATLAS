@@ -491,10 +491,16 @@
             });
         }
         z = z == null ? 400 : z;
-        var layers = this._gl.getStyle().layers, before = null;
-        for (var i = 0; i < layers.length; i++) {
-            var lz = this._glz[layers[i].id];
-            if (lz != null && lz > z) { before = layers[i].id; break; }
+        // getLayersOrder() lists custom (WebGL) layers too; getStyle().layers
+        // leaves them out, so with two custom layers (IR mosaic + globe night
+        // shade) the later one could land above a higher-z one.
+        var ids = (typeof this._gl.getLayersOrder === 'function')
+            ? this._gl.getLayersOrder()
+            : this._gl.getStyle().layers.map(function (l) { return l.id; });
+        var before = null;
+        for (var i = 0; i < ids.length; i++) {
+            var lz = this._glz[ids[i]];
+            if (lz != null && lz > z) { before = ids[i]; break; }
         }
         if (before) this._gl.addLayer(def, before); else this._gl.addLayer(def);
         this._glz[def.id] = z;

@@ -3294,10 +3294,11 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
 .ir-layers-wrap .ir-3d-mode-btn { order: 1; }
 /* Globe view (spike): space behind the sphere. MapLibre clears the canvas
    to transparent outside the globe, so the map container shows through. */
+/* Stars, sun and moon are drawn by the GL sky layer (globe_light.js), so
+   they turn with the camera; this is only the deep-space backdrop. */
 #ir-map.lflet-globe {
     background-color: #000;
-    background-image: var(--globe-stars, none), radial-gradient(ellipse at center, #0a1122 0%, #03050b 70%, #000 100%);
-    background-size: 1024px 1024px, auto;
+    background-image: radial-gradient(ellipse at center, #070c18 0%, #02040a 70%, #000 100%);
 }
 
 /* Globe lighting panel (Day / night, City lights + sun/moon readout).
@@ -3310,9 +3311,9 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     border: 1px solid rgba(148, 163, 184, 0.28); border-radius: var(--radius-lg);
     padding: 8px 10px; box-shadow: var(--shadow-2);
     font: 600 11px/1.25 'DM Sans', system-ui, sans-serif; color: #cbd5e1;
-    max-width: 280px;
+    max-width: 300px;
 }
-.ir-globe-ctl-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.ir-globe-ctl-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
 .ir-globe-ctl-btn {
     background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.14);
     color: #94a3b8; border-radius: var(--radius-sm); padding: 5px 8px; cursor: pointer;
@@ -3321,8 +3322,12 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
 }
 .ir-globe-ctl-btn.active { background: var(--sel-fill-glass); border-color: var(--sel-fill-glass); color: var(--sel-ink); }
 .ir-globe-ctl-btn:disabled { opacity: 0.4; cursor: default; }
+.ir-globe-ctl-tilt { display: flex; align-items: center; gap: 6px; margin-top: 7px; color: #94a3b8; font-weight: 600; }
+.ir-globe-ctl-tilt input { flex: 1; min-width: 0; accent-color: #4a9b6e; cursor: pointer; }
+.ir-globe-ctl-sun { color: #fcd34d; border-color: rgba(252, 211, 77, 0.35); background: rgba(252, 211, 77, 0.08); }
 .ir-globe-ctl-read { margin-top: 7px; font-weight: 500; font-size: 10px; color: #cbd5e1; font-variant-numeric: tabular-nums; }
-.ir-globe-ctl-read > div + div { margin-top: 2px; }
+.ir-globe-ctl-line { display: block; }
+.ir-globe-ctl-line + .ir-globe-ctl-line { margin-top: 2px; }
 .ir-globe-ctl-k { color: #94a3b8; }
 .ir-3d-mode-btn {
     display: inline-flex;
@@ -3707,7 +3712,15 @@ html:not([data-view="map"]) #ir-display-wrap {
    Lift it clear of the deck. !important overrides the inline style. */
 @media (max-width: 768px) {
     #ir-3d-tilt-ctl { bottom: 128px !important; }
-    #ir-globe-ctl { bottom: 128px; }
+    /* Phone: dock full-width just above the loop bar instead of floating
+       over the globe (the camera is padded to keep the sphere above it). */
+    #ir-globe-ctl { left: 12px; right: 12px; bottom: 128px; max-width: none; padding: 7px 8px; }
+    .ir-globe-ctl-btn { padding: 7px 4px; }
+    .ir-globe-ctl-tilt { display: none; }
+    .ir-globe-ctl-read { margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ir-globe-ctl-line { display: inline; }
+    .ir-globe-ctl-line + .ir-globe-ctl-line::before { content: ' · '; color: #64748b; }
+    .ir-globe-ctl-far { display: none; }
 }
 
 /* …and the SAME controls bleed over the storm-detail pane. Opening a

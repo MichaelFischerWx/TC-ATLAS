@@ -3477,7 +3477,9 @@
     // Zoom at which the whole sphere fits with a margin: MapLibre's globe radius
     // is worldSize / 2π px, with worldSize = 512 · 2^z.
     function _rtGlobeFitZoom(gl) {
-        var c = gl.getContainer(), px = Math.min(c.clientWidth || 800, c.clientHeight || 600);
+        var c = gl.getContainer(), pd = (gl.getPadding && gl.getPadding()) || {};
+        var px = Math.min((c.clientWidth || 800) - (pd.left || 0) - (pd.right || 0),
+                          (c.clientHeight || 600) - (pd.top || 0) - (pd.bottom || 0));
         return Math.max(0, Math.log(0.45 * px * 2 * Math.PI / 512) / Math.LN2);
     }
     function _rtGlobeToggle(force) {
@@ -3496,14 +3498,30 @@
                 // a visible glow on the sunlit edge; gone once zoomed in.
                 gl.setSky({ 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 0.3, 4, 0.2, 6, 0] });
             } catch (e) {}
+            _rtGlobeShowPanel(true);
+            _rtGlobePadForPanel(gl);
             var fz = _rtGlobeFitZoom(gl);
             if (gl.getZoom() > fz) gl.easeTo({ zoom: fz, duration: 900 });
             _rtGlobeLightEnsure();
-            _rtGlobeShowPanel(true);
-            _rtGlobeStars(gl.getContainer());
+            // Camera freedom on the globe: right-/ctrl-drag (two-finger twist on
+            // touch) turns the view, the panel's Tilt slider pitches it toward
+            // the horizon — enough to watch the sun sit on the limb.
+            try {
+                if (gl.setMaxPitch) gl.setMaxPitch(80);
+                if (gl.dragRotate) gl.dragRotate.enable();
+                if (gl.touchZoomRotate) gl.touchZoomRotate.enableRotation();
+                if (!gl.__rtGlobePitchSync) { gl.__rtGlobePitchSync = true; gl.on('pitch', _rtGlobeSyncTilt); }
+            } catch (e) {}
         } else {
             _rtGlobeOn = false;
+            // Flat map: north up and top-down again, rotation off (as before).
+            try {
+                gl.jumpTo({ pitch: 0, bearing: 0 });
+                if (gl.dragRotate) gl.dragRotate.disable();
+                if (gl.touchZoomRotate) gl.touchZoomRotate.disableRotation();
+            } catch (e) {}
             map.setGlobe(false);
+            try { if (gl.setPadding) gl.setPadding({ top: 0, bottom: 0, left: 0, right: 0 }); } catch (e) {}
             try { gl.setSky(undefined); } catch (e) {}
             // Back to MapLibre's default viewport light (nothing on the flat map uses it).
             try { gl.setLight({ anchor: 'viewport', position: [1.15, 210, 30], color: '#ffffff', intensity: 0.5 }); } catch (e) {}
@@ -3523,8 +3541,8 @@
     // fetch it). Everything follows the DISPLAYED frame's time, so the
     // terminator sweeps with the loop. The night shade sits just above the
     // satellite (z 210) and below coastlines, tracks and markers.
-    var _GLOBE_LIGHT_SRC = 'globe_light.js?v=20261109gb2';
-    var _rtGlobeLight = null, _rtGlobeLightLoading = false, _rtGlobeBodies = null;
+    var _GLOBE_LIGHT_SRC = 'globe_light.js?v=20261110sk3';
+    var _rtGlobeLight = null, _rtGlobeLightLoading = false, _rtGlobeBodies = null, _rtGlobeSky = null;
     var _rtGlobeLightOpts = { night: true, lights: true };
     try {
         var _glo = JSON.parse(localStorage.getItem('rtGlobeLight') || 'null');
@@ -3552,6 +3570,16 @@
         });
         _rtGlobeLight.setOptions(_rtGlobeLightOpts);
         try { map._glAdd(_rtGlobeLight.layer, 210); } catch (e) { console.error('[globe] light layer add failed', e); }
+        // Sky (stars, sun, moon) goes UNDER everything, before the style's
+        // background layer, so the globe hides whatever is behind it.
+        if (GlobeLight.createSkyLayer) {
+            _rtGlobeSky = GlobeLight.createSkyLayer({ id: 'globe-sky' });
+            var _addSky = function () {
+                try { map._gl.addLayer(_rtGlobeSky.layer, map._gl.getLayer('bg') ? 'bg' : undefined); }
+                catch (e) { console.error('[globe] sky layer add failed', e); }
+            };
+            if (map._loaded || map._gl.isStyleLoaded()) _addSky(); else map._whenStyle(_addSky);
+        }
         _rtGlobeLightUpdate();
     }
     // Time of the frame on screen: the loop frame while animating/scrubbing,
@@ -3569,35 +3597,12 @@
         var b = GlobeLight.bodies(_rtGlobeFrameDate());
         _rtGlobeBodies = b;
         if (_rtGlobeLight) _rtGlobeLight.setBodies(b);
+        if (_rtGlobeSky) _rtGlobeSky.setBodies(b);
         var gl = map && map._gl;
         if (gl && gl.setLight) {
             try { gl.setLight(GlobeLight.atmosphereLight(b.sun.vec)); } catch (e) {}
         }
         _rtGlobePanelReadout();
-    }
-
-    // Starfield behind the sphere: one 1024² tile drawn once from a fixed
-    // seed (same sky every time), used as a CSS background on the map
-    // container — MapLibre clears the canvas to transparent off the globe.
-    var _rtGlobeStarsUrl = null;
-    function _rtGlobeStars(container) {
-        if (!container) return;
-        if (!_rtGlobeStarsUrl) {
-            try {
-                var c = document.createElement('canvas'); c.width = c.height = 1024;
-                var x = c.getContext('2d'), seed = 20261109;
-                var rnd = function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-                for (var i = 0; i < 900; i++) {
-                    var r = rnd(), m = r < 0.85 ? 0.5 + rnd() * 0.5 : 0.9 + rnd() * 0.9;
-                    var a = r < 0.85 ? 0.25 + rnd() * 0.45 : 0.6 + rnd() * 0.4;
-                    var hue = rnd();   // a few faintly blue or warm stars
-                    x.fillStyle = hue < 0.15 ? 'rgba(190,210,255,' + a + ')' : hue > 0.92 ? 'rgba(255,225,190,' + a + ')' : 'rgba(255,255,255,' + a + ')';
-                    x.beginPath(); x.arc(rnd() * 1024, rnd() * 1024, m, 0, Math.PI * 2); x.fill();
-                }
-                _rtGlobeStarsUrl = 'url(' + c.toDataURL('image/png') + ')';
-            } catch (e) { _rtGlobeStarsUrl = 'none'; }
-        }
-        container.style.setProperty('--globe-stars', _rtGlobeStarsUrl);
     }
 
     var _rtGlobePanel = null;
@@ -3614,11 +3619,24 @@
             '<div class="ir-globe-ctl-row">' +
             '<button type="button" class="ir-globe-ctl-btn" data-opt="night" title="Shade the night side from the sun position at the shown frame time">Day / night</button>' +
             '<button type="button" class="ir-globe-ctl-btn" data-opt="lights" title="City lights on the night side (NASA VIIRS 2012)">City lights</button>' +
+            '<button type="button" class="ir-globe-ctl-btn ir-globe-ctl-sun" id="ir-globe-face-sun" title="Turn the globe so the sun sits just past the limb at the shown frame time">Face the sun</button>' +
             '</div>' +
+            // Desktop only (CSS): phones tilt with a two-finger vertical drag.
+            '<label class="ir-globe-ctl-tilt" title="Tilt the camera toward the horizon. Right-drag turns the view.">Tilt ' +
+            '<input id="ir-globe-tilt" type="range" min="0" max="80" step="1" value="0"></label>' +
             '<div class="ir-globe-ctl-read" id="ir-globe-ctl-read"></div>';
         document.body.appendChild(box);
+        var tilt = box.querySelector('#ir-globe-tilt');
+        tilt.addEventListener('input', function () {
+            var gl = map && map._gl;
+            if (gl && _rtGlobeOn) { try { gl.setPitch(+tilt.value); } catch (e) {} }
+        });
+        box.querySelector('#ir-globe-face-sun').addEventListener('click', function (e) {
+            e.stopPropagation();
+            _rtGlobeFaceSun();
+        });
         box.addEventListener('click', function (e) {
-            var b = e.target.closest ? e.target.closest('.ir-globe-ctl-btn') : null;
+            var b = e.target.closest ? e.target.closest('.ir-globe-ctl-btn[data-opt]') : null;
             if (!b) return;
             var k = b.getAttribute('data-opt');
             _rtGlobeLightOpts[k] = !_rtGlobeLightOpts[k];
@@ -3632,7 +3650,7 @@
     }
     function _rtGlobeSyncPanel() {
         if (!_rtGlobePanel) return;
-        var btns = _rtGlobePanel.querySelectorAll('.ir-globe-ctl-btn');
+        var btns = _rtGlobePanel.querySelectorAll('.ir-globe-ctl-btn[data-opt]');
         for (var i = 0; i < btns.length; i++) {
             var on = !!_rtGlobeLightOpts[btns[i].getAttribute('data-opt')];
             btns[i].classList.toggle('active', on);
@@ -3647,10 +3665,59 @@
         if (!el || !_rtGlobeBodies) return;
         var s = _rtGlobeBodies.sun, m = _rtGlobeBodies.moon;
         el.innerHTML =
-            '<div><span class="ir-globe-ctl-k">Sun overhead</span> ' + _rtGlobeFmtLL(s.lat, s.lon) + '</div>' +
-            '<div><span class="ir-globe-ctl-k">Moon</span> ' + Math.round(m.illum * 100) + '% lit, ' +
-            (m.waxing ? 'waxing' : 'waning') + ' · over ' + _rtGlobeFmtLL(m.lat, m.lon) + '</div>';
+            '<span class="ir-globe-ctl-line"><span class="ir-globe-ctl-k">Sun overhead</span> ' + _rtGlobeFmtLL(s.lat, s.lon) + '</span>' +
+            '<span class="ir-globe-ctl-line"><span class="ir-globe-ctl-k">Moon</span> ' + Math.round(m.illum * 100) + '% lit, ' +
+            (m.waxing ? 'waxing' : 'waning') + '<span class="ir-globe-ctl-far"> · over ' + _rtGlobeFmtLL(m.lat, m.lon) + '</span></span>';
     }
+    // Phone: the lighting panel docks full-width above the loop bar. Pad the
+    // camera so the globe centers in the space above it instead of under it.
+    function _rtGlobePadForPanel(gl) {
+        try {
+            if (!gl.setPadding) return;
+            var narrow = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+            var pb = 0;
+            if (narrow && _rtGlobePanel && _rtGlobePanel.style.display !== 'none') {
+                var mr = gl.getContainer().getBoundingClientRect(), pr = _rtGlobePanel.getBoundingClientRect();
+                pb = Math.max(0, Math.round(mr.bottom - pr.top + 8));
+            }
+            gl.setPadding({ top: 0, bottom: pb, left: 0, right: 0 });
+        } catch (e) {}
+    }
+    function _rtGlobeSyncTilt() {
+        var el = document.getElementById('ir-globe-tilt'), gl = map && map._gl;
+        if (el && gl && _rtGlobeOn) el.value = Math.round(gl.getPitch());
+    }
+    // Turn the globe so the sun sits just past the limb: aim the camera at a
+    // point α beyond the antisolar point (east of it on a landscape screen,
+    // north on a portrait one — the sun then appears on that side).
+    // Worked in screen pixels: the room between the globe's center and the
+    // toolbar (portrait) or the side edge (landscape) sets how far out the
+    // sun can sit; zoom out until limb + sun fit, then α = atan(offset / f),
+    // with f from MapLibre's vertical FOV over the FULL map height (padding
+    // only moves the center).
+    function _rtGlobeFaceSun() {
+        var gl = map && map._gl;
+        if (!gl || !_rtGlobeOn || !_rtGlobeBodies) return;
+        var R = Math.PI / 180, s = _rtGlobeBodies.sun;
+        var c = gl.getContainer(), pd = (gl.getPadding && gl.getPadding()) || {};
+        var Wf = c.clientWidth || 800, Hf = c.clientHeight || 600;
+        var W = Wf - (pd.left || 0) - (pd.right || 0), H = Hf - (pd.top || 0) - (pd.bottom || 0);
+        var fov = ((gl.transform && gl.transform.fov) || 36.87) * R;
+        var f = (Hf / 2) / Math.tan(fov / 2);
+        var landscape = W >= H;
+        var TOOLBAR = 72, SUN = 38;            // px: map controls overlay; sun core + inner glare
+        var room = landscape ? (W / 2 - 40) : (H / 2 - TOOLBAR);
+        var fitR = 0.41 * Math.min(W, H);      // on-screen globe radius at the fit zoom (measured)
+        var Rpx = Math.min(fitR * Math.pow(2, -0.6), Math.max(40, room - SUN));
+        var zoom = Math.max(0, _rtGlobeFitZoom(gl) + Math.log(Rpx / fitR) / Math.LN2);
+        var alpha = Math.atan(Math.min(room, Rpx + SUN) / f);
+        var la1 = -s.lat * R, lo1 = (s.lon + 180) * R, brg = (landscape ? 90 : 0) * R;
+        var la2 = Math.asin(Math.sin(la1) * Math.cos(alpha) + Math.cos(la1) * Math.sin(alpha) * Math.cos(brg));
+        var lo2 = lo1 + Math.atan2(Math.sin(brg) * Math.sin(alpha) * Math.cos(la1), Math.cos(alpha) - Math.sin(la1) * Math.sin(la2));
+        var lon = ((lo2 / R + 540) % 360) - 180;
+        gl.flyTo({ center: [lon, la2 / R], zoom: zoom, bearing: 0, pitch: 0, duration: 1800, essential: true });
+    }
+    window._rtGlobeFaceSun = _rtGlobeFaceSun;
     function _rtGlobeShowPanel(show) {
         var box = _rtGlobeEnsurePanel();
         box.style.display = show ? '' : 'none';
