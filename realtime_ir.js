@@ -720,19 +720,6 @@
     // paths (addGIBSOverlay / _ir2aStill / loadGlobalAnimation) so the
     // periodic refresh can't sneak the imagery back in while it's hidden.
     var _satHidden = false;
-    // Globe hand-off: on the flat (MapLibre 4) page the Globe button reloads
-    // into the globe engine, leaving the channel and view center here so the
-    // globe opens where the visitor was (microwave keeps its own saved prefs).
-    // One-shot, 2 min.
-    var _rtGlobeHandoff = null;
-    try {
-        var _gho = JSON.parse(sessionStorage.getItem('rtGlobeHandoff') || 'null');
-        sessionStorage.removeItem('rtGlobeHandoff');
-        if (_gho && window.__rtGlobeBoot && Date.now() - (_gho.t || 0) < 120000) {
-            _rtGlobeHandoff = _gho;
-            if (/^(ir|vis|wv|combo)$/.test(_gho.p || '')) globalProduct = _gho.p;
-        }
-    } catch (e) {}
     // Full brightness — the global mosaic now renders at native opacity so it
     // matches the per-storm sector tiles (which are full-opacity). The old
     // 0.85/0.95 values dimmed the global view relative to the storm card.
@@ -3535,9 +3522,14 @@
         var want = (force != null) ? !!force : !_rtGlobeOn;
         if (want === _rtGlobeOn || !_rtGlobeAvailable()) return _rtGlobeOn;
         var gl = map._gl;
-        // Remember the choice: the next visit loads the globe engine directly
-        // (realtime_ir.html reads rtGlobe before choosing the engine).
-        try { if (want) localStorage.setItem('rtGlobe', '1'); else localStorage.removeItem('rtGlobe'); } catch (e) {}
+        // Every load opens flat; only a ?globe=1 link starts on the globe. Leaving
+        // the globe drops that flag from the address, so a refresh stays flat.
+        if (!want && /[?&]globe=1(&|$)/.test(location.search) && window.history && history.replaceState) {
+            try {
+                var _q = location.search.replace(/([?&])globe=1(&|$)/, '$1').replace(/[?&]$/, '');
+                history.replaceState(history.state, '', location.pathname + _q + location.hash);
+            } catch (e) {}
+        }
         if (want) {
             if (_rt3DOn) _rt3DToggle();      // spike: one camera mode at a time
             _rtGlobeOn = true;
@@ -3596,42 +3588,15 @@
         return _rtGlobeOn;
     }
     window._rtGlobeToggle = _rtGlobeToggle;
-    // Flat page (MapLibre 4, no globe projection): switch engines by reloading
-    // once with ?globe=1, handing over what the visitor was looking at.
-    function _rtGlobeReloadInto() {
-        try { localStorage.setItem('rtGlobe', '1'); } catch (e) {}
-        try {
-            var c = map && map.getCenter ? map.getCenter() : null;
-            sessionStorage.setItem('rtGlobeHandoff', JSON.stringify({
-                t: Date.now(),
-                p: _satHidden ? null : globalProduct,
-                c: c ? [c.lat, c.lng] : null
-            }));
-        } catch (e) {}
-        var q = location.search.replace(/([?&])globe=[01](&|$)/, '$1').replace(/[?&]$/, '');
-        location.replace(location.pathname + (q ? q + '&' : '?') + 'globe=1' + location.hash);
-    }
-    // Globe start (URL flag, saved choice, or a hand-off reload): face the
-    // spot the visitor left rather than the storm fit.
-    function _rtGlobeBootStart() {
-        _rtGlobeToggle(true);
-        var h = _rtGlobeHandoff;
-        if (!h || !_rtGlobeOn) return;
-        try {
-            if (h.c && isFinite(h.c[0]) && isFinite(h.c[1]) && map._gl) {
-                _firstFitDone = true;
-                map._gl.jumpTo({ center: [((h.c[1] + 540) % 360) - 180, Math.max(-60, Math.min(60, h.c[0]))],
-                                 zoom: _rtGlobeFitZoom(map._gl) });
-            }
-        } catch (e) {}
-    }
+    // Globe start from a ?globe=1 link.
+    function _rtGlobeBootStart() { _rtGlobeToggle(true); }
 
     // ── Globe lighting: sun, moon, night side, city lights ─────────────────
     // globe_light.js loads on the first globe toggle (flat-map visitors never
     // fetch it). Everything follows the DISPLAYED frame's time, so the
     // terminator sweeps with the loop. The night shade sits just above the
     // satellite (z 210) and below coastlines, tracks and markers.
-    var _GLOBE_LIGHT_SRC = 'globe_light.js?v=20261110bm1';
+    var _GLOBE_LIGHT_SRC = 'globe_light.js?v=20261110gz1';
     var _rtGlobeLight = null, _rtGlobeLightLoading = false, _rtGlobeBodies = null, _rtGlobeSky = null;
     var _rtGlobeLightOpts = { night: true, lights: true };
     try {
@@ -7231,23 +7196,17 @@
                 d3Btn.addEventListener('click', function () { _rt3DToggle(); });
 
                 // ── Globe view toggle ──
-                // On MapLibre 5 (globe engine loaded) it switches in place; on
-                // the default 4.7.1 page it reloads once into the globe engine.
+                // Switches the map projection in place (MapLibre 5). Every load
+                // opens flat; a ?globe=1 link starts on the globe.
                 var globeBtn = null;
-                if (map && map._gl) {
+                if (_rtGlobeAvailable()) {
                     globeBtn = L.DomUtil.create('button', 'ir-3d-mode-btn ir-globe-mode-btn', wrap);
                     globeBtn.id = 'ir-globe-mode-btn';
                     globeBtn.type = 'button';
-                    globeBtn.title = 'Show the Global Map as a globe, lit by the sun at the shown frame time. Drag to spin; right-drag to tilt and turn.'
-                        + (_rtGlobeAvailable() ? '' : ' (Reloads the page once.)');
+                    globeBtn.title = 'Show the Global Map as a globe, lit by the sun at the shown frame time. Drag to spin; right-drag to tilt and turn.';
                     globeBtn.innerHTML = '<span class="ir-3d-mode-glyph" aria-hidden="true"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span><span class="ir-3d-mode-text">Globe</span>';
-                    globeBtn.addEventListener('click', function () {
-                        if (_rtGlobeAvailable()) { _rtGlobeToggle(); return; }
-                        globeBtn.classList.add('active');
-                        globeBtn.disabled = true;
-                        _rtGlobeReloadInto();
-                    });
-                    if (_rtGlobeAvailable() && (window.__rtGlobeBoot || /[?&]globe=1\b/.test(location.search)))
+                    globeBtn.addEventListener('click', function () { _rtGlobeToggle(); });
+                    if (window.__rtGlobeBoot || /[?&]globe=1\b/.test(location.search))
                         setTimeout(_rtGlobeBootStart, 0);
                 }
 
@@ -27703,6 +27662,9 @@
         // on mobile so users can read the legend while configuring.
         document.body.classList.toggle('rt-layers-sheet-open',
             isMobile && _rtLayersPanelOpen);
+        // The globe lighting panel (fixed, z 650) sits above the desktop
+        // dropdown's stacking context and covered its lower rows: step aside.
+        document.body.classList.toggle('rt-layers-open', _rtLayersPanelOpen);
 
         // Lazy-create + show the tap-dismiss backdrop on mobile.
         var bd = document.getElementById('ir-layers-backdrop');
@@ -28538,6 +28500,7 @@
                 backgroundColor: null,
                 logging: false,
                 scale: window.devicePixelRatio || 1,
+                onclone: _irExportZeroBg,
                 ignoreElements: function (el) {
                     return (el.classList && el.classList.contains('maplibregl-canvas'))
                         || el.id === 'ir-status-bar';
@@ -28685,6 +28648,7 @@
             var _overlayP = window.html2canvas(node, {
                 backgroundColor: null, useCORS: true, allowTaint: false,
                 logging: false, scale: capScale,
+                onclone: _irExportZeroBg,
                 ignoreElements: function (el) {
                     return (el.classList && el.classList.contains('maplibregl-canvas'))
                         || el.id === 'ir-status-bar'
@@ -35163,11 +35127,14 @@
      *  e.g. .ir-image-container's #080e1a), and compositing the layer over
      *  the GL imagery paints the satellite data out. */
     function _irExportZeroBg(clonedDoc) {
-        ['ir-image-container', 'ir-detail-map'].forEach(function (id) {
+        // #ir-map carries a solid pre-paint (#151617) and, on the globe, a
+        // space gradient; html2canvas paints them OVER the GL snapshot the
+        // overlay is composited onto, which saved a black map.
+        ['ir-image-container', 'ir-detail-map', 'ir-map'].forEach(function (id) {
             var e = clonedDoc.getElementById(id);
             if (e) e.style.background = 'transparent';
         });
-        var conts = clonedDoc.querySelectorAll('.leaflet-container, .leaflet-pane, .leaflet-tile-pane');
+        var conts = clonedDoc.querySelectorAll('.leaflet-container, .leaflet-pane, .leaflet-tile-pane, .maplibregl-map, .maplibregl-canvas-container');
         for (var i = 0; i < conts.length; i++) conts[i].style.background = 'transparent';
     }
 

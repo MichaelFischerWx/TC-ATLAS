@@ -293,26 +293,56 @@
     }
 
     // ── zoom patch: 8×8 tiles at the zoom that matches the screen ──
-    // Rebuilt around the view when the camera settles (moveend). Night-side
-    // tiles only — daytime ones would never show. Until a sharp tile lands its
-    // square holds the base (scaled up), so nothing pops in as a box.
-    var patch = null;   // {z, x0, y0, canvas, ctx, tex, upT, have: {}}
-    var cache = {}, cacheKeys = [], CACHE_MAX = 256;
+    // Re-centred around the view while the camera moves (throttled) and when
+    // it settles. Night-side tiles only — daytime ones would never show.
+    // A rebuilt window is filled from the sharpest pixels already in hand
+    // (that tile, a cached parent or children, else the base) and uploaded in
+    // the SAME task that moves the window, so the shader never pairs the new
+    // position with the old image (that mismatch made lights jump or blank).
+    var patch = null;   // {z, x0, y0, canvas, ctx, tex, upT, have: {}, queued: {}}
+    var cache = {}, cacheKeys = [], CACHE_MAX = 192;
     function cachePut(k, img) {
       if (!cache[k]) { cacheKeys.push(k); if (cacheKeys.length > CACHE_MAX) delete cache[cacheKeys.shift()]; }
       cache[k] = img;
     }
+    function patchUploadNow(p) {
+      if (!gl || p !== patch) return;
+      if (p.upT) { clearTimeout(p.upT); p.upT = null; }
+      if (!p.tex) p.tex = makeTex();
+      uploadCanvas(p.tex, p.canvas);
+      p.ready = true;
+      if (map) map.triggerRepaint();
+    }
     function patchUploadSoon() {
       if (!patch || patch.upT) return;
       var p = patch;
-      p.upT = setTimeout(function () {
-        p.upT = null;
-        if (!gl || p !== patch) return;
-        if (!p.tex) p.tex = makeTex();
-        uploadCanvas(p.tex, p.canvas);
-        p.ready = true;
-        if (map) map.triggerRepaint();
-      }, 250);
+      p.upT = setTimeout(function () { p.upT = null; patchUploadNow(p); }, 120);
+    }
+    // Best pixels for patch tile (i, j) without fetching: the tile itself,
+    // else an ancestor (scaled up), else all four children (scaled down),
+    // else the base. Returns true only for the tile itself (= sharp).
+    function patchFill(p, i, j) {
+      var nz = 1 << p.z, tx = ((p.x0 + i) % nz + nz) % nz, ty = p.y0 + j, dx = i * T, dy = j * T;
+      var own = cache[p.z + '/' + tx + '/' + ty];
+      if (own) { try { p.ctx.drawImage(own, dx, dy, T, T); } catch (e) {} return true; }
+      for (var k = 1; p.z - k > BASE_Z && k <= 4; k++) {
+        var par = cache[(p.z - k) + '/' + (tx >> k) + '/' + (ty >> k)];
+        if (par) {
+          var sz = T >> k, sx = (tx & ((1 << k) - 1)) * sz, sy = (ty & ((1 << k) - 1)) * sz;
+          try { p.ctx.drawImage(par, sx, sy, sz, sz, dx, dy, T, T); } catch (e) {}
+          return false;
+        }
+      }
+      if (p.z < MAX_Z) {
+        var kids = [], h = T / 2;
+        for (var q = 0; q < 4; q++) kids.push(cache[(p.z + 1) + '/' + (tx * 2 + (q & 1)) + '/' + (ty * 2 + (q >> 1))]);
+        if (kids[0] && kids[1] && kids[2] && kids[3]) {
+          for (var q2 = 0; q2 < 4; q2++) try { p.ctx.drawImage(kids[q2], dx + (q2 & 1) * h, dy + (q2 >> 1) * h, h, h); } catch (e) {}
+          return false;
+        }
+      }
+      patchFromBase(p, i, j);
+      return false;
     }
     // Draw base pixels into patch tile (i, j) (patch-relative).
     function patchFromBase(p, i, j) {
@@ -324,9 +354,20 @@
       var p = patch, s = 1 << (p.z - BASE_Z), nz = 1 << p.z, hit = false;
       for (var j = 0; j < PATCH; j++) for (var i = 0; i < PATCH; i++) {
         var tx = ((p.x0 + i) % nz + nz) % nz, ty = p.y0 + j;
-        if (Math.floor(tx / s) === bx && Math.floor(ty / s) === by && !p.have[i + ',' + j]) { patchFromBase(p, i, j); hit = true; }
+        if (Math.floor(tx / s) === bx && Math.floor(ty / s) === by && !p.have[i + ',' + j]) { patchFill(p, i, j); hit = true; }
       }
       if (hit) patchUploadSoon();
+    }
+    // A fetched tile lands in whatever window is current, if it belongs there
+    // (the window may have moved while it was in flight).
+    function patchPlace(z, x, y, img) {
+      var p = patch;
+      if (!p || p.z !== z) return;
+      var nz = 1 << z, i = ((x - p.x0) % nz + nz) % nz, j = y - p.y0;
+      if (i >= PATCH || j < 0 || j >= PATCH || p.have[i + ',' + j]) return;
+      try { p.ctx.drawImage(img, i * T, j * T, T, T); } catch (e) {}
+      p.have[i + ',' + j] = true;
+      patchUploadSoon();
     }
     function wantedPatch() {
       if (!map || !base) return null;
@@ -352,48 +393,45 @@
     function updatePatch() {
       if (!lightsOn || !nightOn || !gl) return;
       var w = wantedPatch();
-      if (!w) { if (patch) { patch.off = true; if (map) map.triggerRepaint(); } return; }
+      if (!w) { if (patch && !patch.off) { patch.off = true; if (map) map.triggerRepaint(); } return; }
       var p = patch;
-      var fits = p && p.z === w.z && w.vx0 >= p.x0 && w.vx1 < p.x0 + PATCH && w.vy0 >= p.y0 && w.vy1 < p.y0 + PATCH;
+      var fits = p && !p.off && p.z === w.z && w.vx0 >= p.x0 && w.vx1 < p.x0 + PATCH && w.vy0 >= p.y0 && w.vy1 < p.y0 + PATCH;
       if (!fits) {
         if (!p) {
           var cv = document.createElement('canvas'); cv.width = cv.height = PATCH * T;
           p = patch = { canvas: cv, ctx: cv.getContext('2d'), tex: null, upT: null };
         }
-        p.z = w.z; p.x0 = w.x0; p.y0 = w.y0; p.have = {}; p.queued = {}; p.ready = !!p.tex; p.gen = ++gen;
-        for (var j = 0; j < PATCH; j++) for (var i = 0; i < PATCH; i++) {
-          var nz = 1 << p.z, k = p.z + '/' + (((p.x0 + i) % nz + nz) % nz) + '/' + (p.y0 + j);
-          if (cache[k]) { try { p.ctx.drawImage(cache[k], i * T, j * T, T, T); } catch (e) {} p.have[i + ',' + j] = true; }
-          else patchFromBase(p, i, j);
-        }
-        // Drop queued patch tiles from the previous window.
+        p.z = w.z; p.x0 = w.x0; p.y0 = w.y0; p.have = {}; p.queued = {}; p.gen = ++gen;
+        for (var j = 0; j < PATCH; j++) for (var i = 0; i < PATCH; i++) if (patchFill(p, i, j)) p.have[i + ',' + j] = true;
+        // Drop queued patch tiles that fell out of the new window.
         queue = queue.filter(function (q) { return !q.patchGen || q.patchGen === p.gen; });
-        patchUploadSoon();
+        p.off = false;
+        patchUploadNow(p);      // new position + new pixels in the same task
       }
-      p.off = false;
-      // Fetch the visible, night-side tiles this window is still missing.
+      // Fetch the visible (+1 tile margin), night-side tiles still missing.
       var nzz = 1 << p.z;
-      for (var vy = w.vy0; vy <= w.vy1; vy++) for (var vx = w.vx0; vx <= w.vx1; vx++) {
+      for (var vy = w.vy0 - 1; vy <= w.vy1 + 1; vy++) for (var vx = w.vx0 - 1; vx <= w.vx1 + 1; vx++) {
         var ii = vx - p.x0, jj = vy - p.y0;
-        if (ii < 0 || jj < 0 || ii >= PATCH || jj >= PATCH || p.have[ii + ',' + jj] || p.queued[ii + ',' + jj]) continue;
+        if (vy < 0 || vy >= nzz || ii < 0 || jj < 0 || ii >= PATCH || jj >= PATCH || p.have[ii + ',' + jj] || p.queued[ii + ',' + jj]) continue;
         var tx = ((vx % nzz) + nzz) % nzz;
         if (!tileNight(p.z, tx, vy)) continue;
         p.queued[ii + ',' + jj] = true;
-        (function (pp, g, i, j, z, x, y) {
-          fetchTile({ z: z, x: x, y: y, rank0: -2000, patchGen: g,
+        var edge = (vx < w.vx0 || vx > w.vx1 || vy < w.vy0 || vy > w.vy1) ? 50 : 0;   // margin after visible
+        (function (pp, g, z, x, y, e) {
+          fetchTile({ z: z, x: x, y: y, rank0: -2000 + e, patchGen: g,
             stale: function () { return patch !== pp || pp.gen !== g; },
-            done: function (img) {
-              cachePut(z + '/' + x + '/' + y, img);
-              if (patch !== pp || pp.gen !== g) return;
-              try { pp.ctx.drawImage(img, i * T, j * T, T, T); } catch (e) {}
-              pp.have[i + ',' + j] = true;
-              patchUploadSoon();
-            } });
-        })(p, p.gen, ii, jj, p.z, tx, vy);
+            done: function (img) { cachePut(z + '/' + x + '/' + y, img); patchPlace(z, x, y, img); } });
+        })(p, p.gen, p.z, tx, vy, edge);
       }
     }
-    var moveT = null;
-    function onMoveEnd() { clearTimeout(moveT); moveT = setTimeout(updatePatch, 120); }
+    // Follow the camera while it moves (so sharper tiles start loading
+    // mid-zoom), and once more when it settles.
+    var moveT = null, lastMoveUpd = 0;
+    function onMove() {
+      var now = Date.now();
+      if (now - lastMoveUpd > 300) { lastMoveUpd = now; updatePatch(); }
+    }
+    function onMoveEnd() { clearTimeout(moveT); moveT = setTimeout(updatePatch, 60); }
 
     var layer = {
       id: opts.id || 'globe-light',
@@ -405,6 +443,7 @@
         var mesh = worldMesh(); nVerts = mesh.length / 2;
         gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
         map.on('moveend', onMoveEnd);
+        map.on('move', onMove);
         if (lightsOn) { loadLights(); onMoveEnd(); }
       },
       render: function (g, arg) {
@@ -445,7 +484,7 @@
       },
       onRemove: function () {
         if (!gl) return;
-        if (map) map.off('moveend', onMoveEnd);
+        if (map) { map.off('moveend', onMoveEnd); map.off('move', onMove); }
         clearTimeout(moveT);
         if (meshBuf) gl.deleteBuffer(meshBuf);
         if (base && base.tex) gl.deleteTexture(base.tex);

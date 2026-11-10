@@ -190,7 +190,11 @@
             dragRotate: false, pitchWithRotate: false,
             // Keep the WebGL backbuffer readable so PNG/GIF export (html2canvas /
             // getCanvas().toDataURL) captures the rendered map instead of blank.
+            // MapLibre 5 reads it ONLY from canvasContextAttributes (the top-level
+            // option is ignored there — saved maps came out black); 4.x reads
+            // the top-level one.
             preserveDrawingBuffer: true,
+            canvasContextAttributes: { preserveDrawingBuffer: true },
             attributionControl: { compact: true },
             renderWorldCopies: options.worldCopyJump !== false
         });

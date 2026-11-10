@@ -3716,6 +3716,7 @@ html:not([data-view="map"]) #basin-sidebar,
 html:not([data-view="map"]) #ir-global-env-cbars,
 /* The 3D-convection Tilt slider is position:fixed on <body> too. */
 html:not([data-view="map"]) #ir-3d-tilt-ctl,
+body.rt-layers-open #ir-globe-ctl,
 html:not([data-view="map"]) #ir-globe-ctl,
 /* The "Display" dropdown wrap is position:fixed on <body> and HOLDS the
    moved-in toggles, so hiding the individual toggles above isn't enough — the
