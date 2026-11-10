@@ -375,6 +375,20 @@
         var baseZ = baseZoomFor(active, z);
         // Coarse base (gapless) first, then sparse detail (storm sectors) on top.
         var levels = (z > baseZ) ? [baseZ, z] : [baseZ];
+        // A frame whose base is raised (global z5) would show holes while its z5
+        // tiles stream in, where the regular base (z4) used to be on screen at
+        // once. So the regular base level is also painted underneath — from
+        // tiles ALREADY in the cache only (never fetched), and only where a
+        // visible raised-base child is still unresolved.
+        var cacheOnlyZ = -1, baseVisSet = null;
+        var regularZ = Math.min(z, baseMaxZoom);
+        if (regularZ < baseZ && !comboMode) {
+          cacheOnlyZ = regularZ;
+          levels.unshift(regularZ);
+          baseVisSet = {};
+          var bv = visibleTiles(baseZ);
+          for (var bi = 0; bi < bv.length; bi++) baseVisSet[bv[bi][0] + '/' + bv[bi][1]] = 1;
+        }
 
         var pf = comboMode ? pairFrame(active) : null;   // paired Vis frame (null = none)
 
@@ -410,7 +424,8 @@
         for (var li = 0; li < levels.length; li++) {
           var lz = levels[li], n = 1 << lz, s = 1.0 / n;
           var vis = visibleTiles(lz);
-          for (var i = 0; i < vis.length; i++) {
+          var cacheOnly = (lz === cacheOnlyZ);
+          for (var i = 0; i < vis.length && !cacheOnly; i++) {
             loadTile(active, lz, vis[i][0], vis[i][1]);
             if (pf) loadTile(pf, lz, vis[i][0], vis[i][1], 1);
           }
@@ -419,6 +434,17 @@
             var cx = vis[j][0], cy = vis[j][1], rec = tiles[tkey(active, lz, cx, cy)];
             if (rec) rec.used = ++useClock;
             if (!rec || !rec.tex) continue;               // not loaded / known-absent → coarser base shows through
+            if (cacheOnly) {
+              // Only while a visible child at the raised base is unresolved —
+              // once they are in, the stand-in stops (no double draw).
+              var d = 1 << (baseZ - lz), pending = false;
+              for (var cyy = 0; cyy < d && !pending; cyy++)
+                for (var cxx = 0; cxx < d && !pending; cxx++) {
+                  var kx = cx * d + cxx, ky = cy * d + cyy;
+                  if (baseVisSet[kx + '/' + ky] && !tiles[tkey(active, baseZ, kx, ky)]) pending = true;
+                }
+              if (!pending) continue;
+            }
             gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, rec.tex); gl.uniform1i(loc.u_idx, 0);
             if (comboMode) {
               var rec2 = pf ? tiles[tkey(pf, lz, cx, cy, 1)] : null;
