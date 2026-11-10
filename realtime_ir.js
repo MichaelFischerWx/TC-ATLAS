@@ -3439,6 +3439,7 @@
         if (_satHidden && !_rt3DOn) return _rt3DOn;
         if (!_rt3DOn) {
             if (!_mosaicTs) return false;   // need a mosaic frame to derive the DEM
+            if (_rtGlobeOn) _rtGlobeToggle(false);   // spike: 3D relief stays a flat-map mode
             _terrainEnsureProtocol();
             _rt3DOn = true;
             _rt3DApply(gl);
@@ -3467,6 +3468,195 @@
         _rt3DSyncButtons();
         return _rt3DOn;
     }
+    // ── Globe view (spike) — MapLibre 5 globe projection on the Global Map ──
+    // The mosaic custom layer, basemap, tracks and markers follow the
+    // projection natively; env/recon barbs redraw globe-aware and the
+    // microwave swaths switch to a GL twin (tc_mw_layer.js). ?globe=1 starts in it.
+    var _rtGlobeOn = false, _rtGlobeMinZoom = null;
+    function _rtGlobeAvailable() { return !!(map && map.canGlobe && map.canGlobe()); }
+    // Zoom at which the whole sphere fits with a margin: MapLibre's globe radius
+    // is worldSize / 2π px, with worldSize = 512 · 2^z.
+    function _rtGlobeFitZoom(gl) {
+        var c = gl.getContainer(), px = Math.min(c.clientWidth || 800, c.clientHeight || 600);
+        return Math.max(0, Math.log(0.45 * px * 2 * Math.PI / 512) / Math.LN2);
+    }
+    function _rtGlobeToggle(force) {
+        var want = (force != null) ? !!force : !_rtGlobeOn;
+        if (want === _rtGlobeOn || !_rtGlobeAvailable()) return _rtGlobeOn;
+        var gl = map._gl;
+        if (want) {
+            if (_rt3DOn) _rt3DToggle();      // spike: one camera mode at a time
+            _rtGlobeOn = true;
+            _rtGlobeMinZoom = gl.getMinZoom();
+            gl.setMinZoom(0);
+            map.setGlobe(true);
+            try {
+                // Kept low: with the real sun in front, MapLibre's scattering hazes
+                // the whole sunlit face and washes out the imagery. 0.3 keeps
+                // a visible glow on the sunlit edge; gone once zoomed in.
+                gl.setSky({ 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 0.3, 4, 0.2, 6, 0] });
+            } catch (e) {}
+            var fz = _rtGlobeFitZoom(gl);
+            if (gl.getZoom() > fz) gl.easeTo({ zoom: fz, duration: 900 });
+            _rtGlobeLightEnsure();
+            _rtGlobeShowPanel(true);
+            _rtGlobeStars(gl.getContainer());
+        } else {
+            _rtGlobeOn = false;
+            map.setGlobe(false);
+            try { gl.setSky(undefined); } catch (e) {}
+            // Back to MapLibre's default viewport light (nothing on the flat map uses it).
+            try { gl.setLight({ anchor: 'viewport', position: [1.15, 210, 30], color: '#ffffff', intensity: 0.5 }); } catch (e) {}
+            var mz = (_rtGlobeMinZoom != null) ? _rtGlobeMinZoom : 2;
+            if (gl.getZoom() < mz) gl.jumpTo({ zoom: mz });
+            gl.setMinZoom(mz);
+            _rtGlobeShowPanel(false);
+        }
+        var b = document.getElementById('ir-globe-mode-btn');
+        if (b) b.classList.toggle('active', _rtGlobeOn);
+        return _rtGlobeOn;
+    }
+    window._rtGlobeToggle = _rtGlobeToggle;
+
+    // ── Globe lighting: sun, moon, night side, city lights ─────────────────
+    // globe_light.js loads on the first globe toggle (flat-map visitors never
+    // fetch it). Everything follows the DISPLAYED frame's time, so the
+    // terminator sweeps with the loop. The night shade sits just above the
+    // satellite (z 210) and below coastlines, tracks and markers.
+    var _GLOBE_LIGHT_SRC = 'globe_light.js?v=20261109gb2';
+    var _rtGlobeLight = null, _rtGlobeLightLoading = false, _rtGlobeBodies = null;
+    var _rtGlobeLightOpts = { night: true, lights: true };
+    try {
+        var _glo = JSON.parse(localStorage.getItem('rtGlobeLight') || 'null');
+        if (_glo) { _rtGlobeLightOpts.night = _glo.night !== false; _rtGlobeLightOpts.lights = _glo.lights !== false; }
+    } catch (e) {}
+    function _rtGlobeLightEnsure() {
+        if (_rtGlobeLight) { _rtGlobeLightUpdate(); return; }
+        if (window.GlobeLight) { _rtGlobeLightCreate(); return; }
+        if (_rtGlobeLightLoading) return;
+        _rtGlobeLightLoading = true;
+        var s = document.createElement('script');
+        s.src = _GLOBE_LIGHT_SRC;
+        s.onload = function () { _rtGlobeLightLoading = false; _rtGlobeLightCreate(); };
+        s.onerror = function () { _rtGlobeLightLoading = false; console.error('[globe] lighting module failed to load'); };
+        document.head.appendChild(s);
+    }
+    function _rtGlobeLightCreate() {
+        if (_rtGlobeLight || !window.GlobeLight || !map) return;
+        _rtGlobeLight = GlobeLight.createLayer({
+            id: 'globe-light',
+            lightsZoom: 3,
+            lightsTileUrl: function (z, x, y) {
+                return GIBS_BASE + '/VIIRS_CityLights_2012/default/2012-01-01/GoogleMapsCompatible_Level8/' + z + '/' + y + '/' + x + '.jpg';
+            }
+        });
+        _rtGlobeLight.setOptions(_rtGlobeLightOpts);
+        try { map._glAdd(_rtGlobeLight.layer, 210); } catch (e) { console.error('[globe] light layer add failed', e); }
+        _rtGlobeLightUpdate();
+    }
+    // Time of the frame on screen: the loop frame while animating/scrubbing,
+    // else the newest still frame.
+    function _rtGlobeFrameDate() {
+        var iso = (globalAnimFrameLayers.length && globalAnimFrameTimes[globalAnimIndex])
+            ? globalAnimFrameTimes[globalAnimIndex] : _globalLatestSatIso();
+        // Mosaic loop frames are raw 'YYYYMMDDHHMM' stamps, not ISO.
+        if (iso && /^\d{12}$/.test(String(iso))) iso = _mosaicTsToIso(iso);
+        var d = iso ? new Date(iso) : null;
+        return (d && !isNaN(d.getTime())) ? d : new Date();
+    }
+    function _rtGlobeLightUpdate() {
+        if (!_rtGlobeOn || !window.GlobeLight) return;
+        var b = GlobeLight.bodies(_rtGlobeFrameDate());
+        _rtGlobeBodies = b;
+        if (_rtGlobeLight) _rtGlobeLight.setBodies(b);
+        var gl = map && map._gl;
+        if (gl && gl.setLight) {
+            try { gl.setLight(GlobeLight.atmosphereLight(b.sun.vec)); } catch (e) {}
+        }
+        _rtGlobePanelReadout();
+    }
+
+    // Starfield behind the sphere: one 1024² tile drawn once from a fixed
+    // seed (same sky every time), used as a CSS background on the map
+    // container — MapLibre clears the canvas to transparent off the globe.
+    var _rtGlobeStarsUrl = null;
+    function _rtGlobeStars(container) {
+        if (!container) return;
+        if (!_rtGlobeStarsUrl) {
+            try {
+                var c = document.createElement('canvas'); c.width = c.height = 1024;
+                var x = c.getContext('2d'), seed = 20261109;
+                var rnd = function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+                for (var i = 0; i < 900; i++) {
+                    var r = rnd(), m = r < 0.85 ? 0.5 + rnd() * 0.5 : 0.9 + rnd() * 0.9;
+                    var a = r < 0.85 ? 0.25 + rnd() * 0.45 : 0.6 + rnd() * 0.4;
+                    var hue = rnd();   // a few faintly blue or warm stars
+                    x.fillStyle = hue < 0.15 ? 'rgba(190,210,255,' + a + ')' : hue > 0.92 ? 'rgba(255,225,190,' + a + ')' : 'rgba(255,255,255,' + a + ')';
+                    x.beginPath(); x.arc(rnd() * 1024, rnd() * 1024, m, 0, Math.PI * 2); x.fill();
+                }
+                _rtGlobeStarsUrl = 'url(' + c.toDataURL('image/png') + ')';
+            } catch (e) { _rtGlobeStarsUrl = 'none'; }
+        }
+        container.style.setProperty('--globe-stars', _rtGlobeStarsUrl);
+    }
+
+    var _rtGlobePanel = null;
+    function _rtGlobeFmtLL(lat, lon) {
+        return Math.abs(lat).toFixed(1) + '°' + (lat < 0 ? 'S' : 'N') + ' ' +
+            Math.abs(lon).toFixed(1) + '°' + (lon < 0 ? 'W' : 'E');
+    }
+    function _rtGlobeEnsurePanel() {
+        if (_rtGlobePanel) return _rtGlobePanel;
+        var box = document.createElement('div');
+        box.id = 'ir-globe-ctl';
+        box.className = 'ir-globe-ctl';
+        box.innerHTML =
+            '<div class="ir-globe-ctl-row">' +
+            '<button type="button" class="ir-globe-ctl-btn" data-opt="night" title="Shade the night side from the sun position at the shown frame time">Day / night</button>' +
+            '<button type="button" class="ir-globe-ctl-btn" data-opt="lights" title="City lights on the night side (NASA VIIRS 2012)">City lights</button>' +
+            '</div>' +
+            '<div class="ir-globe-ctl-read" id="ir-globe-ctl-read"></div>';
+        document.body.appendChild(box);
+        box.addEventListener('click', function (e) {
+            var b = e.target.closest ? e.target.closest('.ir-globe-ctl-btn') : null;
+            if (!b) return;
+            var k = b.getAttribute('data-opt');
+            _rtGlobeLightOpts[k] = !_rtGlobeLightOpts[k];
+            try { localStorage.setItem('rtGlobeLight', JSON.stringify(_rtGlobeLightOpts)); } catch (e2) {}
+            if (_rtGlobeLight) _rtGlobeLight.setOptions(_rtGlobeLightOpts);
+            _rtGlobeSyncPanel();
+        });
+        _rtGlobePanel = box;
+        _rtGlobeSyncPanel();
+        return box;
+    }
+    function _rtGlobeSyncPanel() {
+        if (!_rtGlobePanel) return;
+        var btns = _rtGlobePanel.querySelectorAll('.ir-globe-ctl-btn');
+        for (var i = 0; i < btns.length; i++) {
+            var on = !!_rtGlobeLightOpts[btns[i].getAttribute('data-opt')];
+            btns[i].classList.toggle('active', on);
+            btns[i].setAttribute('aria-pressed', String(on));
+        }
+        // City lights only exist on the shaded night side.
+        var lb = _rtGlobePanel.querySelector('[data-opt="lights"]');
+        if (lb) lb.disabled = !_rtGlobeLightOpts.night;
+    }
+    function _rtGlobePanelReadout() {
+        var el = document.getElementById('ir-globe-ctl-read');
+        if (!el || !_rtGlobeBodies) return;
+        var s = _rtGlobeBodies.sun, m = _rtGlobeBodies.moon;
+        el.innerHTML =
+            '<div><span class="ir-globe-ctl-k">Sun overhead</span> ' + _rtGlobeFmtLL(s.lat, s.lon) + '</div>' +
+            '<div><span class="ir-globe-ctl-k">Moon</span> ' + Math.round(m.illum * 100) + '% lit, ' +
+            (m.waxing ? 'waxing' : 'waning') + ' · over ' + _rtGlobeFmtLL(m.lat, m.lon) + '</div>';
+    }
+    function _rtGlobeShowPanel(show) {
+        var box = _rtGlobeEnsurePanel();
+        box.style.display = show ? '' : 'none';
+        if (show) _rtGlobePanelReadout();
+    }
+
     // Reflect 3D state on every 3D toggle button (top-bar pill + any others).
     function _rt3DSyncButtons() {
         ['ir-3d-mode-btn', 'ir-3d-toggle'].forEach(function (id) {
@@ -5828,6 +6018,7 @@
         // The still frame's time just moved (new mosaic ingest) — re-pick the
         // env forecast hour so the draped analysis keeps up with the imagery.
         _globalEnvSyncToFrame();
+        if (_rtGlobeOn) _rtGlobeLightUpdate();
     }
 
     function showGlobalAnimFrame(idx) {
@@ -5850,6 +6041,8 @@
         if (timeEl && globalAnimFrameTimes[idx]) {
             timeEl.textContent = fmtUTC(globalAnimFrameTimes[idx]);
         }
+        // Globe: move the terminator with the loop.
+        if (_rtGlobeOn) _rtGlobeLightUpdate();
 
         // Keep the US radar overlay (if on) synced to the displayed frame time.
         if (_gRadarOn) _gRadarSync();
@@ -6487,6 +6680,7 @@
         globalAnimLoading = false;
         globalAnimIndex = 0;
         updateGlobalAnimControls('idle');
+        if (_rtGlobeOn) _rtGlobeLightUpdate();   // back on the still frame's time
     }
 
     /** Update the global animation control panel state. State transitions
@@ -6766,6 +6960,7 @@
                             + (isOn ? '<span class="ir-more-on">On</span>' : '') + '</button>';
                     }
                     return item('3d', '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 3 4 8 5-5 5 15H2L8 3z"/></svg>', '3D cloud tops', on(d3Btn))
+                        + (globeBtn ? item('globe', '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/></svg>', 'Globe view', on(globeBtn)) : '')
                         + item('radar', '◈', 'US radar', on(radarBtn))
                         + item('measure', '↔\uFE0E', 'Measure distance', on(measBtn))
                         + item('mw', '◉', 'Microwave', on(mwTopBtn))
@@ -6801,14 +6996,14 @@
                     var act = it.getAttribute('data-act');
                     if (act === 'png') _exportMapPng();
                     else if (act === 'gif') _exportMapGif();
-                    else ({ '3d': d3Btn, radar: radarBtn, measure: measBtn, mw: mwTopBtn, mwopts: mwExpandBtn })[act].click();
+                    else ({ '3d': d3Btn, globe: globeBtn, radar: radarBtn, measure: measBtn, mw: mwTopBtn, mwopts: mwExpandBtn })[act].click();
                 });
 
                 // Dot on [⋯] while any tool it hides is on — on a phone the
                 // hidden buttons can't show their own .active state. Observed
                 // (not polled): the toggles flip .active from many code paths.
                 setTimeout(function () {
-                    var watched = [d3Btn, radarBtn, measBtn, mwTopBtn].filter(Boolean);
+                    var watched = [d3Btn, globeBtn, radarBtn, measBtn, mwTopBtn].filter(Boolean);
                     function sync() {
                         moreBtn.classList.toggle('has-active', watched.some(function (b) {
                             return b.classList.contains('active');
@@ -6864,6 +7059,18 @@
                 d3Btn.title = 'Extrude cold IR cloud tops into 3D relief — drag to orbit, use the Tilt / Height sliders. Toggle off to flatten.';
                 d3Btn.innerHTML = '<span class="ir-3d-mode-glyph" aria-hidden="true"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 3 4 8 5-5 5 15H2L8 3z"/></svg></span><span class="ir-3d-mode-text">3D</span>';
                 d3Btn.addEventListener('click', function () { _rt3DToggle(); });
+
+                // ── Globe view toggle (spike; needs MapLibre 5) ──
+                var globeBtn = null;
+                if (_rtGlobeAvailable()) {
+                    globeBtn = L.DomUtil.create('button', 'ir-3d-mode-btn ir-globe-mode-btn', wrap);
+                    globeBtn.id = 'ir-globe-mode-btn';
+                    globeBtn.type = 'button';
+                    globeBtn.title = 'Show the Global Map as a globe, lit by the sun at the shown frame time. Drag to spin.';
+                    globeBtn.innerHTML = '<span class="ir-3d-mode-glyph" aria-hidden="true"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span><span class="ir-3d-mode-text">Globe</span>';
+                    globeBtn.addEventListener('click', function () { _rtGlobeToggle(); });
+                    if (/[?&]globe=1\b/.test(location.search)) setTimeout(function () { _rtGlobeToggle(true); }, 0);
+                }
 
                 // ── US Radar one-click overlay toggle (sibling of 3D / MW) ──
                 // IEM N0Q reflectivity on top of the satellite mosaic, synced
@@ -7660,6 +7867,18 @@
         }
         if (!pts.length) return;
         _firstFitDone = true;
+        // Globe (?globe=1 start): keep the whole sphere in view and turn it to
+        // face the systems — a bounds fit would zoom in to storm scale.
+        if (_rtGlobeOn && map._gl) {
+            try {
+                var arcG = _lonArc(pts), latSum = 0;
+                for (var g = 0; g < pts.length; g++) latSum += pts[g].lat;
+                var midLon = arcG.west + (((arcG.east - arcG.west) % 360) + 360) % 360 / 2;
+                map._gl.jumpTo({ center: [((midLon + 540) % 360) - 180, Math.max(-30, Math.min(30, latSum / pts.length))],
+                                 zoom: _rtGlobeFitZoom(map._gl) });
+            } catch (e) {}
+            return;
+        }
         if (!narrow && _defaultViewShowsStorms(storms)) return;
         // Phones zoom in further; a desktop stays an overview.
         var singleZoom = narrow ? 4 : 3.5, maxFitZoom = narrow ? 5 : 4;
@@ -25923,7 +26142,8 @@
 
         onAdd: function (map) {
             this._map = map;
-            var c = L.DomUtil.create('canvas', 'leaflet-wind-canvas');
+            // lflet-globe-ok: this canvas draws correctly on the globe (see _redraw).
+            var c = L.DomUtil.create('canvas', 'leaflet-wind-canvas lflet-globe-ok');
             c.style.position = 'absolute';
             c.style.pointerEvents = 'none';
             c.style.zIndex = 425;
@@ -25991,6 +26211,10 @@
             return this;
         },
 
+        // Projection switched (flat ↔ globe): the facade calls this once the
+        // new projection has rendered.
+        _onGlobe: function () { this._redraw(); },
+
         _redraw: function () {
             if (!this._map || !this._canvas) return;
             var size = this._map.getSize();
@@ -26013,11 +26237,27 @@
             var z = this._map.getZoom();
             var spacing = z <= 2 ? 8 : z <= 3 ? 5 : z <= 4 ? 3 : z <= 5 ? 1.5 : 1;
 
+            // Globe: sample the whole sphere once (no world copies) and let the
+            // far-side test below drop the hidden half.
+            var onGlobe = !!(this._map.isGlobe && this._map.isGlobe());
             var b = this._map.getBounds();
-            var sLat = Math.floor(b.getSouth() / spacing) * spacing;
-            var nLat = Math.ceil(b.getNorth() / spacing) * spacing;
-            var wLon = Math.floor(b.getWest() / spacing) * spacing;
-            var eLon = Math.ceil(b.getEast() / spacing) * spacing;
+            var sLat = onGlobe ? -80 : Math.floor(b.getSouth() / spacing) * spacing;
+            var nLat = onGlobe ? 80 : Math.ceil(b.getNorth() / spacing) * spacing;
+            var wLon = onGlobe ? -180 : Math.floor(b.getWest() / spacing) * spacing;
+            var eLon = onGlobe ? 180 - spacing : Math.ceil(b.getEast() / spacing) * spacing;
+            // Globe: foreshortening packs the grid ever tighter toward the limb.
+            // Thin in SCREEN space instead — one barb per cell about one grid
+            // step wide (measured at the view center) — so the spacing you see
+            // stays even out to the rim. The last ~8° before the limb is dropped.
+            var cv = null, cell = 0, used = null;
+            if (onGlobe) {
+                var cc = this._map.getCenter(), cla = cc.lat * Math.PI / 180, clo = cc.lng * Math.PI / 180;
+                cv = [Math.cos(cla) * Math.cos(clo), Math.cos(cla) * Math.sin(clo), Math.sin(cla)];
+                var p0 = this._map.latLngToContainerPoint([cc.lat, cc.lng]);
+                var p1 = this._map.latLngToContainerPoint([cc.lat + (cc.lat > 80 ? -spacing : spacing), cc.lng]);
+                cell = Math.max(16, 0.85 * Math.sqrt((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y)));
+                used = {};
+            }
 
             var meta = this._meta;
             var uSpan = (meta.u_max - meta.u_min) / 255.0;
@@ -26039,6 +26279,24 @@
                     if (uv[idx + 3] === 0) continue;
                     var u_ms = meta.u_min + uv[idx] * uSpan;
                     var v_ms = meta.v_min + uv[idx + 1] * vSpan;
+                    if (onGlobe) {
+                        var pla = lat * Math.PI / 180, plo = lon * Math.PI / 180;
+                        if (Math.cos(pla) * Math.cos(plo) * cv[0] + Math.cos(pla) * Math.sin(plo) * cv[1] + Math.sin(pla) * cv[2] < 0.14) continue;
+                        if (this._map.isLatLngHidden([lat, lon])) continue;
+                        var gp = this._map.latLngToContainerPoint([lat, lon]);
+                        if (gp.x < -20 || gp.y < -20 || gp.x > size.x + 20 || gp.y > size.y + 20) continue;
+                        var ck = Math.floor(gp.x / cell) + ':' + Math.floor(gp.y / cell);
+                        if (used[ck]) continue;
+                        used[ck] = 1;
+                        // u/v are east/north components: turn the glyph so its
+                        // "north" follows the meridian on the sphere.
+                        ctx.save();
+                        ctx.translate(gp.x, gp.y);
+                        ctx.rotate(this._map.northAngle([lat, lon]));
+                        _drawWindBarb(ctx, 0, 0, u_ms, v_ms, lat < 0);
+                        ctx.restore();
+                        continue;
+                    }
                     var pt = this._map.latLngToContainerPoint([lat, lon]);
                     _drawWindBarb(ctx, pt.x, pt.y, u_ms, v_ms, lat < 0);
                 }
@@ -32639,7 +32897,7 @@
                 _rp.style.zIndex = 443;          // above overlayPane(400), below markers(600)
                 _rp.style.pointerEvents = 'none';
             } catch (e) {}
-            var c = L.DomUtil.create('canvas', 'leaflet-recon-canvas');
+            var c = L.DomUtil.create('canvas', 'leaflet-recon-canvas lflet-globe-ok');   // globe-aware (see _redraw)
             c.style.position = 'absolute';
             c.style.pointerEvents = 'none';
             map.getPane('reconPane').appendChild(c);
@@ -32686,8 +32944,10 @@
             var targetS = z <= 4 ? 600 : z <= 5 ? 300 : z <= 6 ? 150 : z <= 7 ? 60 : 30;
             return Math.max(1, Math.round(targetS / this._cadence(track)));
         },
+        _onGlobe: function () { this._redraw(); },
         _redraw: function () {
             if (!this._map || !this._canvas) return;
+            var map = this._map, onGlobe = !!(map.isGlobe && map.isGlobe());
             var size = this._map.getSize();
             this._canvas.width = size.x; this._canvas.height = size.y;
             L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0, 0]));
@@ -32709,12 +32969,16 @@
                 ctx.beginPath();
                 var started = false;
                 for (var i = 0; i < track.length; i += pStride) {
+                    // Globe: lift the pen over the far side instead of drawing
+                    // a chord through the planet.
+                    if (onGlobe && map.isLatLngHidden([track[i].lat, track[i].lon])) { started = false; continue; }
                     var lp = this._map.latLngToContainerPoint([track[i].lat, track[i].lon]);
                     if (!started) { ctx.moveTo(lp.x, lp.y); started = true; }
                     else ctx.lineTo(lp.x, lp.y);
                 }
                 // Always finish on the true last fix so the path reaches the aircraft.
-                if (started && track.length && ((track.length - 1) % pStride)) {
+                if (started && track.length && ((track.length - 1) % pStride) &&
+                    !(onGlobe && map.isLatLngHidden([track[track.length - 1].lat, track[track.length - 1].lon]))) {
                     var lpEnd = this._map.latLngToContainerPoint([track[track.length - 1].lat, track[track.length - 1].lon]);
                     ctx.lineTo(lpEnd.x, lpEnd.y);
                 }
@@ -32724,12 +32988,20 @@
                 for (var j = 0; j < track.length; j += stride) {
                     var ob = track[j];
                     if (ob.lat == null || ob.lon == null) continue;
-                    if (!b.contains([ob.lat, ob.lon])) continue;
+                    if (onGlobe ? map.isLatLngHidden([ob.lat, ob.lon]) : !b.contains([ob.lat, ob.lon])) continue;
                     var pt = this._map.latLngToContainerPoint([ob.lat, ob.lon]);
+                    if (onGlobe && (pt.x < -20 || pt.y < -20 || pt.x > size.x + 20 || pt.y > size.y + 20)) continue;
                     var fresh = this._latestMs &&
                         (this._latestMs - Date.parse(ob.t)) <= _RT_RECON_FRESH_MS;
                     var bc = _reconVarColor(_rtReconColorVar, _reconObVal(ob, _rtReconColorVar));
-                    _rtDrawReconBarb(ctx, pt.x, pt.y, ob.wdir, ob.wspd_kt, ob.lat < 0, fresh, bc);
+                    if (onGlobe) {
+                        // wdir is from true north: turn the glyph to the local meridian.
+                        ctx.save(); ctx.translate(pt.x, pt.y); ctx.rotate(map.northAngle([ob.lat, ob.lon]));
+                        _rtDrawReconBarb(ctx, 0, 0, ob.wdir, ob.wspd_kt, ob.lat < 0, fresh, bc);
+                        ctx.restore();
+                    } else {
+                        _rtDrawReconBarb(ctx, pt.x, pt.y, ob.wdir, ob.wspd_kt, ob.lat < 0, fresh, bc);
+                    }
                     this._drawn.push({ x: pt.x, y: pt.y, ob: ob, tail: this._aircraft[ai].tail });
                 }
             }

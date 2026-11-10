@@ -337,6 +337,10 @@
                 this._items = items || [];
                 this._ensureImages();
                 this._redraw();
+                // Globe twin reads _items per frame; already-decoded swaths
+                // (hours/product/sensor changes) need an explicit repaint.
+                var gl = this._map && this._map._gl;
+                if (this._globeLayer && gl) gl.triggerRepaint();
             },
 
             onAdd: function () {
@@ -344,11 +348,31 @@
                 this._getMosaicPane().appendChild(this._canvas);
                 this._update();
                 this._redraw();
+                // Globe-capable GL map (MapLibre 5 via lflet_gl): add the GL
+                // twin that draws the same swaths on the sphere. It paints
+                // nothing on the flat map, where the canvas above does the work.
+                var map = this._map;
+                if (map && map.canGlobe && map.canGlobe() && map._glAdd) {
+                    this._globeLayer = _mwGlobeLayer(this);
+                    try { map._glAdd(this._globeLayer, 350); } catch (e) { this._globeLayer = null; }
+                }
             },
 
             onRemove: function () {
                 if (this._raf) { cancelAnimationFrame(this._raf); this._raf = null; }
                 if (this._canvas) L.DomUtil.remove(this._canvas);
+                var gl = this._map && this._map._gl;
+                if (this._globeLayer && gl) {
+                    try { if (gl.getLayer(this._globeLayer.id)) gl.removeLayer(this._globeLayer.id); } catch (e) {}
+                }
+                this._globeLayer = null;
+            },
+
+            // lflet_gl calls this after a flat ↔ globe switch.
+            _onGlobe: function (on) {
+                if (!on) { this._update(); this._redraw(); }
+                var gl = this._map && this._map._gl;
+                if (gl) gl.triggerRepaint();
             },
 
             getEvents: function () {
@@ -505,12 +529,137 @@
             },
 
             _scheduleRedraw: function () {
+                // The globe twin reads _items/_imgCache every frame; a newly
+                // decoded swath just needs a repaint there.
+                var gl = this._map && this._map._gl;
+                if (this._globeLayer && gl && this._map.isGlobe && this._map.isGlobe()) gl.triggerRepaint();
                 if (this._raf) return;
                 var self = this;
                 this._raf = requestAnimationFrame(function () { self._raf = null; self._redraw(); });
             }
         });
         return _MosaicClass;
+    }
+
+    // ── Globe twin of the mosaic canvas (MapLibre 5 custom layer) ──
+    // Same items, same order, same per-swath opacity, same placement: each
+    // swath PNG stretched linearly in Mercator between its bounds corners —
+    // exactly what the canvas drawImage does — but projected through
+    // MapLibre's projectTile() on a subdivided quad so it curves with the
+    // sphere. Dateline swaths keep e > 180 (x > 1), which the sphere wraps.
+    var MW_GLOBE_VS =
+        'attribute vec2 a_pos;uniform vec4 u_rect;varying vec2 v_uv;' +
+        'void main(){v_uv=a_pos;gl_Position=projectTile(u_rect.xy+a_pos*u_rect.zw);}';
+    var MW_GLOBE_FS =
+        'precision mediump float;uniform sampler2D u_img;uniform float u_opacity;varying vec2 v_uv;' +
+        'void main(){vec4 c=texture2D(u_img,v_uv);float a=c.a*u_opacity;gl_FragColor=vec4(c.rgb*a,a);}';
+    var MW_MESH_N = 16;
+    function _mercY(lat) {
+        lat = Math.max(-85.0511, Math.min(85.0511, lat));
+        var r = lat * Math.PI / 180;
+        return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2;
+    }
+    function _mwGlobeLayer(mosaic) {
+        var gl = null, map = null, buf = null, nVerts = 0, progs = {}, texs = {};
+        function prog(sd) {
+            var key = sd.variantName || 'default';
+            if (key in progs) return progs[key];
+            var p = gl.createProgram();
+            function sh(t, src) {
+                var o = gl.createShader(t); gl.shaderSource(o, src); gl.compileShader(o);
+                if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) console.error('[mwGlobe] ' + gl.getShaderInfoLog(o));
+                return o;
+            }
+            gl.attachShader(p, sh(gl.VERTEX_SHADER, (sd.define || '') + '\n' + sd.vertexShaderPrelude + '\n' + MW_GLOBE_VS));
+            gl.attachShader(p, sh(gl.FRAGMENT_SHADER, MW_GLOBE_FS));
+            gl.linkProgram(p);
+            if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { progs[key] = null; return null; }
+            var loc = { a_pos: gl.getAttribLocation(p, 'a_pos') };
+            ['u_projection_matrix', 'u_projection_fallback_matrix', 'u_projection_tile_mercator_coords',
+             'u_projection_clipping_plane', 'u_projection_transition', 'u_rect', 'u_img', 'u_opacity']
+                .forEach(function (n) { loc[n] = gl.getUniformLocation(p, n); });
+            return (progs[key] = { prog: p, loc: loc });
+        }
+        function texFor(url, img) {
+            if (texs[url]) return texs[url];
+            var t = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, t);
+            // Upload un-flipped, un-premultiplied, then put MapLibre's pixel-store
+            // state back exactly as it was (it caches these flags).
+            var fy = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL), pm = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+            try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img); }
+            catch (e) { gl.deleteTexture(t); t = null; }
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, fy);
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, pm);
+            if (!t) return null;
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            return (texs[url] = t);
+        }
+        return {
+            id: 'mw-globe-' + Math.random().toString(36).slice(2, 8),
+            type: 'custom',
+            ml5: true,
+            onAdd: function (m, g) {
+                map = m; gl = g;
+                var a = [], d = 1 / MW_MESH_N;
+                for (var j = 0; j < MW_MESH_N; j++) for (var i = 0; i < MW_MESH_N; i++) {
+                    var x0 = i * d, y0 = j * d, x1 = x0 + d, y1 = y0 + d;
+                    a.push(x0, y0, x1, y0, x0, y1, x1, y0, x1, y1, x0, y1);
+                }
+                buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(a), gl.STATIC_DRAW);
+                nVerts = a.length / 2;
+            },
+            render: function (g, arg) {
+                if (!gl || !arg || !arg.shaderData) return;
+                var pd = arg.defaultProjectionData;
+                if (!(pd.projectionTransition > 0)) return;     // flat map: the canvas draws
+                var items = mosaic._items || [], cache = mosaic._imgCache || {};
+                if (!items.length) return;
+                var P = prog(arg.shaderData); if (!P) return;
+                var loc = P.loc;
+                gl.useProgram(P.prog);
+                gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+                gl.enableVertexAttribArray(loc.a_pos);
+                gl.vertexAttribPointer(loc.a_pos, 2, gl.FLOAT, false, 0, 0);
+                gl.uniformMatrix4fv(loc.u_projection_matrix, false, pd.mainMatrix);
+                gl.uniformMatrix4fv(loc.u_projection_fallback_matrix, false, pd.fallbackMatrix);
+                gl.uniform4f(loc.u_projection_tile_mercator_coords, 0, 0, 1, 1);
+                gl.uniform4f(loc.u_projection_clipping_plane, pd.clippingPlane[0], pd.clippingPlane[1], pd.clippingPlane[2], pd.clippingPlane[3]);
+                gl.uniform1f(loc.u_projection_transition, pd.projectionTransition);
+                gl.activeTexture(gl.TEXTURE0); gl.uniform1i(loc.u_img, 0);
+                gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+                gl.disable(gl.DEPTH_TEST);
+                var live = {};
+                for (var i = 0; i < items.length; i++) {
+                    var it = items[i], rec = cache[it.url];
+                    if (!rec || !rec.loaded || !rec.img) continue;
+                    var t = texFor(it.url, rec.img); if (!t) continue;
+                    live[it.url] = true;
+                    var s = it.bounds[0][0], w = it.bounds[0][1], n = it.bounds[1][0], e = it.bounds[1][1];
+                    if (e < w) e += 360;
+                    var x0 = (w + 180) / 360, x1 = (e + 180) / 360, y0 = _mercY(n), y1 = _mercY(s);
+                    gl.bindTexture(gl.TEXTURE_2D, t);
+                    gl.uniform4f(loc.u_rect, x0, y0, x1 - x0, y1 - y0);
+                    gl.uniform1f(loc.u_opacity, it.opacity != null ? it.opacity : 1);
+                    gl.drawArrays(gl.TRIANGLES, 0, nVerts);
+                }
+                // Free textures for swaths that left the window.
+                Object.keys(texs).forEach(function (u) { if (!live[u]) { gl.deleteTexture(texs[u]); delete texs[u]; } });
+            },
+            onRemove: function () {
+                if (!gl) return;
+                Object.keys(texs).forEach(function (u) { gl.deleteTexture(texs[u]); });
+                Object.keys(progs).forEach(function (k) { if (progs[k]) gl.deleteProgram(progs[k].prog); });
+                if (buf) gl.deleteBuffer(buf);
+                texs = {}; progs = {}; buf = null; gl = null; map = null;
+            }
+        };
     }
 
     function MWLayer(map, opts) {
