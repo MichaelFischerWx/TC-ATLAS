@@ -32,6 +32,24 @@
     'attribute vec2 a_pos;uniform mat4 u_matrix;uniform vec2 u_origin;uniform float u_scale;' +
     'varying vec2 v_uv;void main(){vec2 m=u_origin+a_pos*u_scale;' +
     'gl_Position=u_matrix*vec4(m,0.0,1.0);v_uv=vec2(a_pos.x,1.0-a_pos.y);}';
+  // MapLibre 5 path: render() gets an options object instead of a matrix, and
+  // the vertex position must go through MapLibre's own projectTile() (from
+  // shaderData.vertexShaderPrelude) so one shader serves both flat Mercator and
+  // the globe. a_pos is the same 0..1 in-tile coordinate as above, but the
+  // quad is a subdivided grid so tiles curve with the sphere.
+  var VS5_BODY =
+    'attribute vec2 a_pos;uniform vec2 u_origin;uniform float u_scale;' +
+    'varying vec2 v_uv;void main(){vec2 m=u_origin+a_pos*u_scale;' +
+    'gl_Position=projectTile(m);v_uv=vec2(a_pos.x,1.0-a_pos.y);}';
+  var GRID_N = 16;   // cells per tile edge on the v5 mesh (512 triangles per tile draw)
+  function gridMesh(n) {
+    var a = [], d = 1 / n;
+    for (var j = 0; j < n; j++) for (var i = 0; i < n; i++) {
+      var x0 = i * d, y0 = j * d, x1 = x0 + d, y1 = y0 + d;
+      a.push(x0, y0, x1, y0, x0, y1,  x1, y0, x1, y1, x0, y1);
+    }
+    return new Float32Array(a);
+  }
   var FS =
     'precision mediump float;uniform sampler2D u_idx;uniform sampler2D u_lut;' +
     'uniform sampler2D u_idx2;uniform sampler2D u_lut2;' +  // combo: second band (Vis idx) + its LUT
@@ -100,6 +118,7 @@
     var opacity = (opts.opacity != null) ? opts.opacity : 1.0;
 
     var map = null, gl = null, prog = null, buf = null, loc = null, lutTex = null;
+    var legacyLoc = null, gridBuf = null, v5Progs = {};   // v5: program per projection variant
     var lut2Tex = null, blackTex = null;     // combo: Vis LUT + 1x1 no-data fallback
     var pendingLut = opts.lut || null;       // applied on first render once gl exists
     var pendingLut2 = opts.lut2 || null;
@@ -284,28 +303,44 @@
       if (--pending.n <= 0) _flipPending();
     }
 
+    var LOC_NAMES = ['u_matrix', 'u_origin', 'u_scale', 'u_idx', 'u_lut', 'u_opacity',
+      'u_idx2', 'u_lut2', 'u_combo', 'u_projection_matrix', 'u_projection_fallback_matrix',
+      'u_projection_tile_mercator_coords', 'u_projection_clipping_plane', 'u_projection_transition'];
+    function _link(vsSrc) {
+      var p = gl.createProgram();
+      gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vsSrc, onErr));
+      gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, FS, onErr));
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { onErr('link: ' + gl.getProgramInfoLog(p)); return null; }
+      var l = { a_pos: gl.getAttribLocation(p, 'a_pos') };
+      LOC_NAMES.forEach(function (n) { l[n] = gl.getUniformLocation(p, n); });
+      return { prog: p, loc: l };
+    }
+    function _legacyProgram() {
+      if (!legacyLoc) legacyLoc = _link(VS);
+      return legacyLoc;
+    }
+    function _v5Program(sd) {
+      var key = sd.variantName || 'default';
+      if (!(key in v5Progs)) {
+        // define (e.g. "#define GLOBE") goes first so the prelude's #ifdefs see it.
+        v5Progs[key] = _link((sd.define || '') + '\n' + sd.vertexShaderPrelude + '\n' + VS5_BODY);
+      }
+      if (!gridBuf) {
+        gridBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, gridBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, gridMesh(GRID_N), gl.STATIC_DRAW);
+      }
+      return v5Progs[key];
+    }
+
     var layer = {
       id: opts.id || 'mosaic-idx',
       type: 'custom',
+      ml5: true,   // handles MapLibre 5's render(gl, options) itself (lflet_gl skips its compat wrap)
       onAdd: function (m, gfx) {
         map = m; gl = gfx;
-        prog = gl.createProgram();
-        gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VS, onErr));
-        gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FS, onErr));
-        gl.linkProgram(prog);
-        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) onErr('link: ' + gl.getProgramInfoLog(prog));
-        loc = {
-          a_pos: gl.getAttribLocation(prog, 'a_pos'),
-          u_matrix: gl.getUniformLocation(prog, 'u_matrix'),
-          u_origin: gl.getUniformLocation(prog, 'u_origin'),
-          u_scale: gl.getUniformLocation(prog, 'u_scale'),
-          u_idx: gl.getUniformLocation(prog, 'u_idx'),
-          u_lut: gl.getUniformLocation(prog, 'u_lut'),
-          u_opacity: gl.getUniformLocation(prog, 'u_opacity'),
-          u_idx2: gl.getUniformLocation(prog, 'u_idx2'),
-          u_lut2: gl.getUniformLocation(prog, 'u_lut2'),
-          u_combo: gl.getUniformLocation(prog, 'u_combo')
-        };
+        // The legacy (MapLibre 4) program is built lazily on the first
+        // matrix-style render, so a v5 page never compiles it.
         buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
         makeLutTex();
@@ -317,8 +352,14 @@
         // collapsed or the window changed size (2026-09-02, Lowell).
         try { m.triggerRepaint(); } catch (e) {}
       },
-      render: function (gfx, matrix) {
-        if (!prog || !active) return;
+      render: function (gfx, arg) {
+        if (!gl || !active) return;
+        // MapLibre 4 passes the Mercator→clip matrix; MapLibre 5 passes an
+        // options object carrying the projection prelude + its uniforms.
+        var v5 = !!(arg && arg.shaderData && arg.defaultProjectionData);
+        var P = v5 ? _v5Program(arg.shaderData) : _legacyProgram();
+        if (!P) return;
+        prog = P.prog; loc = P.loc;
         var z = pickZoom();
         var baseZ = Math.min(z, baseMaxZoom);
         // Coarse base (gapless) first, then sparse detail (storm sectors) on top.
@@ -327,10 +368,25 @@
         var pf = comboMode ? pairFrame(active) : null;   // paired Vis frame (null = none)
 
         gl.useProgram(prog);
-        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        var nVerts = 4, mode = gl.TRIANGLE_STRIP, copies = [-1, 0, 1];
+        if (v5) {
+          var pd = arg.defaultProjectionData;
+          gl.bindBuffer(gl.ARRAY_BUFFER, gridBuf);
+          nVerts = GRID_N * GRID_N * 6; mode = gl.TRIANGLES;
+          gl.uniformMatrix4fv(loc.u_projection_matrix, false, pd.mainMatrix);
+          gl.uniformMatrix4fv(loc.u_projection_fallback_matrix, false, pd.fallbackMatrix);
+          gl.uniform4f(loc.u_projection_tile_mercator_coords, pd.tileMercatorCoords[0], pd.tileMercatorCoords[1], pd.tileMercatorCoords[2], pd.tileMercatorCoords[3]);
+          gl.uniform4f(loc.u_projection_clipping_plane, pd.clippingPlane[0], pd.clippingPlane[1], pd.clippingPlane[2], pd.clippingPlane[3]);
+          gl.uniform1f(loc.u_projection_transition, pd.projectionTransition);
+          // On the sphere x wraps by itself (sin/cos of longitude), so the
+          // neighbor world copies would land on the same spot and blend twice.
+          if (pd.projectionTransition > 0) copies = [0];
+        } else {
+          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+          gl.uniformMatrix4fv(loc.u_matrix, false, arg);
+        }
         gl.enableVertexAttribArray(loc.a_pos);
         gl.vertexAttribPointer(loc.a_pos, 2, gl.FLOAT, false, 0, 0);
-        gl.uniformMatrix4fv(loc.u_matrix, false, matrix);
         gl.uniform1f(loc.u_opacity, opacity);
         gl.uniform1f(loc.u_combo, comboMode ? 1.0 : 0.0);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, lutTex); gl.uniform1i(loc.u_lut, 1);
@@ -361,9 +417,9 @@
               gl.uniform1i(loc.u_idx2, 2);
             }
             // draw in the primary world + both neighbor copies (antimeridian display wrap)
-            for (var k = -1; k <= 1; k++) {
-              gl.uniform2f(loc.u_origin, cx * s + k, cy * s);
-              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            for (var ci = 0; ci < copies.length; ci++) {
+              gl.uniform2f(loc.u_origin, cx * s + copies[ci], cy * s);
+              gl.drawArrays(mode, 0, nVerts);
             }
           }
         }
@@ -377,7 +433,10 @@
         if (lut2Tex) gl.deleteTexture(lut2Tex);
         if (blackTex) gl.deleteTexture(blackTex);
         if (buf) gl.deleteBuffer(buf);
-        if (prog) gl.deleteProgram(prog);
+        if (gridBuf) gl.deleteBuffer(gridBuf);
+        if (legacyLoc) gl.deleteProgram(legacyLoc.prog);
+        Object.keys(v5Progs).forEach(function (k) { if (v5Progs[k]) gl.deleteProgram(v5Progs[k].prog); });
+        legacyLoc = null; gridBuf = null; v5Progs = {}; prog = null;
         gl = null; map = null;
       }
     };

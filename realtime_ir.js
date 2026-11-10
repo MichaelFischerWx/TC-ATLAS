@@ -3439,6 +3439,7 @@
         if (_satHidden && !_rt3DOn) return _rt3DOn;
         if (!_rt3DOn) {
             if (!_mosaicTs) return false;   // need a mosaic frame to derive the DEM
+            if (_rtGlobeOn) _rtGlobeToggle(false);   // spike: 3D relief stays a flat-map mode
             _terrainEnsureProtocol();
             _rt3DOn = true;
             _rt3DApply(gl);
@@ -3467,6 +3468,47 @@
         _rt3DSyncButtons();
         return _rt3DOn;
     }
+    // ── Globe view (spike) — MapLibre 5 globe projection on the Global Map ──
+    // The mosaic custom layer, basemap, tracks and markers all follow the
+    // projection natively; the facade hides the flat-only canvas overlays
+    // (env/recon barbs, microwave) while it is on. ?globe=1 starts in it.
+    var _rtGlobeOn = false, _rtGlobeMinZoom = null;
+    function _rtGlobeAvailable() { return !!(map && map.canGlobe && map.canGlobe()); }
+    // Zoom at which the whole sphere fits with a margin: MapLibre's globe radius
+    // is worldSize / 2π px, with worldSize = 512 · 2^z.
+    function _rtGlobeFitZoom(gl) {
+        var c = gl.getContainer(), px = Math.min(c.clientWidth || 800, c.clientHeight || 600);
+        return Math.max(0, Math.log(0.45 * px * 2 * Math.PI / 512) / Math.LN2);
+    }
+    function _rtGlobeToggle(force) {
+        var want = (force != null) ? !!force : !_rtGlobeOn;
+        if (want === _rtGlobeOn || !_rtGlobeAvailable()) return _rtGlobeOn;
+        var gl = map._gl;
+        if (want) {
+            if (_rt3DOn) _rt3DToggle();      // spike: one camera mode at a time
+            _rtGlobeOn = true;
+            _rtGlobeMinZoom = gl.getMinZoom();
+            gl.setMinZoom(0);
+            map.setGlobe(true);
+            try {
+                gl.setSky({ 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 5, 1, 7, 0] });
+            } catch (e) {}
+            var fz = _rtGlobeFitZoom(gl);
+            if (gl.getZoom() > fz) gl.easeTo({ zoom: fz, duration: 900 });
+        } else {
+            _rtGlobeOn = false;
+            map.setGlobe(false);
+            try { gl.setSky(undefined); } catch (e) {}
+            var mz = (_rtGlobeMinZoom != null) ? _rtGlobeMinZoom : 2;
+            if (gl.getZoom() < mz) gl.jumpTo({ zoom: mz });
+            gl.setMinZoom(mz);
+        }
+        var b = document.getElementById('ir-globe-mode-btn');
+        if (b) b.classList.toggle('active', _rtGlobeOn);
+        return _rtGlobeOn;
+    }
+    window._rtGlobeToggle = _rtGlobeToggle;
+
     // Reflect 3D state on every 3D toggle button (top-bar pill + any others).
     function _rt3DSyncButtons() {
         ['ir-3d-mode-btn', 'ir-3d-toggle'].forEach(function (id) {
@@ -6766,6 +6808,7 @@
                             + (isOn ? '<span class="ir-more-on">On</span>' : '') + '</button>';
                     }
                     return item('3d', '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 3 4 8 5-5 5 15H2L8 3z"/></svg>', '3D cloud tops', on(d3Btn))
+                        + (globeBtn ? item('globe', '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/></svg>', 'Globe view', on(globeBtn)) : '')
                         + item('radar', '◈', 'US radar', on(radarBtn))
                         + item('measure', '↔\uFE0E', 'Measure distance', on(measBtn))
                         + item('mw', '◉', 'Microwave', on(mwTopBtn))
@@ -6801,14 +6844,14 @@
                     var act = it.getAttribute('data-act');
                     if (act === 'png') _exportMapPng();
                     else if (act === 'gif') _exportMapGif();
-                    else ({ '3d': d3Btn, radar: radarBtn, measure: measBtn, mw: mwTopBtn, mwopts: mwExpandBtn })[act].click();
+                    else ({ '3d': d3Btn, globe: globeBtn, radar: radarBtn, measure: measBtn, mw: mwTopBtn, mwopts: mwExpandBtn })[act].click();
                 });
 
                 // Dot on [⋯] while any tool it hides is on — on a phone the
                 // hidden buttons can't show their own .active state. Observed
                 // (not polled): the toggles flip .active from many code paths.
                 setTimeout(function () {
-                    var watched = [d3Btn, radarBtn, measBtn, mwTopBtn].filter(Boolean);
+                    var watched = [d3Btn, globeBtn, radarBtn, measBtn, mwTopBtn].filter(Boolean);
                     function sync() {
                         moreBtn.classList.toggle('has-active', watched.some(function (b) {
                             return b.classList.contains('active');
@@ -6864,6 +6907,18 @@
                 d3Btn.title = 'Extrude cold IR cloud tops into 3D relief — drag to orbit, use the Tilt / Height sliders. Toggle off to flatten.';
                 d3Btn.innerHTML = '<span class="ir-3d-mode-glyph" aria-hidden="true"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 3 4 8 5-5 5 15H2L8 3z"/></svg></span><span class="ir-3d-mode-text">3D</span>';
                 d3Btn.addEventListener('click', function () { _rt3DToggle(); });
+
+                // ── Globe view toggle (spike; needs MapLibre 5) ──
+                var globeBtn = null;
+                if (_rtGlobeAvailable()) {
+                    globeBtn = L.DomUtil.create('button', 'ir-3d-mode-btn ir-globe-mode-btn', wrap);
+                    globeBtn.id = 'ir-globe-mode-btn';
+                    globeBtn.type = 'button';
+                    globeBtn.title = 'Show the Global Map as a globe. Drag to spin. Wind barbs and microwave show on the flat map only.';
+                    globeBtn.innerHTML = '<span class="ir-3d-mode-glyph" aria-hidden="true"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span><span class="ir-3d-mode-text">Globe</span>';
+                    globeBtn.addEventListener('click', function () { _rtGlobeToggle(); });
+                    if (/[?&]globe=1\b/.test(location.search)) setTimeout(function () { _rtGlobeToggle(true); }, 0);
+                }
 
                 // ── US Radar one-click overlay toggle (sibling of 3D / MW) ──
                 // IEM N0Q reflectivity on top of the satellite mosaic, synced

@@ -3131,6 +3131,7 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
 @media (max-width: 768px) {
     .ir-layers-wrap .ir-more-btn { display: inline-flex; }
     .ir-layers-wrap #ir-3d-mode-btn,
+    .ir-layers-wrap #ir-globe-mode-btn,
     .ir-layers-wrap #ir-radar-mode-btn,
     .ir-layers-wrap #ir-measure-mode-btn,
     .ir-layers-wrap #ir-mw-toggle-group,
@@ -3291,6 +3292,9 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
    segment). Muted when off; UM-orange when the 3D terrain is engaged, matching
    the Tilt/Height control accents + the active toolbar buttons. */
 .ir-layers-wrap .ir-3d-mode-btn { order: 1; }
+/* Globe view (spike): space behind the sphere. MapLibre clears the canvas
+   to transparent outside the globe, so the map container shows through. */
+#ir-map.lflet-globe { background: radial-gradient(ellipse at center, #0a1122 0%, #03050b 70%, #000 100%); }
 .ir-3d-mode-btn {
     display: inline-flex;
     align-items: center;

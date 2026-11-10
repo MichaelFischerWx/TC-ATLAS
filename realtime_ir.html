@@ -56,7 +56,7 @@
     <!-- Leaflet CSS kept (chrome reuses some .leaflet-* classes); map engine is
          MapLibre via the lflet_gl.js facade (gl-engine-swap branch). -->
     <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css?v=1.9.4" />
-    <link href="assets/vendor/maplibre/maplibre-gl.css?v=4.7.1" rel="stylesheet" />
+    <link href="assets/vendor/maplibre5/maplibre-gl.css?v=5.24.0" rel="stylesheet" />
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -84,8 +84,8 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261108gn2">
-    <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261109gb1">
+    <link rel="preload" as="script" href="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
          returning visitors reuse their browser cache (GitHub Pages serves
@@ -118,7 +118,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261104sd1">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261101m1">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261109gb1">
     <link rel="stylesheet" href="satellite_styles.css?v=20261104st1">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261104sd1">
 </head>
@@ -2829,10 +2829,10 @@
          the parser unblocked, and makes every URL visible to the preload
          scanner so the whole bundle downloads IN PARALLEL. The old
          document.write chain forced a serial download of ~3 MB. -->
-    <script defer src="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1"></script>
-    <script defer src="lflet_gl.js?v=20261104cr1"></script>
+    <script defer src="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0"></script>
+    <script defer src="lflet_gl.js?v=20261109gb1"></script>
     <!-- Single-channel idx mosaic WebGL layer (flag-gated ?ir2a=1). -->
-    <script defer src="mosaic_gl_layer.js?v=20260904a"></script>
+    <script defer src="mosaic_gl_layer.js?v=20261109gb1"></script>
     <script>
     // Plotly (~1 MB gzipped) is only needed once a chart renders, but a
     // synchronous tag here serializes the whole page: the document.write
@@ -2895,7 +2895,7 @@
     <script defer src="tc_mw_layer.js?v=20261020au1"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261010tm1"></script>
-    <script defer src="realtime_ir.js?v=20261108gn2"></script>
+    <script defer src="realtime_ir.js?v=20261109gb1"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays

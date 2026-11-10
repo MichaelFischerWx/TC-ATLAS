@@ -473,6 +473,18 @@
         // does an id that is already present (double-queued add). Skip.
         if (typeof def.source === 'string' && !this._gl.getSource(def.source)) return;
         if (this._gl.getLayer(def.id)) return;
+        // MapLibre 5 hands custom layers an options object where MapLibre 4
+        // passed the Mercator→clip matrix. Layers written for 4 (no ml5 flag)
+        // get the equivalent matrix back, so they keep working on a flat map.
+        if (def.type === 'custom' && !def.ml5 && !def._ml5Compat) {
+            def._ml5Compat = true;
+            ['render', 'prerender'].forEach(function (k) {
+                var fn = def[k]; if (typeof fn !== 'function') return;
+                def[k] = function (g, a) {
+                    return fn.call(this, g, (a && a.modelViewProjectionMatrix) ? a.modelViewProjectionMatrix : a);
+                };
+            });
+        }
         z = z == null ? 400 : z;
         var layers = this._gl.getStyle().layers, before = null;
         for (var i = 0; i < layers.length; i++) {
@@ -505,7 +517,10 @@
         var evs = (typeof layer.getEvents === 'function') ? layer.getEvents() : {};
         var redraw = evs.viewreset || evs.moveend || evs.move || evs.zoom || evs.zoomend;
         if (redraw) {
-            var h = function () { try { redraw.call(layer); } catch (e) {} };
+            var self = this;
+            // Canvas layers project each point onto a flat pane; on the globe
+            // their panes are hidden (setGlobe), so skip the redraw work too.
+            var h = function () { if (self._globe) return; try { redraw.call(layer); } catch (e) {} };
             this._gl.on('move', h); this._gl.on('moveend', h);
             layer._glRedraw = h; setTimeout(h, 0);
         }
@@ -519,6 +534,45 @@
             if (typeof layer.onRemove === 'function') { try { layer.onRemove(this); } catch (e) {} }
         }
         delete this._layers[layer._lid];
+        return this;
+    };
+
+    // ── Globe projection (MapLibre 5+) ────────────────────────────
+    // GL-native layers (rasters, lines, fills, circles, the mosaic custom layer,
+    // maplibregl.Marker) follow the projection on their own. The DOM panes hold
+    // only the hand-drawn canvas overlays (env/recon barbs, microwave), which
+    // place pixels on a flat plane — hidden while on the globe, redrawn on exit.
+    var _globeCssDone = false;
+    function _globeCss() {
+        if (_globeCssDone) return; _globeCssDone = true;
+        try {
+            var s = document.createElement('style');
+            // Far-side markers (opacity 0, see Marker) must not catch hovers/clicks either.
+            s.textContent = '.lflet-globe > .leaflet-pane{display:none !important}'
+                + '.lflet-globe .maplibregl-marker-covered{pointer-events:none !important}';
+            document.head.appendChild(s);
+        } catch (e) {}
+    }
+    Map.prototype.canGlobe = function () { return typeof this._gl.setProjection === 'function'; };
+    Map.prototype.isGlobe = function () { return !!this._globe; };
+    Map.prototype.setGlobe = function (on) {
+        on = !!on;
+        if (on === !!this._globe || !this.canGlobe()) return this;
+        this._globe = on;
+        _globeCss();
+        var self = this;
+        var apply = function () {
+            try { self._gl.setProjection({ type: on ? 'globe' : 'mercator' }); }
+            catch (e) { console.warn('lflet_gl: setProjection failed', e); }
+        };
+        if (this._loaded || this._gl.isStyleLoaded()) apply(); else this._whenStyle(apply);
+        this.getContainer().classList.toggle('lflet-globe', on);
+        if (!on) {
+            Object.keys(this._layers).forEach(function (k) {
+                var l = self._layers[k];
+                if (l && l._glRedraw) setTimeout(l._glRedraw, 0);
+            });
+        }
         return this;
     };
     // Popups are not registered in _layers (eachLayer callers expect real layers),
@@ -1058,6 +1112,9 @@
         initialize: function (latlng, opts) { this._ll = toLatLng(latlng); this.options = opts || {}; this._evts = {}; },
         _addToGL: function (map) { this._map = map;
             var mo = markerAnchorOpts(this.options.icon); mo.element = this.options.icon ? makeIconEl(this.options.icon) : undefined;
+            // On the globe, a marker on the far side is drawn at this opacity
+            // (MapLibre's default 0.2 lets it show through the sphere). Hide it.
+            mo.opacityWhenCovered = '0';
             this._m = new maplibregl.Marker(mo).setLngLat(mlWrap(this._ll)).addTo(map._gl);
             if (this._popup) { this._m.setPopup(this._popup._ml()); this._bridgePopup(); }
             // maplibregl markers all share one DOM container ordered by insertion, so
@@ -1153,7 +1210,7 @@
             // instead of making a DOM marker — the archive draws thousands of
             // genesis/LMI dots this way.
             if (o.renderer && o.renderer._isBatch) { o.renderer._ensure(map); o.renderer._addCirc(this); this._batch = o.renderer; return; }
-            this._m = new maplibregl.Marker({ element: this.options.icon._el, anchor: 'center' }).setLngLat(mlWrap(this._ll)).addTo(map._gl);
+            this._m = new maplibregl.Marker({ element: this.options.icon._el, anchor: 'center', opacityWhenCovered: '0' }).setLngLat(mlWrap(this._ll)).addTo(map._gl);
             if (this._popup) { this._m.setPopup(this._popup._ml()); this._bridgePopup(); } this._applyTooltip(); this._applyEvents(); },
         _removeFromGL: function () { if (this._batch) { this._batch._removeCirc(this); return; } if (this._tipHide) this._tipHide(); if (this._m) this._m.remove(); },
         // setRadius/setStyle on circle dots (e.g. WeatherLab genesis markers rescaled
