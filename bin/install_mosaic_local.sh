@@ -34,6 +34,11 @@ for sat in east west hima met9; do
     k="${D}/out/kernels/${sat}_z4.npz"
     [ -s "${k}" ] || { curl -fsSL "https://cdn.tcatlas.org/kernels/${sat}_z4.npz" -o "${k}.part" && mv "${k}.part" "${k}"; echo "kernel ${sat}"; }
 done
+# Global-z5 kernels are local-only (not on the CDN): built from the live navigation.
+for sat in east west hima met9; do
+    [ -s "${D}/out/kernels/${sat}_z5.npz" ] || {
+        echo "note: no ${sat}_z5.npz — global z5 stays off until bin/build_mosaic_z5_kernels.sh runs"; break; }
+done
 install -m 755 "${REPO}/bin/run_mosaic_local.sh" "${D}/run_mosaic_local.sh"
 [ -x "${HOME}/.venvs/tcatlas-mosaic/bin/python" ] || {
     /opt/anaconda3/bin/python3 -m venv --system-site-packages "${HOME}/.venvs/tcatlas-mosaic"

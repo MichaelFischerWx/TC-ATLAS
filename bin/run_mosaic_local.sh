@@ -74,6 +74,10 @@ export R2_ENDPOINT_URL="https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarest
 export R2_BUCKET=tc-atlas-rt
 export MOSAIC_TILE_MODE=idx MOSAIC_R2_PREFIX=mosaic-v3 MOSAIC_PACK=only MOSAIC_VIS_HIRES=1
 export MOSAIC_MET9=0 MOSAIC_BACKSTOP=0
+# Global z5 (whole globe at ~2.4 km/px) for IR + Vis — Mac only; the backstop
+# builds z4. Needs the local z5 kernels (bin/build_mosaic_z5_kernels.sh); until
+# they exist the bands stay z4 and the log says so.
+export MOSAIC_GLOBAL_Z5=ir,vis
 export MOSAIC_OUT="${HOME_DIR}/out"            # KERNEL_DIR = $MOSAIC_OUT/kernels
 export MET9_CACHE_DIR="${HOME_DIR}/met9_cache"
 export MOSAIC_BAND_TIMEOUT_S=420              # a hung read can't hold the lock into the next cycle

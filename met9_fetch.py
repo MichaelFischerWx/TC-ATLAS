@@ -31,7 +31,8 @@ Credentials: EUMDAC_KEY / EUMDAC_SECRET env (job secrets), else
 Usage:
   python met9_fetch.py                       # latest scan near the builder's frame time
   python met9_fetch.py --build-kernel        # ALSO (re)build kernels/met9_z4.npz from
-                                             # the real navigation (local only: ~6.5 GB peak)
+                                             # the real navigation (local only)
+  python met9_fetch.py --build-kernel --zoom 5   # the Mac's global-z5 kernel (met9_z5.npz)
   python met9_fetch.py --synthetic           # nominal geometry + fake field (dev/test)
 """
 import argparse
@@ -188,22 +189,19 @@ def write_cache(bands, nav, scan, product, cache_dir=CACHE_DIR):
 
 def build_kernel(nav, zoom):
     """geos→Mercator kernel from the REAL navigation, cropped to its on-disk
-    bounding box (576 → ~162 MiB resident) — see build_ir_mosaic.crop_kernel.
-    Local only: the full-res projection peaks ~6.5 GB, far over the job's 4 GiB,
-    which is why the job never builds this kernel itself. Upload the result to
-    R2 kernels/met9_z{zoom}.npz; Dockerfile.mosaic bakes it from the CDN."""
+    bounding box (576 → ~162 MiB resident) — see build_ir_mosaic.build_cropped_kernel.
+    Local only: needs the real navigation from a fresh scan, so the job never
+    builds this kernel itself. Upload the z4 result to R2 kernels/met9_z4.npz;
+    Dockerfile.mosaic bakes it from the CDN. z5 (the Mac's global-z5 bands) stays
+    local — bin/build_mosaic_z5_kernels.sh."""
     import build_ir_mosaic as bim
-    S = bim.TILE_SIZE * (2 ** zoom)
     t0 = time.time()
-    px = np.arange(S, dtype=np.float64) + 0.5
-    lon, lat = bim.pixels_to_lonlat(px[None, :], px[:, None], S)
-    LON, LAT = np.broadcast_to(lon, (S, S)), np.broadcast_to(lat, (S, S))
     grid = bim.grid_of(nav["x"], nav["y"])
-    idx, cosz, mask = bim.project_to_sat(LON, LAT, grid, nav["lon_0"],
-                                         nav["sat_h"], nav["sweep"])
     kp = bim.kernel_path("met9", zoom)
-    os.makedirs(os.path.dirname(kp), exist_ok=True)
-    bim.save_cropped_kernel(kp, idx, cosz, mask, grid)
+    # Strip-wise + cropped (same helper as the GOES/Himawari kernels); z5+ for
+    # the Mac's global-z5 bands is saved uncompressed (local-only).
+    bim.build_cropped_kernel(kp, "met9", grid, float(nav["lon_0"]), float(nav["sat_h"]),
+                             str(nav["sweep"]), zoom, store_grid=grid)
     log(f"kernel → {kp} ({os.path.getsize(kp)/1e6:.0f} MB) in {time.time()-t0:.0f}s")
 
 

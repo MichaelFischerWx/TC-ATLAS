@@ -94,6 +94,26 @@ _VIS_HIRES_MIN_COSW = 0.64
 # ~1 GiB for the re-read; tune live (env, no redeploy) from the logged values.
 VIS_Z7_RSS_SKIP_MIB = int(os.environ.get("MOSAIC_VIS_Z7_RSS_SKIP_MIB", "3000"))
 
+# Global z5: bands listed here render the WHOLE globe one zoom deeper than --zmax
+# (z5 ≈ 2.4 km/px at the equator — about what 2-km IR resolves). Set only on the
+# Mac primary (bin/run_mosaic_local.sh); the Cloud Run backstop leaves it unset and
+# builds z4, so its frames simply carry no global_zmax stamp. The z5 tiles ship in
+# their OWN pack + index (index.json "z5" → <ts>/z5-<hash>/index.json), so the
+# base pack/index — what the zoomed-out view fetches — keeps today's tile set and
+# size. Needs <sat>_z5.npz kernels for every enabled sat (build_ir_mosaic.py
+# --build-kernel --zmax 5, met9_fetch.py --build-kernel --zoom 5); a missing one
+# drops that band back to z4 rather than render a z5 frame without a satellite.
+# Measured 2026-11-10 (M3 Max): +~22 s IR / +~30 s Vis per frame before threaded
+# encode, ~3x tile bytes. See project_mosaic_global_z5_spike.
+GLOBAL_Z5 = {p.strip() for p in os.environ.get("MOSAIC_GLOBAL_Z5", "").split(",")
+             if p.strip()}
+GLOBAL_Z5_ZOOM = 5
+# Threads for PNG encoding in write_pyramid. Pillow's zlib encode releases the
+# GIL: 917 z5 tiles took 14.0 s serial, 3.6 s on 4 threads, 2.5 s on 8. Output
+# order (and so the pack) is unchanged.
+_ENCODE_THREADS = max(1, int(os.environ.get("MOSAIC_ENCODE_THREADS",
+                                            str(min(8, os.cpu_count() or 1)))))
+
 
 def _peak_rss_mib():
     """Peak resident set so far this process (MiB) — the high-water mark, so it
@@ -108,6 +128,22 @@ def storm_zooms_for(product):
     if PRODUCTS[product]["kind"] == "vis" and VIS_HIRES and VIS_STORM_ZMAX > STORM_ZOOMS[-1]:
         return tuple(range(STORM_ZOOMS[0], VIS_STORM_ZMAX + 1))
     return STORM_ZOOMS
+
+
+def _global_zoom_for(product, base_zmax):
+    """Zoom the global render covers for this band: GLOBAL_Z5_ZOOM when the band
+    is in MOSAIC_GLOBAL_Z5 and every enabled sat has a local z5 kernel, else
+    base_zmax. A missing kernel keeps the band at base_zmax (logged) instead of
+    publishing a z5 frame without that satellite."""
+    if product not in GLOBAL_Z5 or base_zmax != GLOBAL_Z5_ZOOM - 1:
+        return base_zmax
+    missing = [k for k, *_ in SATS if not os.path.exists(kernel_path(k, GLOBAL_Z5_ZOOM))]
+    if missing:
+        log(f"  {product}: global z{GLOBAL_Z5_ZOOM} OFF — no z{GLOBAL_Z5_ZOOM} kernel for "
+            f"{','.join(missing)} (build_ir_mosaic.py --build-kernel --zmax "
+            f"{GLOBAL_Z5_ZOOM}; met9_fetch.py --build-kernel --zoom {GLOBAL_Z5_ZOOM})")
+        return base_zmax
+    return GLOBAL_Z5_ZOOM
 
 # (key, kind, bucket, label). lon_0/grid come from each file's own navigation.
 SATS = [
@@ -834,7 +870,7 @@ def _r2_kernel_key(sat_key, zoom):
 _KERNEL_GRID = {}
 
 
-def save_cropped_kernel(path, idx, cosz, mask, grid=None):
+def save_cropped_kernel(path, idx, cosz, mask, grid=None, compress=True):
     """Save a kernel cropped to the bounding box of its on-disk pixels, with the
     (r0, c0) offset and (optionally) the navigation grid it was built from. A
     geostationary disk (LIMB_DEG-cropped) covers ~28-45% of the global Mercator
@@ -846,7 +882,10 @@ def save_cropped_kernel(path, idx, cosz, mask, grid=None):
     doesn't — c0 + width may then exceed the field width (global_render wraps).
 
     grid=None skips the navigation check — needed for GOES, whose 4×-coarsened
-    Visible grid differs from the IR grid by ~7e-9 (> global_render's 1e-9)."""
+    Visible grid differs from the IR grid by ~7e-9 (> global_render's 1e-9).
+
+    compress=False writes a plain .npz: the local-only z5 kernels (~680 MB each
+    resident) load in well under a second instead of ~1.5 s each to inflate."""
     S = mask.shape[1]
     rows = np.where(mask.any(axis=1))[0]
     r0, r1 = int(rows[0]), int(rows[-1]) + 1
@@ -858,8 +897,32 @@ def save_cropped_kernel(path, idx, cosz, mask, grid=None):
     c0 = int(on[(k + 1) % len(on)])
     cols = (c0 + np.arange(S - int(gaps[k]))) % S
     extra = {} if grid is None else dict(grid=np.array(grid, dtype=np.float64))
-    np.savez_compressed(path, idx=idx[r0:r1][:, cols], cosz=cosz[r0:r1][:, cols],
-                        mask=mask[r0:r1][:, cols], off=np.array([r0, c0]), **extra)
+    save = np.savez_compressed if compress else np.savez
+    save(path, idx=idx[r0:r1][:, cols], cosz=cosz[r0:r1][:, cols],
+         mask=mask[r0:r1][:, cols], off=np.array([r0, c0]), **extra)
+
+
+def build_cropped_kernel(path, sat_key, grid, lon_0, sat_h, sweep, zoom,
+                         store_grid=None, strip_rows=1024):
+    """Project the global Mercator field at `zoom` onto one satellite's grid in
+    row strips (the full-field projection peaked ~6.5 GB at z4 and would need
+    ~4x that at z5), save it cropped (save_cropped_kernel), and return it loaded
+    in the runtime shape. Per-pixel identical to a single full-field
+    project_to_sat. z5+ kernels are local-only, so they're saved uncompressed."""
+    S = TILE_SIZE * (2 ** zoom)
+    idx = np.zeros((S, S), np.int32)
+    cosz = np.zeros((S, S), np.float32)
+    mask = np.zeros((S, S), bool)
+    for r0 in range(0, S, strip_rows):
+        r1 = min(S, r0 + strip_rows)
+        LON, LAT = _merc_lonlat_rows(S, r0, r1)
+        idx[r0:r1], cosz[r0:r1], mask[r0:r1] = project_to_sat(LON, LAT, grid, lon_0,
+                                                              sat_h, sweep)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    save_cropped_kernel(path, idx, cosz, mask, store_grid, compress=zoom < GLOBAL_Z5_ZOOM)
+    n_on = int(mask.sum())
+    del idx, cosz, mask
+    return _load_kernel(path, sat_key), n_on
 
 
 def _load_kernel(path, sat_key):
@@ -880,16 +943,6 @@ def ensure_global_kernels(zoom, sats, rebuild=False, use_r2=False):
     LON/LAT grids are now built lazily, only when a kernel actually needs building."""
     os.makedirs(KERNEL_DIR, exist_ok=True)
     kernels = {}
-    _g = {}
-
-    def grids():                       # lazy global LON/LAT (only if building)
-        if not _g:
-            S = TILE_SIZE * (2 ** zoom)
-            px = np.arange(S, dtype=np.float64) + 0.5
-            lon, lat = pixels_to_lonlat(px[None, :], px[:, None], S)
-            _g["LON"] = np.broadcast_to(lon, (S, S))
-            _g["LAT"] = np.broadcast_to(lat, (S, S))
-        return _g["LON"], _g["LAT"]
 
     for sat_key, kind, _b, label in SATS:
         kp = kernel_path(sat_key, zoom)
@@ -922,12 +975,11 @@ def ensure_global_kernels(zoom, sats, rebuild=False, use_r2=False):
             continue
         t0 = time.time()
         s = sats[sat_key]
-        LON, LAT = grids()
-        idx, cosz, mask = project_to_sat(LON, LAT, s["grid"], s["lon_0"],
-                                         s["sat_h"], s["sweep"])
-        np.savez_compressed(kp, idx=idx, cosz=cosz, mask=mask)
-        kernels[sat_key] = (idx, cosz, mask, None)
-        log(f"  kernel {label} z{zoom}: {mask.sum()/1e6:.0f}M px built in "
+        # Cropped, strip-wise (the shape production kernels already have). No
+        # grid stored: GOES Vis's coarsened grid differs from IR's by ~7e-9.
+        kernels[sat_key], n_on = build_cropped_kernel(kp, sat_key, s["grid"], s["lon_0"],
+                                                      s["sat_h"], s["sweep"], zoom)
+        log(f"  kernel {label} z{zoom}: {n_on/1e6:.0f}M px built in "
             f"{time.time()-t0:.1f}s")
         if use_r2:
             try:
@@ -998,9 +1050,13 @@ def global_render(zoom, sats, kernels, timings, product="ir", dt=None):
            else np.zeros((S, S, 4), np.uint8))
     night = PRODUCTS[product]["night"] and dt is not None
     is_vis = PRODUCTS[product]["kind"] == "vis"
-    edges = np.linspace(0, S, _MOSAIC_STRIPS + 1).round().astype(int)
+    # MOSAIC_STRIPS is set for the 8192² (z4) field; deeper fields get 4x the
+    # strips per zoom so each strip — and the blend's transient memory — stays
+    # the same size.
+    n_strips = _MOSAIC_STRIPS * max(1, S // 8192) ** 2
+    edges = np.linspace(0, S, n_strips + 1).round().astype(int)
     tg = tc = 0.0
-    for si in range(_MOSAIC_STRIPS):
+    for si in range(n_strips):
         r0, r1 = int(edges[si]), int(edges[si + 1])
         if r1 <= r0:
             continue
@@ -1047,8 +1103,14 @@ def global_render(zoom, sats, kernels, timings, product="ir", dt=None):
         img_s = (to_index(field, product) if TILE_MODE == "idx"
                  else colormap(field, product))
         if night:
-            LON, LAT = _merc_lonlat_rows(S, r0, r1)
-            nightmask = solar_elev_grid(LAT, LON, dt) < _NIGHT_ELEV_DEG
+            # Latitude varies by row and longitude by column, so pass them as a
+            # column and a row: the trig runs once per row/column and only the
+            # final multiply-add + arcsin is per pixel. Same per-pixel arithmetic
+            # (identical mask) — and ~6x less work than full lon/lat grids at z5.
+            px = np.arange(S, dtype=np.float64) + 0.5
+            py = np.arange(r0, r1, dtype=np.float64) + 0.5
+            lon, lat = pixels_to_lonlat(px, py, S)
+            nightmask = solar_elev_grid(lat[:, None], lon[None, :], dt) < _NIGHT_ELEV_DEG
             img_s[nightmask] = 0 if TILE_MODE == "idx" else (0, 0, 0, 0)
         out[r0:r1] = img_s
         tc += time.time() - t1
@@ -1418,9 +1480,10 @@ def _prune_old_frames(kept, product="ir"):
         log(f"  pruned {pf} old frame(s), {pt} tiles")
 
 
-def build_pack_bytes(entries):
+def build_pack_bytes(entries, extra=None):
     """entries: [(z, x, y, png_bytes), ...] → (pack_bytes, index_json_bytes,
-    pack_name). The pack is the tiles' PNG bytes concatenated in sorted (z,x,y)
+    pack_name). `extra` = additional index.json fields (e.g. the base index's
+    "z5" pointer to the global-z5 index). The pack is the tiles' PNG bytes concatenated in sorted (z,x,y)
     order; index.json maps "z/x/y" → [offset, length] for client Range reads. A
     tile absent from the index is definitively absent from the frame (the client
     skips the request entirely — no 404 round-trips).
@@ -1440,13 +1503,26 @@ def build_pack_bytes(entries):
         off += len(body)
     pk = b"".join(parts)
     name = f"pack-{hashlib.sha1(pk).hexdigest()[:10]}.bin"
-    ix = json.dumps({"pack": name, "tiles": index, "size": off, "count": len(parts)},
-                    separators=(",", ":")).encode()
+    ixd = {"pack": name, "tiles": index, "size": off, "count": len(parts)}
+    ixd.update(extra or {})
+    ix = json.dumps(ixd, separators=(",", ":")).encode()
     return pk, ix, name
 
 
+def build_z5_pack(entries):
+    """Global-z5 tiles → (pack_bytes, pack_name, index_bytes, index_rel). The
+    index lives at <ts>/z5-<sha1[:10]>/index.json: content-addressed like the
+    packs (a re-render can never pair a cached index with another build's pack),
+    and still under the CDN's */index.json cache rule. Its "pack" is relative to
+    the frame directory, like the base index's."""
+    import hashlib
+    pk, ix, pk_name = build_pack_bytes(entries)
+    rel = f"z5-{hashlib.sha1(ix).hexdigest()[:10]}/index.json"
+    return pk, pk_name, ix, rel
+
+
 def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False,
-                       pack=False, storm_zmax=None, frame_sats=None):
+                       pack=False, storm_zmax=None, frame_sats=None, global_zmax=None):
     """Append new_ts to <prefix>/<product>/frames.json, trim to the rolling window,
     and prune the tiles of any frame that fell out of the window (keeps R2 bounded).
 
@@ -1464,6 +1540,7 @@ def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False,
     shown. IR never gaps so its gap_frames stays empty. See project_vis_loop_bounce."""
     c = _get_r2(); key = f"{R2_PREFIX}/{product}/frames.json"
     frames = []; ir_trange = {}; gap_frames = []; pack_frames = []; szm = {}; fsats = {}
+    gzm = {}
     try:
         cur = json.loads(c.get_object(Bucket=_r2_bucket(), Key=key)["Body"].read())
         frames = cur.get("frames", [])
@@ -1472,6 +1549,7 @@ def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False,
         pack_frames = cur.get("pack_frames", []) or []
         szm = cur.get("storm_zmax", {}) or {}
         fsats = cur.get("frame_sats", {}) or {}
+        gzm = cur.get("global_zmax", {}) or {}
     except Exception:
         pass
     if new_ts not in frames:
@@ -1495,10 +1573,19 @@ def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False,
     # covered (lite storm card, credit line); frames without an entry predate it.
     if frame_sats:
         fsats[new_ts] = sorted(frame_sats)
+    # `global_zmax` = deepest zoom covering the WHOLE globe in this frame, for
+    # frames deeper than `zmax` (Mac global-z5 builds). A frame without an entry
+    # (backstop build, older frame) is gapless only to `zmax`. A rebuild of the
+    # same frame at plain zmax drops its stale entry.
+    if global_zmax and int(global_zmax) > int(zmax):
+        gzm[new_ts] = int(global_zmax)
+    else:
+        gzm.pop(new_ts, None)
     manifest = {"frames": frames, "zmax": zmax, "storm_zooms": list(STORM_ZOOMS),
                 "gap_frames": gap_frames, "pack_frames": pack_frames,
                 "storm_zmax": {t: v for t, v in szm.items() if t in frames},
-                "frame_sats": {t: v for t, v in fsats.items() if t in frames}}
+                "frame_sats": {t: v for t, v in fsats.items() if t in frames},
+                "global_zmax": {t: v for t, v in gzm.items() if t in frames}}
     # Per-frame idx→Tb decode range (IR only). Stamp THIS frame with the current
     # encoding range; leave pre-existing frames' entries as-is (a mixed rollover
     # window stays correct) and drop entries for frames that fell out of the window.
@@ -1544,8 +1631,11 @@ def write_pyramid(img, zmax, emit, timings):
     idx_mode = (img.ndim == 2)
     level = img
     n = 0
+    pool = (_cf.ThreadPoolExecutor(max_workers=_ENCODE_THREADS)
+            if _ENCODE_THREADS > 1 else None)
     for z in range(zmax, -1, -1):
         S = level.shape[0]
+        todo = []
         for ty in range(S // TILE_SIZE):
             for tx in range(S // TILE_SIZE):
                 tile = level[ty*TILE_SIZE:(ty+1)*TILE_SIZE,
@@ -1553,7 +1643,13 @@ def write_pyramid(img, zmax, emit, timings):
                 empty = (not tile.any()) if idx_mode else (not tile[..., 3].any())
                 if empty:
                     continue
-                emit(z, tx, ty, _png_bytes(tile)); n += 1
+                todo.append((tx, ty, tile))
+        # Encode in parallel (zlib releases the GIL), emit in the same order.
+        tiles = [t for (_, _, t) in todo]
+        bodies = (pool.map(_png_bytes, tiles) if pool is not None and len(tiles) > 1
+                  else map(_png_bytes, tiles))
+        for (tx, ty, _), body in zip(todo, bodies):
+            emit(z, tx, ty, body); n += 1
         if z > 0:
             h = (S // 2) * 2
             if idx_mode:
@@ -1566,6 +1662,8 @@ def write_pyramid(img, zmax, emit, timings):
             else:
                 level = ((level[:h:2, :h:2].astype(np.uint16) + level[1:h:2, :h:2] +
                           level[:h:2, 1:h:2] + level[1:h:2, 1:h:2]) // 4).astype(np.uint8)
+    if pool is not None:
+        pool.shutdown()
     timings["tile"] = time.time() - t0
     return n
 
@@ -1697,8 +1795,9 @@ def main():
 
     # render newest→oldest so the first frame seeds/loads the kernels
     frame_dts = [latest - timedelta(minutes=10 * i) for i in range(args.frames)]
-    written, written_gap, kernels = {}, {}, None
+    written, written_gap, kernels_by_z = {}, {}, {}   # kernels_by_z: zoom -> kernels
     written_pack, written_zmax = {}, {}   # per-product: packed frames / storm zmax
+    written_gzmax = {}                    # per-product: {ts: global zoom} (z5 frames)
     written_sats = {}                     # per-product: {ts: sats blended}
     t0 = time.time()
     for fi, dt in enumerate(frame_dts):
@@ -1720,11 +1819,22 @@ def main():
         # + freed per product so peak memory stays ~one band at a time.
         for product in products:
             timings = {}
+            # Deepest zoom the global render covers for this band: z5 for the
+            # Mac's MOSAIC_GLOBAL_Z5 bands, else --zmax. Storm sectors only add the
+            # zooms past it.
+            gz = _global_zoom_for(product, args.zmax)
             # Storm zooms are per-product now (Vis bakes z7 from native windows).
             zooms = storm_zooms_for(product)
-            base_zooms = tuple(z for z in zooms if z <= STORM_ZOOMS[-1])
+            base_zooms = tuple(z for z in zooms if gz < z <= STORM_ZOOMS[-1])
             hi_zooms = tuple(z for z in zooms if z > STORM_ZOOMS[-1])
             tiles = storm_tile_set(points, base_zooms, STORM_BOX_DEG) if points else set()
+            # Sector tiles at zooms the global render now covers (z5): taken from
+            # the global render, and copied into the BASE pack as well, so the
+            # base index keeps exactly today's tile set (old cached clients and
+            # the storm card's sector tiles read them from there).
+            storm_global_keys = (storm_tile_set(points, tuple(range(args.zmax + 1, gz + 1)),
+                                                STORM_BOX_DEG)
+                                 if points and gz > args.zmax else set())
             tiles_hi, hw = set(), None
             if points and hi_zooms and PRODUCTS[product]["kind"] == "vis":
                 # Hi-res sectors only for storms whose center is in daylight:
@@ -1774,6 +1884,24 @@ def main():
                         _e(z, x, y, body)
             else:
                 emit = inner
+            # Global tiles past --zmax (z5) go to their own pack (hi_pack); the
+            # base pack gets only the storm-sector copies. Without packs they
+            # are plain per-tile objects like everything else.
+            hi_pack = [] if (pack is not None and gz > args.zmax) else None
+            n_storm_copy = [0]
+
+            def emit_global(z, x, y, body, _base=emit, _hp=hi_pack, _p=pack, _e=inner):
+                if z <= args.zmax:
+                    _base(z, x, y, body); return
+                in_sector = (z, x, y) in storm_global_keys
+                n_storm_copy[0] += in_sector
+                if _hp is None:
+                    _base(z, x, y, body); return
+                _hp.append((z, x, y, body))
+                if _e:
+                    _e(z, x, y, body)
+                if in_sector:
+                    _p.append((z, x, y, body))
 
             # ── Vis z7 native sectors — FIRST, on a virgin arena ─────────────
             # The window working set is small (~70 MB per storm per sat); what
@@ -1818,18 +1946,19 @@ def main():
                         except Exception: pass
                     pool.shutdown()
                 continue
-            if kernels is None:
-                kernels = ensure_global_kernels(args.zmax, sats,
-                                                rebuild=args.build_kernel,
-                                                use_r2=args.r2)
+            if gz not in kernels_by_z:
+                # z5 kernels are local-only (never fetched from / pushed to R2).
+                kernels_by_z[gz] = ensure_global_kernels(gz, sats,
+                                                         rebuild=args.build_kernel,
+                                                         use_r2=args.r2 and gz == args.zmax)
                 if args.build_kernel:
                     log("kernels ready (one-time cost) — done"); return
 
-            rgba = global_render(args.zmax, sats, kernels, timings, product, dt)
+            rgba = global_render(gz, sats, kernels_by_z[gz], timings, product, dt)
             frame_sats = timings.pop("sats", [])
             written_sats.setdefault(product, {})[ts] = sorted(frame_sats)
-            n_global = write_pyramid(rgba, args.zmax, emit, timings)
-            n_storm = n_storm_z7
+            n_global = write_pyramid(rgba, gz, emit_global, timings)
+            n_storm = n_storm_z7 + n_storm_copy[0]
             if tiles:
                 # z5/z6 storm sectors from the 2-km full disk (byte-identical to before).
                 n_storm += render_storm_tiles(sats, tiles, emit, timings, product, dt,
@@ -1882,10 +2011,30 @@ def main():
                     except Exception as ex: errs += 1; log(f"  R2 put failed: {ex}")
                 pool.shutdown()
                 pack_ok = False
+                # Without packs (off/dual) the z5 tiles went up per-tile above.
+                gz_ok = gz > args.zmax and hi_pack is None
                 if pack is not None:
                     try:
-                        pk, ix, pk_name = build_pack_bytes(pack)
                         base = f"{R2_PREFIX}/{product}/{ts}"
+                        extra = None
+                        if hi_pack:
+                            # z5 pack + its index BEFORE the base index that
+                            # points at them. A failure here only costs the frame
+                            # its z5: the base index then carries no pointer.
+                            try:
+                                pk5, pk5_name, ix5, ix5_rel = build_z5_pack(hi_pack)
+                                r2_put(f"{base}/{pk5_name}", pk5,
+                                       "application/octet-stream", TILE_CACHE)
+                                r2_put(f"{base}/{ix5_rel}", ix5,
+                                       "application/json", TILE_CACHE)
+                                extra = {"z5": ix5_rel}
+                                gz_ok = True
+                                log(f"  {product} z{gz} pack: {len(hi_pack)} tiles, "
+                                    f"{len(pk5)/1e6:.1f} MB → {pk5_name}")
+                            except Exception as ex:
+                                log(f"  {product} z{gz} pack upload failed: {ex} — "
+                                    f"frame stays z{args.zmax}")
+                        pk, ix, pk_name = build_pack_bytes(pack, extra)
                         # pack FIRST, then the index that references it — a
                         # client can never see an index pointing at a missing pack.
                         r2_put(f"{base}/{pk_name}", pk,
@@ -1918,24 +2067,41 @@ def main():
                                                 is_gap=((bool(tiles) or storms_unknown)
                                                         and n_storm == 0),
                                                 pack=pack_ok, storm_zmax=frame_szm,
-                                                frame_sats=frame_sats)
+                                                frame_sats=frame_sats,
+                                                global_zmax=gz if gz_ok else None)
                     timings["upload"] = time.time() - t1
                     log(f"  {product} R2: {ok} up ({errs} failed); manifest {len(frames)} frames")
                 if pack_ok:
                     written_pack.setdefault(product, []).append(ts)
+                if pack_ok and gz_ok:
+                    written_gzmax.setdefault(product, {})[ts] = gz
             elif pack is not None:
                 # Local mode: write the pack next to (or instead of) the tile dir
                 # so the dev server / fixtures exercise the exact client path.
-                pk, ix, pk_name = build_pack_bytes(pack)
                 d = os.path.join(args.out, product, ts)
                 os.makedirs(d, exist_ok=True)
+                extra = None
+                if hi_pack:
+                    pk5, pk5_name, ix5, ix5_rel = build_z5_pack(hi_pack)
+                    with open(os.path.join(d, pk5_name), "wb") as f:
+                        f.write(pk5)
+                    os.makedirs(os.path.join(d, os.path.dirname(ix5_rel)), exist_ok=True)
+                    with open(os.path.join(d, ix5_rel), "wb") as f:
+                        f.write(ix5)
+                    extra = {"z5": ix5_rel}
+                    written_gzmax.setdefault(product, {})[ts] = gz
+                    log(f"  {product} z{gz} pack: {len(hi_pack)} tiles, "
+                        f"{len(pk5)/1e6:.1f} MB (local)")
+                pk, ix, pk_name = build_pack_bytes(pack, extra)
                 with open(os.path.join(d, pk_name), "wb") as f:
                     f.write(pk)
                 with open(os.path.join(d, "index.json"), "wb") as f:
                     f.write(ix)
                 written_pack.setdefault(product, []).append(ts)
                 log(f"  {product} pack: {len(pack)} tiles, {len(pk)/1e6:.1f} MB (local)")
-            log(f"  {product}: {n_global} global + {n_storm} storm tiles → {ts}")
+            elif gz > args.zmax:
+                written_gzmax.setdefault(product, {})[ts] = gz
+            log(f"  {product}: {n_global} global (z0-{gz}) + {n_storm} storm tiles → {ts}")
             if args.time:
                 parts = " ".join(f"{k} {timings[k]:.1f}s" for k in
                                  ("read", "gather", "colormap", "tile", "storm_tile", "upload")
@@ -1977,7 +2143,9 @@ def main():
                            "storm_zmax": {t: v for t, v in written_zmax.get(product, {}).items()
                                           if t in ts_list},
                            "frame_sats": {t: v for t, v in written_sats.get(product, {}).items()
-                                          if t in ts_list}}, f)
+                                          if t in ts_list},
+                           "global_zmax": {t: v for t, v in written_gzmax.get(product, {}).items()
+                                           if t in ts_list}}, f)
             log(f"manifest {product} ({len(ts_list)} frames, "
                 f"{len(_gapframes)} gap) → {man}")
     nfr = sum(len(v) for v in written.values())
@@ -1985,9 +2153,7 @@ def main():
     # Peak RSS across the whole process (max over all frames — per-frame arrays are
     # freed between frames). Drives the strip-count / memory-limit sizing (S6).
     try:
-        import resource
-        log(f"PEAK RSS {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.0f} MiB "
-            f"(MOSAIC_STRIPS={_MOSAIC_STRIPS})")
+        log(f"PEAK RSS {_peak_rss_mib():.0f} MiB (MOSAIC_STRIPS={_MOSAIC_STRIPS})")
     except Exception:
         pass
 
