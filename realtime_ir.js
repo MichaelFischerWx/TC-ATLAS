@@ -2166,6 +2166,10 @@
     // never requests tiles that don't exist.
     var _mosaicPackFrames = {};   // product -> { ts: 1 }
     var _mosaicStormZmax = {};    // product -> { ts: zmax }
+    // global_zmax = deepest zoom covering the WHOLE globe in that frame (5 for
+    // the Mac's global-z5 IR/Vis builds; absent = the manifest's zmax, 4). Its
+    // z5 tiles live in a second pack found via the base index's "z5" pointer.
+    var _mosaicGlobalZmax = {};   // product -> { ts: zmax }
     // Frames archived off the rolling mosaic (recon-sat/<ATCF>/<band>/<ts>/, the
     // per-pass copies the SEAR publisher keeps for finished missions). They are
     // packed like their source, so the packed-tile reader must know them even
@@ -2182,6 +2186,12 @@
         var m = _mosaicStormZmax[product], v = (m && ts) ? m[ts] : null;
         return (v && v > 6) ? v : 6;
     }
+    // Gapless base zoom for a frame. 'combo' stays 4: its paired Vis frame may
+    // not share the IR frame's global z5 (z5 tiles still draw as detail there).
+    function _globalZmaxFor(product, ts) {
+        var m = _mosaicGlobalZmax[product], v = (m && ts) ? m[ts] : null;
+        return (v && v > 4) ? v : 4;
+    }
     function _irApplyTrange(j, product) {
         if (j && product === 'ir') _mosaicNoteSats(j);
         if (j) {
@@ -2189,6 +2199,7 @@
             for (i = 0; i < pl.length; i++) pf[pl[i]] = 1;
             _mosaicPackFrames[product] = pf;
             _mosaicStormZmax[product] = j.storm_zmax || {};
+            _mosaicGlobalZmax[product] = j.global_zmax || {};
             if (_mosaicPackPinned[product]) _pinPackFrames(product, null);
         }
         if (product !== 'ir') return;
@@ -2215,9 +2226,14 @@
     // network at all (kills the z5-z7 404 spam over open ocean). Non-packed
     // frames — and any pack/index failure — fall back to a plain tile GET, so
     // this is safe across mixed rollover windows and rollbacks.
-    var _packIdxCache = {};   // "<product>|<ts>" -> Promise<index|null>
-    function _packIndexFor(base, product, ts) {
-        var k = product + '|' + ts, p = _packIdxCache[k];
+    var _packIdxCache = {};   // "<product>|<ts>[|<rel>]" -> Promise<index|null|false>
+    // rel = index path relative to the frame dir (default the base index.json;
+    // the base index's "z5" names the global-z5 one). missingIsFinal: a 404/403
+    // resolves false and STAYS memoized — recon-sat archive copies carry the base
+    // index's z5 pointer but not the z5 objects, and every z5 tile asking again
+    // would be a request storm. Other failures resolve null and are retried.
+    function _packIndexFor(base, product, ts, rel, missingIsFinal) {
+        var k = product + '|' + ts + (rel ? '|' + rel : ''), p = _packIdxCache[k];
         if (p) return p;
         // Timeout + failure retry are load-bearing: this promise is memoized,
         // so without them ONE stalled index.json fetch (seen live 2026-07-23
@@ -2227,10 +2243,14 @@
         // the next animation tick retries with a fresh request.
         var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
         var tid = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 8000) : null;
-        p = _packIdxCache[k] = fetch(base + '/index.json', ctrl ? { signal: ctrl.signal } : {})
+        p = _packIdxCache[k] = fetch(base + '/' + (rel || 'index.json'),
+                                     ctrl ? { signal: ctrl.signal } : {})
             .then(function (r) {
                 if (tid) clearTimeout(tid);
-                if (!r.ok) { delete _packIdxCache[k]; return null; }
+                if (!r.ok) {
+                    if (missingIsFinal && (r.status === 404 || r.status === 403)) return false;
+                    delete _packIdxCache[k]; return null;
+                }
                 return r.json();
             })
             .catch(function () {
@@ -2277,41 +2297,54 @@
         return _packIndexFor(base, product, ts).then(function (ix) {
             if (!ix || !ix.tiles) return plain();
             var e = ix.tiles[key];
-            if (!e) return null;                      // definitively absent — no request
-            // ix.pack = content-hashed pack filename (defends against a CDN-cached
-            // pack from a DIFFERENT build of the same frame — a Cloud Run task
-            // retry re-renders the frame with slightly different bytes, and the
-            // immutable edge cache can otherwise pin the old pack against the new
-            // index, shifting every offset; seen live 2026-07-21).
-            var packUrl = base + '/' + (ix.pack || 'pack.bin');
-            // Validate the PNG signature on every ranged slice; anything else
-            // (offset drift, edge-cache corruption) falls back to the per-tile GET.
-            function pngBlobOrPlain(ab) {
-                var b = new Uint8Array(ab, 0, 4);
-                if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) {
-                    // Explicit image/png type: the pack serves as octet-stream,
-                    // and Safari won't sniff a typeless blob for <img>/bitmap.
-                    return new Blob([ab], { type: 'image/png' });
+            if (e) return _packRangeRead(base + '/' + (ix.pack || 'pack.bin'), e, plain);
+            // Global-z5 frames keep their z5 tiles in a second pack, named by
+            // the base index's "z5" (its own index; "pack" is frame-relative).
+            // Only zoomed-in views ever fetch it.
+            if (ix.z5 && m[4] === '5') {
+                return _packIndexFor(base, product, ts, ix.z5, true).then(function (ix5) {
+                    if (ix5 === null) return undefined;   // transient — not a cached miss
+                    var e5 = ix5 && ix5.tiles && ix5.tiles[key];
+                    return e5 ? _packRangeRead(base + '/' + (ix5.pack || 'pack.bin'), e5, plain)
+                              : null;
+                });
+            }
+            return null;                              // definitively absent — no request
+        });
+    }
+    // Range-read one tile out of a pack. packUrl names a content-hashed pack
+    // (defends against a CDN-cached pack from a DIFFERENT build of the same
+    // frame — a Cloud Run task retry re-renders the frame with slightly
+    // different bytes, and the immutable edge cache can otherwise pin the old
+    // pack against the new index, shifting every offset; seen live 2026-07-21).
+    function _packRangeRead(packUrl, e, plain) {
+        // Validate the PNG signature on every ranged slice; anything else
+        // (offset drift, edge-cache corruption) falls back to the per-tile GET.
+        function pngBlobOrPlain(ab) {
+            var b = new Uint8Array(ab, 0, 4);
+            if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) {
+                // Explicit image/png type: the pack serves as octet-stream,
+                // and Safari won't sniff a typeless blob for <img>/bitmap.
+                return new Blob([ab], { type: 'image/png' });
+            }
+            return plain();
+        }
+        return _rtFetch(packUrl,
+                     { headers: { Range: 'bytes=' + e[0] + '-' + (e[0] + e[1] - 1) } })
+            .then(function (r) {
+                if (r.status === 206) {
+                    return r.arrayBuffer().then(pngBlobOrPlain);
+                }
+                if (r.status === 200) {
+                    // Range-unaware server (e.g. a plain dev server): slice
+                    // the full pack client-side so the tile still decodes.
+                    return r.arrayBuffer().then(function (ab) {
+                        return pngBlobOrPlain(ab.slice(e[0], e[0] + e[1]));
+                    });
                 }
                 return plain();
-            }
-            return _rtFetch(packUrl,
-                         { headers: { Range: 'bytes=' + e[0] + '-' + (e[0] + e[1] - 1) } })
-                .then(function (r) {
-                    if (r.status === 206) {
-                        return r.arrayBuffer().then(pngBlobOrPlain);
-                    }
-                    if (r.status === 200) {
-                        // Range-unaware server (e.g. a plain dev server): slice
-                        // the full pack client-side so the tile still decodes.
-                        return r.arrayBuffer().then(function (ab) {
-                            return pngBlobOrPlain(ab.slice(e[0], e[0] + e[1]));
-                        });
-                    }
-                    return plain();
-                })
-                .catch(function () { return plain(); });
-        });
+            })
+            .catch(function () { return plain(); });
     }
     window._v3TileBlob = _v3TileBlob;
 
@@ -2495,6 +2528,9 @@
                 // _stormZmaxFor has no 'combo' map → capped at z6 (both bands
                 // are globally gapless there).
                 frameMaxZoom: function (f) { return _stormZmaxFor(_ir2aProduct, f); },
+                // Global-z5 frames are gapless through z5, so at z6+ the base
+                // under the storm sectors is z5, not z4.
+                frameBaseMaxZoom: function (f) { return _globalZmaxFor(_ir2aProduct, f); },
                 fetchTile: function (f, z, x, y) { return _v3TileBlob(_ir2aTileUrl(f, z, x, y)); },
                 lut: _idxLutForProduct(_ir2aProduct, _irColormap || 'claude-ir'),
                 onError: function (m) { console.error('[ir2a] ' + m); },
@@ -34315,6 +34351,8 @@
                     id: 'recon-mosaic-idx',
                     tileUrl: function (f, z, x, y) { return root + '/' + f + '/' + z + '/' + x + '/' + y + '.png'; },
                     frameMaxZoom: function (f) { return zmax || _stormZmaxFor(product, f); },
+                    // Archived copies (zmax set) keep only the base pack.
+                    frameBaseMaxZoom: function (f) { return zmax ? 4 : _globalZmaxFor(product, f); },
                     fetchTile: function (f, z, x, y) {
                         return _v3TileBlob(root + '/' + f + '/' + z + '/' + x + '/' + y + '.png');
                     },

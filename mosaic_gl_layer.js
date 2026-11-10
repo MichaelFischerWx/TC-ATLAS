@@ -106,6 +106,17 @@
     // Optional per-frame detail cap (e.g. Vis frames with a baked z7 storm
     // sector go past z6; other frames don't) — clamps the render zoom per frame.
     var frameMaxZoom = opts.frameMaxZoom || null;
+    // Optional per-frame gapless zoom (e.g. 5 for global-z5 frames): raises the
+    // base level for that frame so z6+ draws z5 under the storm sectors.
+    var frameBaseMaxZoom = opts.frameBaseMaxZoom || null;
+    function baseZoomFor(frame, z) {
+      var b = baseMaxZoom;
+      if (frameBaseMaxZoom && frame) {
+        var c = frameBaseMaxZoom(frame);
+        if (c != null && c > b) b = c;
+      }
+      return Math.min(z, b);
+    }
     // Combo ("sandwich") mode: a second band (Vis idx) is sampled alongside the
     // primary. pairFrame(frame) → the second band's frame id (or null = none,
     // e.g. night); tileUrl2/fetchTile2 fetch its tiles; lut2 maps its idx to
@@ -265,7 +276,7 @@
     // levels (coarse base + sharp), and the paired-Vis band in combo mode.
     // Each ref is [frame, z, x, y, band].
     function frameTileRefs(frame) {
-      var z = pickZoom(frame), baseZ = Math.min(z, baseMaxZoom);
+      var z = pickZoom(frame), baseZ = baseZoomFor((frame != null) ? frame : active, z);
       var levels = (z > baseZ) ? [baseZ, z] : [baseZ];
       var pf = comboMode ? pairFrame(frame) : null;
       var out = [];
@@ -361,7 +372,7 @@
         if (!P) return;
         prog = P.prog; loc = P.loc;
         var z = pickZoom();
-        var baseZ = Math.min(z, baseMaxZoom);
+        var baseZ = baseZoomFor(active, z);
         // Coarse base (gapless) first, then sparse detail (storm sectors) on top.
         var levels = (z > baseZ) ? [baseZ, z] : [baseZ];
 
