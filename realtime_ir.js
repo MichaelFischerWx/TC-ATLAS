@@ -3491,23 +3491,171 @@
             gl.setMinZoom(0);
             map.setGlobe(true);
             try {
-                gl.setSky({ 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 5, 1, 7, 0] });
+                // Kept low: with the real sun in front, MapLibre's scattering hazes
+                // the whole sunlit face and washes out the imagery. 0.3 keeps
+                // a visible glow on the sunlit edge; gone once zoomed in.
+                gl.setSky({ 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 0.3, 4, 0.2, 6, 0] });
             } catch (e) {}
             var fz = _rtGlobeFitZoom(gl);
             if (gl.getZoom() > fz) gl.easeTo({ zoom: fz, duration: 900 });
+            _rtGlobeLightEnsure();
+            _rtGlobeShowPanel(true);
+            _rtGlobeStars(gl.getContainer());
         } else {
             _rtGlobeOn = false;
             map.setGlobe(false);
             try { gl.setSky(undefined); } catch (e) {}
+            // Back to MapLibre's default viewport light (nothing on the flat map uses it).
+            try { gl.setLight({ anchor: 'viewport', position: [1.15, 210, 30], color: '#ffffff', intensity: 0.5 }); } catch (e) {}
             var mz = (_rtGlobeMinZoom != null) ? _rtGlobeMinZoom : 2;
             if (gl.getZoom() < mz) gl.jumpTo({ zoom: mz });
             gl.setMinZoom(mz);
+            _rtGlobeShowPanel(false);
         }
         var b = document.getElementById('ir-globe-mode-btn');
         if (b) b.classList.toggle('active', _rtGlobeOn);
         return _rtGlobeOn;
     }
     window._rtGlobeToggle = _rtGlobeToggle;
+
+    // ── Globe lighting: sun, moon, night side, city lights ─────────────────
+    // globe_light.js loads on the first globe toggle (flat-map visitors never
+    // fetch it). Everything follows the DISPLAYED frame's time, so the
+    // terminator sweeps with the loop. The night shade sits just above the
+    // satellite (z 210) and below coastlines, tracks and markers.
+    var _GLOBE_LIGHT_SRC = 'globe_light.js?v=20261109gb2';
+    var _rtGlobeLight = null, _rtGlobeLightLoading = false, _rtGlobeBodies = null;
+    var _rtGlobeLightOpts = { night: true, lights: true };
+    try {
+        var _glo = JSON.parse(localStorage.getItem('rtGlobeLight') || 'null');
+        if (_glo) { _rtGlobeLightOpts.night = _glo.night !== false; _rtGlobeLightOpts.lights = _glo.lights !== false; }
+    } catch (e) {}
+    function _rtGlobeLightEnsure() {
+        if (_rtGlobeLight) { _rtGlobeLightUpdate(); return; }
+        if (window.GlobeLight) { _rtGlobeLightCreate(); return; }
+        if (_rtGlobeLightLoading) return;
+        _rtGlobeLightLoading = true;
+        var s = document.createElement('script');
+        s.src = _GLOBE_LIGHT_SRC;
+        s.onload = function () { _rtGlobeLightLoading = false; _rtGlobeLightCreate(); };
+        s.onerror = function () { _rtGlobeLightLoading = false; console.error('[globe] lighting module failed to load'); };
+        document.head.appendChild(s);
+    }
+    function _rtGlobeLightCreate() {
+        if (_rtGlobeLight || !window.GlobeLight || !map) return;
+        _rtGlobeLight = GlobeLight.createLayer({
+            id: 'globe-light',
+            lightsZoom: 3,
+            lightsTileUrl: function (z, x, y) {
+                return GIBS_BASE + '/VIIRS_CityLights_2012/default/2012-01-01/GoogleMapsCompatible_Level8/' + z + '/' + y + '/' + x + '.jpg';
+            }
+        });
+        _rtGlobeLight.setOptions(_rtGlobeLightOpts);
+        try { map._glAdd(_rtGlobeLight.layer, 210); } catch (e) { console.error('[globe] light layer add failed', e); }
+        _rtGlobeLightUpdate();
+    }
+    // Time of the frame on screen: the loop frame while animating/scrubbing,
+    // else the newest still frame.
+    function _rtGlobeFrameDate() {
+        var iso = (globalAnimFrameLayers.length && globalAnimFrameTimes[globalAnimIndex])
+            ? globalAnimFrameTimes[globalAnimIndex] : _globalLatestSatIso();
+        // Mosaic loop frames are raw 'YYYYMMDDHHMM' stamps, not ISO.
+        if (iso && /^\d{12}$/.test(String(iso))) iso = _mosaicTsToIso(iso);
+        var d = iso ? new Date(iso) : null;
+        return (d && !isNaN(d.getTime())) ? d : new Date();
+    }
+    function _rtGlobeLightUpdate() {
+        if (!_rtGlobeOn || !window.GlobeLight) return;
+        var b = GlobeLight.bodies(_rtGlobeFrameDate());
+        _rtGlobeBodies = b;
+        if (_rtGlobeLight) _rtGlobeLight.setBodies(b);
+        var gl = map && map._gl;
+        if (gl && gl.setLight) {
+            try { gl.setLight(GlobeLight.atmosphereLight(b.sun.vec)); } catch (e) {}
+        }
+        _rtGlobePanelReadout();
+    }
+
+    // Starfield behind the sphere: one 1024² tile drawn once from a fixed
+    // seed (same sky every time), used as a CSS background on the map
+    // container — MapLibre clears the canvas to transparent off the globe.
+    var _rtGlobeStarsUrl = null;
+    function _rtGlobeStars(container) {
+        if (!container) return;
+        if (!_rtGlobeStarsUrl) {
+            try {
+                var c = document.createElement('canvas'); c.width = c.height = 1024;
+                var x = c.getContext('2d'), seed = 20261109;
+                var rnd = function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+                for (var i = 0; i < 900; i++) {
+                    var r = rnd(), m = r < 0.85 ? 0.5 + rnd() * 0.5 : 0.9 + rnd() * 0.9;
+                    var a = r < 0.85 ? 0.25 + rnd() * 0.45 : 0.6 + rnd() * 0.4;
+                    var hue = rnd();   // a few faintly blue or warm stars
+                    x.fillStyle = hue < 0.15 ? 'rgba(190,210,255,' + a + ')' : hue > 0.92 ? 'rgba(255,225,190,' + a + ')' : 'rgba(255,255,255,' + a + ')';
+                    x.beginPath(); x.arc(rnd() * 1024, rnd() * 1024, m, 0, Math.PI * 2); x.fill();
+                }
+                _rtGlobeStarsUrl = 'url(' + c.toDataURL('image/png') + ')';
+            } catch (e) { _rtGlobeStarsUrl = 'none'; }
+        }
+        container.style.setProperty('--globe-stars', _rtGlobeStarsUrl);
+    }
+
+    var _rtGlobePanel = null;
+    function _rtGlobeFmtLL(lat, lon) {
+        return Math.abs(lat).toFixed(1) + '°' + (lat < 0 ? 'S' : 'N') + ' ' +
+            Math.abs(lon).toFixed(1) + '°' + (lon < 0 ? 'W' : 'E');
+    }
+    function _rtGlobeEnsurePanel() {
+        if (_rtGlobePanel) return _rtGlobePanel;
+        var box = document.createElement('div');
+        box.id = 'ir-globe-ctl';
+        box.className = 'ir-globe-ctl';
+        box.innerHTML =
+            '<div class="ir-globe-ctl-row">' +
+            '<button type="button" class="ir-globe-ctl-btn" data-opt="night" title="Shade the night side from the sun position at the shown frame time">Day / night</button>' +
+            '<button type="button" class="ir-globe-ctl-btn" data-opt="lights" title="City lights on the night side (NASA VIIRS 2012)">City lights</button>' +
+            '</div>' +
+            '<div class="ir-globe-ctl-read" id="ir-globe-ctl-read"></div>';
+        document.body.appendChild(box);
+        box.addEventListener('click', function (e) {
+            var b = e.target.closest ? e.target.closest('.ir-globe-ctl-btn') : null;
+            if (!b) return;
+            var k = b.getAttribute('data-opt');
+            _rtGlobeLightOpts[k] = !_rtGlobeLightOpts[k];
+            try { localStorage.setItem('rtGlobeLight', JSON.stringify(_rtGlobeLightOpts)); } catch (e2) {}
+            if (_rtGlobeLight) _rtGlobeLight.setOptions(_rtGlobeLightOpts);
+            _rtGlobeSyncPanel();
+        });
+        _rtGlobePanel = box;
+        _rtGlobeSyncPanel();
+        return box;
+    }
+    function _rtGlobeSyncPanel() {
+        if (!_rtGlobePanel) return;
+        var btns = _rtGlobePanel.querySelectorAll('.ir-globe-ctl-btn');
+        for (var i = 0; i < btns.length; i++) {
+            var on = !!_rtGlobeLightOpts[btns[i].getAttribute('data-opt')];
+            btns[i].classList.toggle('active', on);
+            btns[i].setAttribute('aria-pressed', String(on));
+        }
+        // City lights only exist on the shaded night side.
+        var lb = _rtGlobePanel.querySelector('[data-opt="lights"]');
+        if (lb) lb.disabled = !_rtGlobeLightOpts.night;
+    }
+    function _rtGlobePanelReadout() {
+        var el = document.getElementById('ir-globe-ctl-read');
+        if (!el || !_rtGlobeBodies) return;
+        var s = _rtGlobeBodies.sun, m = _rtGlobeBodies.moon;
+        el.innerHTML =
+            '<div><span class="ir-globe-ctl-k">Sun overhead</span> ' + _rtGlobeFmtLL(s.lat, s.lon) + '</div>' +
+            '<div><span class="ir-globe-ctl-k">Moon</span> ' + Math.round(m.illum * 100) + '% lit, ' +
+            (m.waxing ? 'waxing' : 'waning') + ' · over ' + _rtGlobeFmtLL(m.lat, m.lon) + '</div>';
+    }
+    function _rtGlobeShowPanel(show) {
+        var box = _rtGlobeEnsurePanel();
+        box.style.display = show ? '' : 'none';
+        if (show) _rtGlobePanelReadout();
+    }
 
     // Reflect 3D state on every 3D toggle button (top-bar pill + any others).
     function _rt3DSyncButtons() {
@@ -5870,6 +6018,7 @@
         // The still frame's time just moved (new mosaic ingest) — re-pick the
         // env forecast hour so the draped analysis keeps up with the imagery.
         _globalEnvSyncToFrame();
+        if (_rtGlobeOn) _rtGlobeLightUpdate();
     }
 
     function showGlobalAnimFrame(idx) {
@@ -5892,6 +6041,8 @@
         if (timeEl && globalAnimFrameTimes[idx]) {
             timeEl.textContent = fmtUTC(globalAnimFrameTimes[idx]);
         }
+        // Globe: move the terminator with the loop.
+        if (_rtGlobeOn) _rtGlobeLightUpdate();
 
         // Keep the US radar overlay (if on) synced to the displayed frame time.
         if (_gRadarOn) _gRadarSync();
@@ -6529,6 +6680,7 @@
         globalAnimLoading = false;
         globalAnimIndex = 0;
         updateGlobalAnimControls('idle');
+        if (_rtGlobeOn) _rtGlobeLightUpdate();   // back on the still frame's time
     }
 
     /** Update the global animation control panel state. State transitions

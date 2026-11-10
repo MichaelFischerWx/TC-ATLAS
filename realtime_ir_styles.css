@@ -3294,7 +3294,36 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
 .ir-layers-wrap .ir-3d-mode-btn { order: 1; }
 /* Globe view (spike): space behind the sphere. MapLibre clears the canvas
    to transparent outside the globe, so the map container shows through. */
-#ir-map.lflet-globe { background: radial-gradient(ellipse at center, #0a1122 0%, #03050b 70%, #000 100%); }
+#ir-map.lflet-globe {
+    background-color: #000;
+    background-image: var(--globe-stars, none), radial-gradient(ellipse at center, #0a1122 0%, #03050b 70%, #000 100%);
+    background-size: 1024px 1024px, auto;
+}
+
+/* Globe lighting panel (Day / night, City lights + sun/moon readout).
+   Same dark-glass look as the 3D Tilt control, which it never shares the
+   screen with (3D and Globe are exclusive). */
+.ir-globe-ctl {
+    position: fixed; right: 14px; bottom: 62px; z-index: 650;   /* clears the expanded map credits */
+    background: rgba(15, 23, 42, 0.92);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(148, 163, 184, 0.28); border-radius: var(--radius-lg);
+    padding: 8px 10px; box-shadow: var(--shadow-2);
+    font: 600 11px/1.25 'DM Sans', system-ui, sans-serif; color: #cbd5e1;
+    max-width: 280px;
+}
+.ir-globe-ctl-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.ir-globe-ctl-btn {
+    background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #94a3b8; border-radius: var(--radius-sm); padding: 5px 8px; cursor: pointer;
+    font: 600 11px/1 'DM Sans', system-ui, sans-serif;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.ir-globe-ctl-btn.active { background: var(--sel-fill-glass); border-color: var(--sel-fill-glass); color: var(--sel-ink); }
+.ir-globe-ctl-btn:disabled { opacity: 0.4; cursor: default; }
+.ir-globe-ctl-read { margin-top: 7px; font-weight: 500; font-size: 10px; color: #cbd5e1; font-variant-numeric: tabular-nums; }
+.ir-globe-ctl-read > div + div { margin-top: 2px; }
+.ir-globe-ctl-k { color: #94a3b8; }
 .ir-3d-mode-btn {
     display: inline-flex;
     align-items: center;
@@ -3666,6 +3695,7 @@ html:not([data-view="map"]) #basin-sidebar,
 html:not([data-view="map"]) #ir-global-env-cbars,
 /* The 3D-convection Tilt slider is position:fixed on <body> too. */
 html:not([data-view="map"]) #ir-3d-tilt-ctl,
+html:not([data-view="map"]) #ir-globe-ctl,
 /* The "Display" dropdown wrap is position:fixed on <body> and HOLDS the
    moved-in toggles, so hiding the individual toggles above isn't enough — the
    wrap + its "Display" button still float over Subseasonal/Seasonal/Recon. */
@@ -3677,6 +3707,7 @@ html:not([data-view="map"]) #ir-display-wrap {
    Lift it clear of the deck. !important overrides the inline style. */
 @media (max-width: 768px) {
     #ir-3d-tilt-ctl { bottom: 128px !important; }
+    #ir-globe-ctl { bottom: 128px; }
 }
 
 /* …and the SAME controls bleed over the storm-detail pane. Opening a
@@ -3698,7 +3729,8 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-legend,
 body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #basin-sidebar-toggle,
 body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #basin-sidebar,
 body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-global-env-cbars,
-body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap {
+body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap,
+body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-globe-ctl {
     display: none !important;
 }
 
