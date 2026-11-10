@@ -127,16 +127,46 @@ def _trop_mean_full_lon(ds: xr.Dataset, time_index: int) -> float | None:
         return None
 
 
+# PSL's THREDDS server rate-limits (HTTP 429), and netCDF4 reports that as
+# the same generic "NetCDF: Access failure" it uses for a missing file, so
+# a busy server looks exactly like "this year's file doesn't exist yet".
+# Retry the open with backoff before giving up on a year.
+OPENDAP_OPEN_ATTEMPTS = 4
+OPENDAP_RETRY_BASE_S = 15.0          # waits 15 s, 30 s, 60 s between tries
+
+# The newest OISST day is normally 1-3 days behind today. Anything older
+# than this means PSL handed back the wrong file or a stalled one; the job
+# must not publish it as "today" (on 2026-11-10 a 429 on the 2026 file sent
+# the job to the 2025 file and it published 2025-12-31 as the latest day).
+MAX_OISST_AGE_DAYS = 10
+
+
+def _open_oisst_year(year: int, label: str = "") -> xr.Dataset | None:
+    """Open one year's PSL OPeNDAP file, retrying transient failures."""
+    url = OISST_DAILY_OPENDAP_TMPL.format(year=year)
+    for attempt in range(1, OPENDAP_OPEN_ATTEMPTS + 1):
+        try:
+            return xr.open_dataset(url)
+        except Exception as e:
+            if attempt == OPENDAP_OPEN_ATTEMPTS:
+                log.warning("  %sOPeNDAP open failed for %d after %d tries: %s",
+                            label, year, attempt, e)
+                return None
+            wait = OPENDAP_RETRY_BASE_S * 2 ** (attempt - 1)
+            log.warning("  %sOPeNDAP open failed for %d (try %d/%d): %s "
+                        "— retrying in %.0f s", label, year, attempt,
+                        OPENDAP_OPEN_ATTEMPTS, e, wait)
+            time.sleep(wait)
+    return None
+
+
 def _fetch_oisst_single_day(year: int) -> xr.DataArray | None:
     """Open year's daily OISST OPeNDAP file and return the last non-empty
     timestep, subset to the Atlantic+tropics box. Single-time-slice fetches
     are reliable through PSL OPeNDAP (the failure mode of the historical
     backfill was triggered by large multi-chunk requests, not single days)."""
-    url = OISST_DAILY_OPENDAP_TMPL.format(year=year)
-    try:
-        ds = xr.open_dataset(url)
-    except Exception as e:
-        log.warning("  OPeNDAP open failed for %d: %s", year, e)
+    ds = _open_oisst_year(year)
+    if ds is None:
         return None
     try:
         sub = ds.sel(lat=slice(LAT_MIN, LAT_MAX), lon=slice(LON_MIN, LON_MAX))
@@ -169,15 +199,29 @@ def fetch_latest_oisst() -> xr.DataArray:
     PSL's current-year file is updated each day with the latest available
     timestep. We open the current year's file, take the last time slice
     that's not all-NaN, and return it as a 2D DataArray with a time coord.
+
+    The prior-year file is only a fallback in the first days of January,
+    before the new year's file has any data. Raises (so the job writes
+    nothing and yesterday's outputs stay live) when no day is available or
+    the newest one is more than MAX_OISST_AGE_DAYS old.
     """
-    yr = datetime.now(timezone.utc).year
+    today = datetime.now(timezone.utc).date()
+    yr = today.year
     sst = _fetch_oisst_single_day(yr)
-    if sst is None:
+    if sst is None and today.timetuple().tm_yday <= MAX_OISST_AGE_DAYS:
         log.warning("  current-year (%d) OISST not available; trying %d", yr, yr - 1)
         sst = _fetch_oisst_single_day(yr - 1)
     if sst is None:
         raise RuntimeError(
-            "Could not get a recent OISST timestep from either current or prior year"
+            f"Could not get a recent OISST timestep for {yr}; "
+            "leaving yesterday's outputs in place"
+        )
+    valid = datetime.strptime(sst.attrs["time"], "%Y-%m-%d").date()
+    age = (today - valid).days
+    if age > MAX_OISST_AGE_DAYS:
+        raise RuntimeError(
+            f"Newest OISST timestep {valid} is {age} days old "
+            f"(limit {MAX_OISST_AGE_DAYS}); refusing to publish it as today's"
         )
     return sst
 
@@ -352,11 +396,8 @@ def fetch_month_mean_anomaly(clim_mean: xr.DataArray,
         year = today.year
     if month is None:
         month = today.month
-    url = OISST_DAILY_OPENDAP_TMPL.format(year=year)
-    try:
-        ds = xr.open_dataset(url)
-    except Exception as e:
-        log.warning("  MTD anomaly: OPeNDAP open failed for %d: %s", year, e)
+    ds = _open_oisst_year(year, label="MTD anomaly: ")
+    if ds is None:
         return None
     anoms, rels, dates = [], [], []
     try:
@@ -596,15 +637,28 @@ def append_to_daily_parquet(row: dict) -> None:
 
     Only the current year of daily values is kept on GCS — historical
     monthly values live in indices_monthly.parquet, written by the
-    backfill. The frontend joins the two on the fly."""
+    backfill. The frontend joins the two on the fly.
+
+    The table holds ONE calendar year: rows from any other year than the
+    new row's are dropped. That starts the new year with a fresh table on
+    the first January day, and it removes a stray prior-year row such as
+    the 2025-12-31 one a PSL 429 slipped in on 2026-11-10. The frontend
+    places dates by month/day only, so a row from another year would be
+    drawn on this year's axis."""
     name = "indices_daily_current_year.parquet"
     local = WORK_DIR / name
     if not _download_blob(name, local):
-        # First-of-year: start a fresh table.
         log.info("  no existing %s; starting fresh", name)
         df = pd.DataFrame(columns=list(row.keys()))
     else:
         df = pd.read_parquet(local)
+    year_prefix = row["date"][:5]                       # "YYYY-"
+    other_year = ~df["date"].astype(str).str.startswith(year_prefix)
+    if other_year.any():
+        log.info("  dropping %d row(s) from other years (%s)",
+                 int(other_year.sum()),
+                 ", ".join(sorted(df.loc[other_year, "date"].astype(str))[:5]))
+        df = df[~other_year]
     df = df[df["date"] != row["date"]]
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     df = df.sort_values("date").reset_index(drop=True)
@@ -757,6 +811,15 @@ def refresh_monthly_preliminary(climo_mean: xr.DataArray) -> None:
              cur_month, int(prelim.get("n_days", 0)))
 
 
+def _published_latest_date() -> str | None:
+    """valid_date of the live latest.json, or None if it can't be read."""
+    try:
+        return json.loads(_gcs_blob("latest.json").download_as_text())["valid_date"]
+    except Exception as e:
+        log.warning("  could not read published latest.json: %s", e)
+        return None
+
+
 def write_latest_json(row: dict, png_name: str) -> None:
     """Tiny pointer file used by the frontend for first-paint. Now also
     points to the Vecchi-Soden relative-anomaly PNG + grid sidecar so
@@ -792,6 +855,13 @@ def main():
     t0 = time.time()
     log.info("Fetching latest OISST ...")
     sst = fetch_latest_oisst()
+    if not args.local_only:
+        live = _published_latest_date()
+        if live and sst.attrs["time"] < live:
+            raise RuntimeError(
+                f"Fetched OISST day {sst.attrs['time']} is older than the "
+                f"published latest day {live}; not overwriting it"
+            )
 
     log.info("Loading climatology ...")
     clim = load_climatology()

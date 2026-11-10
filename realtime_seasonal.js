@@ -3996,11 +3996,16 @@
     // For each (region, variable, year), produce a numeric values array
     // aligned to the leap-year DOY axis (366 long). Missing days are
     // `null` so Plotly draws gaps; non-leap-year DOY-60 is always null.
-    function _yearSeriesToLeapAxis(dates, values) {
+    // Dates map by month/day only, so a caller whose payload may hold
+    // another year's rows passes `onlyYear` to skip them (a stray
+    // 2025-12-31 row once landed on Dec 31 of the 2026 axis).
+    function _yearSeriesToLeapAxis(dates, values, onlyYear) {
         var out = new Array(366);
         for (var i = 0; i < 366; i++) out[i] = null;
+        var yearPrefix = onlyYear ? String(onlyYear) + '-' : null;
         for (var k = 0; k < dates.length; k++) {
             var s = dates[k];
+            if (yearPrefix && s.substring(0, 5) !== yearPrefix) continue;
             var m = parseInt(s.substring(5, 7), 10);
             var d = parseInt(s.substring(8, 10), 10);
             var ld = _leapDoy(m, d);
@@ -4250,13 +4255,13 @@
             var cySrc;
             if (isDetrended) {
                 var sstLeap = _yearSeriesToLeapAxis(cyDates,
-                    cy.values[region + '_sst'] || []);
+                    cy.values[region + '_sst'] || [], currentYear);
                 cySrc = _detrendedLeapSeries(currentYear, sstLeap,
                                              trend.values[region]);
             } else {
                 var colName = region + '_' + varKey;
                 cySrc = _yearSeriesToLeapAxis(cyDates,
-                    cy.values[colName] || []);
+                    cy.values[colName] || [], currentYear);
             }
             // Preliminary tail: every day within OISST's ~14-day
             // finalization window may still be revised by NOAA's
