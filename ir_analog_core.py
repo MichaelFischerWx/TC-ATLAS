@@ -283,20 +283,56 @@ def sample_latlon(tb, bounds: dict, lat, lon) -> np.ndarray:
     return out
 
 
+def fill_small_gaps(chip, passes: int = 3) -> np.ndarray:
+    """Fill narrow holes from their neighbours; leave real gaps missing.
+
+    MergIR's parallax correction leaves thin lines of missing pixels along
+    the edges of high cloud: typically 2-5% of a storm chip, one or two
+    pixels wide. Each pass gives a missing pixel the mean of its valid
+    8-neighbours, so `passes` passes close a hole up to about 2 * passes
+    pixels across. A missing swath or an off-disc area is far wider than
+    that and keeps its NaN core.
+    """
+    out = np.array(chip, dtype=np.float32, copy=True)
+    for _ in range(passes):
+        nan = ~np.isfinite(out)
+        if not nan.any():
+            break
+        p = np.pad(np.where(nan, 0.0, out), 1)
+        c = np.pad((~nan).astype(np.float32), 1)
+        h, w = out.shape
+        tot = np.zeros_like(out)
+        cnt = np.zeros_like(out)
+        for dy in (0, 1, 2):
+            for dx in (0, 1, 2):
+                if dy == 1 and dx == 1:
+                    continue
+                tot += p[dy:dy + h, dx:dx + w]
+                cnt += c[dy:dy + h, dx:dx + w]
+        fill = nan & (cnt > 0)
+        out[fill] = tot[fill] / cnt[fill]
+    return out
+
+
 def cut_chip(tb, bounds: dict, center_lat: float, center_lon: float, *,
-             px: int = CHIP_PX, km: float = CHIP_KM, flip_sh: bool = True):
+             px: int = CHIP_PX, km: float = CHIP_KM, flip_sh: bool = True, fill_passes: int = 3):
     """Cut the storm-centred chip from a north-up lat/lon frame.
 
     Returns (chip, info): chip is float32 [px, px] K with NaN for missing;
     info = {"flipped": mirrored north-south because the centre is in the
-    Southern Hemisphere, "valid_frac": finite fraction of the chip}.
+    Southern Hemisphere, "gap_frac": missing fraction as sampled, before
+    fill_small_gaps, "valid_frac": finite fraction of the returned chip}.
+    fill_passes=0 returns the chip as sampled.
     """
     lat, lon = chip_latlon(center_lat, center_lon, px, km)
     chip = sample_latlon(tb, bounds, lat, lon)
+    gap_frac = float(1.0 - np.isfinite(chip).mean())
+    if fill_passes and gap_frac > 0:
+        chip = fill_small_gaps(chip, fill_passes)
     flipped = bool(flip_sh and center_lat < 0)
     if flipped:
         chip = chip[::-1].copy()
-    return chip, {"flipped": flipped, "valid_frac": float(np.isfinite(chip).mean())}
+    return chip, {"flipped": flipped, "gap_frac": gap_frac, "valid_frac": float(np.isfinite(chip).mean())}
 
 
 def unflip(chip: np.ndarray, flipped: bool) -> np.ndarray:

@@ -1,7 +1,9 @@
 # IR Analog Finder — design
 
-Written 2026-11-10. Status: **proposed, nothing built.** Replaces the broader
-multi-block "analog engine" draft; what survives of that is under §Later.
+Written 2026-11-10. Status: **shared chip code and the polar descriptor are
+built and tested** (§Built so far); the index, the network methods and the
+interface are not. Replaces the broader multi-block "analog engine" draft;
+what survives of that is under §Later.
 
 **Goal.** Pick any infrared frame of any storm and get back the historical
 storm-moments whose IR structure looks most like it, drawn from the MergIR
@@ -21,7 +23,7 @@ ViT-S/14), so the tooling exists on the Mac.
 | Asset | Where | Use here |
 |---|---|---|
 | IR context layer | `bin/build_ir_context.py` → R2 `ir-context/v1/{YYYY}/{YYYYMMDDHH}.webp` | One near-global 8 km image per 3-hourly time, MergIR from 1998. **One file serves every storm active at that time**, with no Earthdata calls. The fastest way to cut chips for the whole archive. |
-| Storm sector frames | `global_archive_api.py`, cache key `v7/ir/{sid}/{frame_idx}.json` | 20°×20° at native 4 km, uint8 Tb. Filled on demand and by `precache_mergir.py`, so coverage is partial. The 4 km source where it exists. |
+| Storm sector frames | `global_archive_api.py`, cache key `v7/ir/{sid}/{frame_idx}.json` | 20°×20° at native 4 km, uint8 Tb. Written on demand by the API, by `precache_mergir.py`, and by `bin/build_ir_context.py`, which cuts them from the same source file as the context layer. The public GCS copy is sparse (probed 2026-11-10: 180 of 1,717 storms of 50 kt or more since 1998 had frames); the R2 copy could not be checked from the build session. The 4 km source where it exists. |
 | Frame index space | `_build_mergir_frame_list` (`global_archive_api.py:1354`) | 3-hourly frames per storm. Using the same indexing means every analog deep-links straight to its frame in Storm Detail. |
 | Scene QC | `_mergir_scene_qc` (`global_archive_api.py:1855`) | Rejects frames with missing data, striping or unphysical values. |
 | IR center finder | `tc_center_fix.py` | Recenters a chip on the eye when best-track interpolation is off. |
@@ -52,6 +54,9 @@ One chip per storm-frame, the unit everything else is built on.
 * **Hemisphere:** Southern Hemisphere chips are flipped north–south so cyclonic
   rotation has one handedness. The flip is recorded and undone for display.
 * **QC:** `_mergir_scene_qc` thresholds; rejected frames get no entry.
+* **Parallax gaps:** MergIR leaves thin lines of missing pixels along the edges
+  of high cloud, 2–5% of a typical storm chip. Holes up to about 6 pixels
+  across are filled from their neighbours; anything wider stays missing.
 
 The chips go to a local Zarr store (`uint8 [N, 224, 224]`, ~9 GB before
 compression at 4 km, ~2.3 GB at 8 km). That store is a reusable asset in its own
@@ -207,6 +212,45 @@ Effort figures are rough guesses, for sequencing only.
 
 Phase 0 needs the Mac (torch and the model weights live there). Everything in
 `ir_analog_core.py` and method A can be built and tested in this repo first.
+
+---
+
+## Built so far
+
+`ir_analog_core.py` and `tests/test_ir_analog_core.py` (16 tests, numpy only):
+chip cutting on a true-distance grid from sector frames or the context WebP,
+the hemisphere mirror, gap filling, the vendored frame list and scene QC (held
+to `global_archive_api` by tests that lift the originals out of its source),
+the polar descriptor, both orientation modes, alignment angle, PCA and int8
+packing, and one-per-storm search.
+
+One change from the table above: the ring harmonics are a least-squares fit,
+not a plain Fourier sum. On a square pixel lattice the plain sum leaks about
+2% of wavenumber 1 into wavenumber 3, which was enough to spoil rotation
+invariance.
+
+**Pilot on real frames (method A only).** 4,967 usable six-hourly frames of
+180 storms, 1998–2024, all basins, taken from the public GCS sector cache
+(whatever happened to be cached, so not a designed sample):
+
+| Check | As seen | Any orientation | Chance |
+|---|---|---|---|
+| Nearest other frame belongs to the same storm | 20% | 12% | ~0.6% |
+| Mean intensity difference to the top 10 look-alikes (other storms) | 21.8 kt | 20.8 kt | 35 kt |
+
+* 99.8% of frames give a usable descriptor once gaps are filled (96.9% without).
+* Scene QC rejected 42 of 5,012 frames.
+* Each block alone finds the same storm 3–8% of the time; together 20%. The
+  default block weights were about as good as any of the ten settings tried.
+* A contact sheet of four queries looked right by eye: Katrina at peak returns
+  Wilma, Chaba, Floyd, Irma; a small sheared tropical storm returns other
+  small, lopsided ones. That is a first impression, not the blind comparison.
+
+The same-storm rate is far above chance but well short of "usually", at 6-hour
+spacing. It is the number methods B and C have to beat.
+
+**Next:** `build_ir_analog_chips.py` (needs R2 access, so it runs on the Mac),
+then methods B and C on the same chips and the blind comparison page.
 
 ---
 

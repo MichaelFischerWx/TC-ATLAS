@@ -216,9 +216,33 @@ def test_chip_outside_frame_is_missing():
     assert 0.4 < info["valid_frac"] < 0.6, info
     # a NaN hole in the source stays a hole; valid neighbours are not smeared in
     tb2 = tb.copy(); tb2[260:290, 260:290] = np.nan
-    chip2, _ = C.cut_chip(tb2, bounds, 20.0, -60.0)
+    chip2, info2 = C.cut_chip(tb2, bounds, 20.0, -60.0)
     assert np.isnan(chip2[112, 112]) and np.isfinite(chip2[20, 20])
+    assert info2["gap_frac"] > 1.0 - info2["valid_frac"] > 0     # the rim was filled, the core was not
     assert abs(np.nanmax(chip2) - 250.0) < 1e-3 and abs(np.nanmin(chip2) - 250.0) < 1e-3
+
+
+def test_small_gaps_filled_large_ones_kept():
+    xx, yy, rng, _ = C._chip_grid(C.CHIP_PX, C.CHIP_KM)
+    chip = (200.0 + 0.2 * rng).astype(np.float32)
+    holed = chip.copy()
+    holed[50, 20:200] = np.nan                    # a 1-pixel line, like a MergIR parallax gap
+    holed[100:103, 30:60] = np.nan                # 3 pixels wide
+    holed[150:190, 150:190] = np.nan              # a 40-pixel block: a real gap
+    out = C.fill_small_gaps(holed, passes=3)
+    assert np.isfinite(out[50, 20:200]).all() and np.isfinite(out[100:103, 30:60]).all()
+    assert np.abs(out[50, 20:200] - chip[50, 20:200]).max() < 1.0     # filled with sensible values
+    assert np.isnan(out[165:175, 165:175]).all()                      # the core of the block is still missing
+    assert np.isfinite(out[150:153, 150:190]).all()                   # only its 3-pixel rim was filled
+    kept = np.isfinite(holed)
+    assert np.array_equal(out[kept], holed[kept])                     # valid pixels are never touched
+    assert np.array_equal(C.fill_small_gaps(chip), chip)              # nothing to do
+    assert np.isnan(C.fill_small_gaps(np.full((8, 8), np.nan, np.float32))).all()
+    assert np.isnan(holed[50, 100])                                   # input not modified
+    # lines through the centre empty the innermost ring; filled, every ring is usable
+    line_only = chip.copy(); line_only[112, :] = np.nan; line_only[:, 112] = np.nan
+    assert C.polar_descriptor(line_only)[1] is False
+    assert C.polar_descriptor(C.fill_small_gaps(line_only))[1] is True
 
 
 def test_southern_hemisphere_mirror():
