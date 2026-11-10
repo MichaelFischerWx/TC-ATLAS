@@ -110,7 +110,10 @@
     'vec3 tint=mix(vec3(0.0,0.012,0.045),vec3(0.03,0.04,0.06),moonUp)*a;' +
     'vec3 city=vec3(0.0);' +
     'if(u_lights_on>0.5){vec3 L=texture2D(u_lights,v_merc).rgb;' +
-    'city=pow(L,vec3(1.6))*vec3(1.0,0.82,0.55)*1.25*lightsMask*u_night;}' +
+    // Drop the imagery's navy background (~0,1,29) so only the lights add —
+    // and tile seams / a tile still loading can't show as a box.
+    'L=max(L-vec3(0.012,0.02,0.125),0.0);' +
+    'city=pow(L,vec3(1.6))*vec3(1.0,0.82,0.55)*1.35*lightsMask*u_night;}' +
     'gl_FragColor=vec4(tint+city,a);}';
 
   var MESH_X = 96, MESH_Y = 64;
@@ -132,7 +135,7 @@
   function createLayer(opts) {
     opts = opts || {};
     var map = null, gl = null, meshBuf = null, nVerts = 0, progs = {};
-    var lightsTex = null, lightsCanvas = null, lightsReady = false, lightsLoading = false;
+    var lightsTex = null, lightsReady = false, lightsLoading = false;
     var sun = [0, 0, 1], moon = [0, 0, -1], moonIllum = 0;
     var nightOn = true, lightsOn = true;
     var NIGHT_STRENGTH = (opts.nightStrength != null) ? opts.nightStrength : 0.62;
@@ -156,35 +159,75 @@
     // City lights: GIBS VIIRS 2012 night lights, one Mercator world texture
     // stitched from tiles at lightsZoom (z3 = 8×8 tiles of 256 px = 2048 px,
     // ~0.5 MB of JPEG). Power-of-two, so it gets mipmaps for the zoomed-out view.
+    // GIBS intermittently rejects requests in a 64-tile burst (the browser sees
+    // a CORS failure and the tile used to stay black — a missing 45°×41° box
+    // over the eastern US on 2026-11-10). So: at most 6 in flight, each tile
+    // retried with backoff, one more sweep for stragglers 20 s later, and the
+    // texture re-uploaded whenever a late tile lands.
     function loadLights() {
       if (lightsLoading || !opts.lightsTileUrl) return;
       lightsLoading = true;
       var z = opts.lightsZoom != null ? opts.lightsZoom : 3, n = 1 << z, T = 256;
-      lightsCanvas = document.createElement('canvas');
-      lightsCanvas.width = lightsCanvas.height = n * T;
-      var ctx = lightsCanvas.getContext('2d');
-      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, n * T, n * T);
-      var left = n * n;
-      function done() {
-        if (--left > 0) return;
+      var canvas = document.createElement('canvas');
+      canvas.width = canvas.height = n * T;
+      var ctx = canvas.getContext('2d');
+      // The imagery's own empty-surface navy, so a tile that never arrives
+      // matches its neighbours (the shader subtracts this floor anyway).
+      ctx.fillStyle = 'rgb(0,1,29)'; ctx.fillRect(0, 0, n * T, n * T);
+      var queue = [], active = 0, MAX = 6, pending = n * n, failed = [], swept = false, upT = null;
+      for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) queue.push({ x: x, y: y, tries: 0 });
+      function upload() {
         if (!gl) return;
-        lightsTex = gl.createTexture();
+        if (!lightsTex) {
+          lightsTex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, lightsTex);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        }
         gl.bindTexture(gl.TEXTURE_2D, lightsTex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, lightsCanvas);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, canvas);
         gl.generateMipmap(gl.TEXTURE_2D);
-        lightsCanvas = null; lightsReady = true;
+        lightsReady = true;
         if (map) map.triggerRepaint();
       }
-      for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) (function (x, y) {
-        var img = new Image(); img.crossOrigin = 'anonymous';
-        img.onload = function () { try { ctx.drawImage(img, x * T, y * T, T, T); } catch (e) {} done(); };
-        img.onerror = done;
-        img.src = opts.lightsTileUrl(z, x, y);
-      })(x, y);
+      function uploadSoon() { if (upT) return; upT = setTimeout(function () { upT = null; upload(); }, 400); }
+      function settle(t, ok) {
+        active--;
+        if (ok) {
+          pending--;
+          if (pending === 0 || swept) uploadSoon();
+        } else if (t.tries < 4) {
+          setTimeout(function () { queue.push(t); pump(); }, 500 * Math.pow(3, t.tries - 1));   // 0.5, 1.5, 4.5 s
+        } else {
+          failed.push(t);
+          pending--;
+        }
+        if (pending === 0 && !swept) {
+          upload();
+          if (failed.length) {
+            swept = true;
+            setTimeout(function () {
+              var again = failed.splice(0);
+              again.forEach(function (f) { f.tries = 0; queue.push(f); });
+              pending += again.length;
+              pump();
+            }, 20000);
+          }
+        }
+        pump();
+      }
+      function pump() {
+        while (active < MAX && queue.length) (function (t) {
+          active++; t.tries++;
+          var img = new Image(); img.crossOrigin = 'anonymous';
+          img.onload = function () { try { ctx.drawImage(img, t.x * T, t.y * T, T, T); } catch (e) {} settle(t, true); };
+          img.onerror = function () { settle(t, false); };
+          img.src = opts.lightsTileUrl(z, t.x, t.y);
+        })(queue.shift());
+      }
+      pump();
     }
 
     var layer = {

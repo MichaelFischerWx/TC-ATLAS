@@ -3541,7 +3541,7 @@
     // fetch it). Everything follows the DISPLAYED frame's time, so the
     // terminator sweeps with the loop. The night shade sits just above the
     // satellite (z 210) and below coastlines, tracks and markers.
-    var _GLOBE_LIGHT_SRC = 'globe_light.js?v=20261110sk3';
+    var _GLOBE_LIGHT_SRC = 'globe_light.js?v=20261110cl1';
     var _rtGlobeLight = null, _rtGlobeLightLoading = false, _rtGlobeBodies = null, _rtGlobeSky = null;
     var _rtGlobeLightOpts = { night: true, lights: true };
     try {
