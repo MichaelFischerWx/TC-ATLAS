@@ -3301,34 +3301,50 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     background-image: radial-gradient(ellipse at center, #070c18 0%, #02040a 70%, #000 100%);
 }
 
-/* Globe lighting panel (Day / night, City lights + sun/moon readout).
-   Same dark-glass look as the 3D Tilt control, which it never shares the
-   screen with (3D and Globe are exclusive). */
+/* Globe lighting panel (Day / night, City lights, Face the sun, Tilt, sun/
+   moon readout). Same container as the loop dock (.rt-anim-bar: map glass,
+   --radius, --shadow-2) and the shared "inset map button" role from
+   tc_radar_styles.css (--map-btn-inset-*; selected = --sel-fill-glass), so it
+   reads as part of the map chrome in both themes. */
 .ir-globe-ctl {
     position: fixed; right: 14px; bottom: 62px; z-index: 650;   /* clears the expanded map credits */
-    background: rgba(15, 23, 42, 0.92);
-    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(148, 163, 184, 0.28); border-radius: var(--radius-lg);
-    padding: 8px 10px; box-shadow: var(--shadow-2);
-    font: 600 11px/1.25 'DM Sans', system-ui, sans-serif; color: #cbd5e1;
-    max-width: 300px;
+    background: var(--map-glass);
+    border: 1px solid var(--map-line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-2);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    padding: 6px 8px;
+    font-family: 'DM Sans', sans-serif; font-size: 11px; color: var(--map-ink);
+    max-width: 320px;
 }
-.ir-globe-ctl-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+.ir-globe-ctl-row { display: grid; grid-template-columns: repeat(3, auto); gap: 6px; }
 .ir-globe-ctl-btn {
-    background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.14);
-    color: #94a3b8; border-radius: var(--radius-sm); padding: 5px 8px; cursor: pointer;
-    font: 600 11px/1 'DM Sans', system-ui, sans-serif;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    height: 24px; padding: 0 8px; white-space: nowrap; cursor: pointer;
+    font-family: inherit; font-size: 11px; line-height: 1; font-weight: 600;
+    background: var(--map-btn-inset-bg); color: var(--map-btn-ink);
+    border: 1px solid var(--map-btn-line); border-radius: var(--radius);
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.ir-globe-ctl-btn .icon-inline { width: 13px; height: 13px; flex: 0 0 auto; }
+.ir-globe-ctl-btn:hover:not(.active, :disabled) {
+    background: var(--map-btn-inset-hover-bg); border-color: var(--map-btn-hover-line); color: #fff;
 }
 .ir-globe-ctl-btn.active { background: var(--sel-fill-glass); border-color: var(--sel-fill-glass); color: var(--sel-ink); }
 .ir-globe-ctl-btn:disabled { opacity: 0.4; cursor: default; }
-.ir-globe-ctl-tilt { display: flex; align-items: center; gap: 6px; margin-top: 7px; color: #94a3b8; font-weight: 600; }
-.ir-globe-ctl-tilt input { flex: 1; min-width: 0; accent-color: #4a9b6e; cursor: pointer; }
-.ir-globe-ctl-sun { color: #fcd34d; border-color: rgba(252, 211, 77, 0.35); background: rgba(252, 211, 77, 0.08); }
-.ir-globe-ctl-read { margin-top: 7px; font-weight: 500; font-size: 10px; color: #cbd5e1; font-variant-numeric: tabular-nums; }
+.ir-globe-ctl-tilt { display: flex; align-items: center; gap: 8px; margin-top: 7px; color: var(--map-ink-dim); font-weight: 600; }
+.ir-globe-ctl-tilt input { flex: 1; min-width: 0; accent-color: var(--um-green, #4a9b6e); cursor: pointer; }
+.ir-globe-ctl-hint { margin-top: 4px; color: var(--map-ink-dim); font-size: 10px; }
+.ir-globe-ctl-hint-touch { display: none; }
+.ir-globe-ctl-read { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--map-line); font-weight: 500; font-size: 10px; color: var(--map-ink); font-variant-numeric: tabular-nums; }
 .ir-globe-ctl-line { display: block; }
 .ir-globe-ctl-line + .ir-globe-ctl-line { margin-top: 2px; }
-.ir-globe-ctl-k { color: #94a3b8; }
+.ir-globe-ctl-k { color: var(--map-ink-dim); }
+/* Touch screens get the two-finger hint instead of the mouse one. */
+@media (hover: none) and (pointer: coarse) {
+    .ir-globe-ctl-hint-mouse { display: none; }
+    .ir-globe-ctl-hint-touch { display: block; }
+}
 .ir-3d-mode-btn {
     display: inline-flex;
     align-items: center;
@@ -3715,11 +3731,12 @@ html:not([data-view="map"]) #ir-display-wrap {
     /* Phone: dock full-width just above the loop bar instead of floating
        over the globe (the camera is padded to keep the sphere above it). */
     #ir-globe-ctl { left: 12px; right: 12px; bottom: 128px; max-width: none; padding: 7px 8px; }
-    .ir-globe-ctl-btn { padding: 7px 4px; }
+    .ir-globe-ctl-row { grid-template-columns: repeat(3, 1fr); }
+    .ir-globe-ctl-btn { height: 30px; padding: 0 4px; }
     .ir-globe-ctl-tilt { display: none; }
-    .ir-globe-ctl-read { margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ir-globe-ctl-read { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .ir-globe-ctl-line { display: inline; }
-    .ir-globe-ctl-line + .ir-globe-ctl-line::before { content: ' · '; color: #64748b; }
+    .ir-globe-ctl-line + .ir-globe-ctl-line::before { content: ' · '; color: var(--map-ink-dim); }
     .ir-globe-ctl-far { display: none; }
 }
 

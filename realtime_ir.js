@@ -3503,12 +3503,18 @@
             var fz = _rtGlobeFitZoom(gl);
             if (gl.getZoom() > fz) gl.easeTo({ zoom: fz, duration: 900 });
             _rtGlobeLightEnsure();
-            // Camera freedom on the globe: right-/ctrl-drag (two-finger twist on
-            // touch) turns the view, the panel's Tilt slider pitches it toward
-            // the horizon — enough to watch the sun sit on the limb.
+            // Camera freedom on the globe, Google Earth style: drag spins the
+            // Earth, right-drag / Ctrl+drag tilts AND turns the view (the map is
+            // built with pitchWithRotate:false, so flip MapLibre's flag before
+            // enabling — it is read in enable()); on touch, two fingers twist to
+            // turn and slide up/down to tilt. The panel's Tilt slider follows.
             try {
                 if (gl.setMaxPitch) gl.setMaxPitch(80);
-                if (gl.dragRotate) gl.dragRotate.enable();
+                if (gl.dragRotate) {
+                    if ('_pitchWithRotate' in gl.dragRotate) gl.dragRotate._pitchWithRotate = true;
+                    gl.dragRotate.disable(); gl.dragRotate.enable();
+                }
+                if (gl.touchPitch) gl.touchPitch.enable();
                 if (gl.touchZoomRotate) gl.touchZoomRotate.enableRotation();
                 if (!gl.__rtGlobePitchSync) { gl.__rtGlobePitchSync = true; gl.on('pitch', _rtGlobeSyncTilt); }
             } catch (e) {}
@@ -3517,7 +3523,10 @@
             // Flat map: north up and top-down again, rotation off (as before).
             try {
                 gl.jumpTo({ pitch: 0, bearing: 0 });
-                if (gl.dragRotate) gl.dragRotate.disable();
+                if (gl.dragRotate) {
+                    gl.dragRotate.disable();
+                    if ('_pitchWithRotate' in gl.dragRotate) gl.dragRotate._pitchWithRotate = false;
+                }
                 if (gl.touchZoomRotate) gl.touchZoomRotate.disableRotation();
             } catch (e) {}
             map.setGlobe(false);
@@ -3617,13 +3626,19 @@
         box.className = 'ir-globe-ctl';
         box.innerHTML =
             '<div class="ir-globe-ctl-row">' +
-            '<button type="button" class="ir-globe-ctl-btn" data-opt="night" title="Shade the night side from the sun position at the shown frame time">Day / night</button>' +
-            '<button type="button" class="ir-globe-ctl-btn" data-opt="lights" title="City lights on the night side (NASA VIIRS 2012)">City lights</button>' +
-            '<button type="button" class="ir-globe-ctl-btn ir-globe-ctl-sun" id="ir-globe-face-sun" title="Turn the globe so the sun sits just past the limb at the shown frame time">Face the sun</button>' +
+            // Line icons (no emoji): half-lit disc, lamp, sun.
+            '<button type="button" class="ir-globe-ctl-btn" data-opt="night" title="Shade the night side from the sun position at the shown frame time">' +
+            '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none"/></svg>Day / night</button>' +
+            '<button type="button" class="ir-globe-ctl-btn" data-opt="lights" title="City lights on the night side (NASA VIIRS 2012)">' +
+            '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg>City lights</button>' +
+            '<button type="button" class="ir-globe-ctl-btn" id="ir-globe-face-sun" title="Shortcut: turn the globe so the sun sits just past the limb at the shown frame time">' +
+            '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>Face the sun</button>' +
             '</div>' +
             // Desktop only (CSS): phones tilt with a two-finger vertical drag.
-            '<label class="ir-globe-ctl-tilt" title="Tilt the camera toward the horizon. Right-drag turns the view.">Tilt ' +
+            '<label class="ir-globe-ctl-tilt" title="Tilt the camera toward the horizon">Tilt ' +
             '<input id="ir-globe-tilt" type="range" min="0" max="80" step="1" value="0"></label>' +
+            '<div class="ir-globe-ctl-hint ir-globe-ctl-hint-mouse">Drag to spin · right-drag or Ctrl+drag to tilt and turn</div>' +
+            '<div class="ir-globe-ctl-hint ir-globe-ctl-hint-touch">Two fingers: twist to turn, slide up or down to tilt</div>' +
             '<div class="ir-globe-ctl-read" id="ir-globe-ctl-read"></div>';
         document.body.appendChild(box);
         var tilt = box.querySelector('#ir-globe-tilt');
