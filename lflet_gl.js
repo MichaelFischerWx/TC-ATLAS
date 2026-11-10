@@ -22,6 +22,11 @@
  */
 (function (global) {
     'use strict';
+    // Globe preview (realtime_ir.html?globe=1): the page loaded MapLibre 5
+    // first and kept it in __ml5; the page's regular deferred MapLibre 4
+    // script then replaced window.maplibregl. Put 5 back before anything
+    // (this file, realtime_ir.js, mosaic_gl_layer.js) touches the engine.
+    if (global.__ml5) global.maplibregl = global.__ml5;
     if (typeof maplibregl === 'undefined') { console.error('lflet_gl: maplibregl missing'); return; }
 
     var _uid = 0;
@@ -1150,7 +1155,9 @@
             var mo = markerAnchorOpts(this.options.icon); mo.element = this.options.icon ? makeIconEl(this.options.icon) : undefined;
             // On the globe, a marker on the far side is drawn at this opacity
             // (MapLibre's default 0.2 lets it show through the sphere). Hide it.
-            mo.opacityWhenCovered = '0';
+            // MapLibre 5 only — on 4.x the option governs markers behind 3D
+            // terrain, which the default page keeps at MapLibre's 0.2.
+            if (typeof map._gl.setProjection === 'function') mo.opacityWhenCovered = '0';
             this._m = new maplibregl.Marker(mo).setLngLat(mlWrap(this._ll)).addTo(map._gl);
             if (this._popup) { this._m.setPopup(this._popup._ml()); this._bridgePopup(); }
             // maplibregl markers all share one DOM container ordered by insertion, so
@@ -1246,7 +1253,9 @@
             // instead of making a DOM marker — the archive draws thousands of
             // genesis/LMI dots this way.
             if (o.renderer && o.renderer._isBatch) { o.renderer._ensure(map); o.renderer._addCirc(this); this._batch = o.renderer; return; }
-            this._m = new maplibregl.Marker({ element: this.options.icon._el, anchor: 'center', opacityWhenCovered: '0' }).setLngLat(mlWrap(this._ll)).addTo(map._gl);
+            this._m = new maplibregl.Marker(typeof map._gl.setProjection === 'function'
+                ? { element: this.options.icon._el, anchor: 'center', opacityWhenCovered: '0' }
+                : { element: this.options.icon._el, anchor: 'center' }).setLngLat(mlWrap(this._ll)).addTo(map._gl);
             if (this._popup) { this._m.setPopup(this._popup._ml()); this._bridgePopup(); } this._applyTooltip(); this._applyEvents(); },
         _removeFromGL: function () { if (this._batch) { this._batch._removeCirc(this); return; } if (this._tipHide) this._tipHide(); if (this._m) this._m.remove(); },
         // setRadius/setStyle on circle dots (e.g. WeatherLab genesis markers rescaled

@@ -7867,6 +7867,18 @@
         }
         if (!pts.length) return;
         _firstFitDone = true;
+        // Globe (?globe=1 start): keep the whole sphere in view and turn it to
+        // face the systems — a bounds fit would zoom in to storm scale.
+        if (_rtGlobeOn && map._gl) {
+            try {
+                var arcG = _lonArc(pts), latSum = 0;
+                for (var g = 0; g < pts.length; g++) latSum += pts[g].lat;
+                var midLon = arcG.west + (((arcG.east - arcG.west) % 360) + 360) % 360 / 2;
+                map._gl.jumpTo({ center: [((midLon + 540) % 360) - 180, Math.max(-30, Math.min(30, latSum / pts.length))],
+                                 zoom: _rtGlobeFitZoom(map._gl) });
+            } catch (e) {}
+            return;
+        }
         if (!narrow && _defaultViewShowsStorms(storms)) return;
         // Phones zoom in further; a desktop stays an overview.
         var singleZoom = narrow ? 4 : 3.5, maxFitZoom = narrow ? 5 : 4;
