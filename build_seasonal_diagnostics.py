@@ -396,6 +396,52 @@ def fetch_month_mean_anomaly(clim_mean: xr.DataArray,
         year = today.year
     if month is None:
         month = today.month
+    # A completed month has every day on PSL, so fewer days than the month
+    # holds means the reads failed, not that data is missing. A 429 on a
+    # day's data request comes back as fill values rather than an error,
+    # so it looks like an empty day; on 2026-11-10 that silently dropped
+    # October from the analog file. Retry the month when it comes up short.
+    completed = (year, month) < (today.year, today.month)
+    expected = pd.Period(f"{year}-{month:02d}", freq="M").days_in_month
+    for attempt in range(1, OPENDAP_OPEN_ATTEMPTS + 1):
+        got = _collect_month_anomalies(clim_mean, year, month)
+        if got is None:
+            return None
+        anoms, rels, dates = got
+        if not completed or len(anoms) >= expected:
+            break
+        if attempt < OPENDAP_OPEN_ATTEMPTS:
+            wait = OPENDAP_RETRY_BASE_S * 2 ** (attempt - 1)
+            log.warning("  month-mean anomaly: %d-%02d read %d of %d days "
+                        "(try %d/%d) — retrying in %.0f s", year, month,
+                        len(anoms), expected, attempt,
+                        OPENDAP_OPEN_ATTEMPTS, wait)
+            time.sleep(wait)
+    else:
+        log.warning("  month-mean anomaly: %d-%02d still short (%d of %d "
+                    "days) after %d tries; skipping it", year, month,
+                    len(anoms), expected, OPENDAP_OPEN_ATTEMPTS)
+        return None
+
+    if not anoms:
+        log.warning("  month-mean anomaly: no days available yet for %d-%02d",
+                    year, month)
+        return None
+    # NaN-safe mean across days (land/ice cells that are NaN on some days
+    # still contribute their finite days rather than poisoning the cell).
+    anom_mtd = xr.concat(anoms, dim="_day").mean(dim="_day", skipna=True)
+    anom_rel_mtd = xr.concat(rels, dim="_day").mean(dim="_day", skipna=True)
+    anom_mtd.attrs = {"time": dates[-1]}
+    anom_rel_mtd.attrs = {"time": dates[-1]}
+    log.info("  month-mean anomaly: averaged %d day(s) of %d-%02d (through %s)",
+             len(anoms), year, month, dates[-1])
+    return anom_mtd, anom_rel_mtd, len(anoms), dates[-1]
+
+
+def _collect_month_anomalies(clim_mean: xr.DataArray, year: int, month: int):
+    """Read every day of (year, month) that has data and return the
+    per-day (anomaly, relative anomaly, date) lists, or None if the year's
+    file can't be opened."""
     ds = _open_oisst_year(year, label="MTD anomaly: ")
     if ds is None:
         return None
@@ -422,20 +468,7 @@ def fetch_month_mean_anomaly(clim_mean: xr.DataArray,
             dates.append(ts)
     finally:
         ds.close()
-
-    if not anoms:
-        log.warning("  month-mean anomaly: no days available yet for %d-%02d",
-                    year, month)
-        return None
-    # NaN-safe mean across days (land/ice cells that are NaN on some days
-    # still contribute their finite days rather than poisoning the cell).
-    anom_mtd = xr.concat(anoms, dim="_day").mean(dim="_day", skipna=True)
-    anom_rel_mtd = xr.concat(rels, dim="_day").mean(dim="_day", skipna=True)
-    anom_mtd.attrs = {"time": dates[-1]}
-    anom_rel_mtd.attrs = {"time": dates[-1]}
-    log.info("  month-mean anomaly: averaged %d day(s) of %d-%02d (through %s)",
-             len(anoms), year, month, dates[-1])
-    return anom_mtd, anom_rel_mtd, len(anoms), dates[-1]
+    return anoms, rels, dates
 
 
 # Back-compat alias — the current-month default is the original behavior.
