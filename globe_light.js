@@ -8,7 +8,7 @@
  *                               illum, waxing} }      (sub-solar / sub-lunar points)
  *   GlobeLight.atmosphereLight(sunVec) → MapLibre light spec that points the
  *                               globe atmosphere's sun at sunVec
- *   GlobeLight.createLayer({ id, lightsTileUrl, lightsZoom }) → controller:
+ *   GlobeLight.createLayer({ id, lightsTileUrl, lightsZoom, lightsMaxZoom }) → controller:
  *       .layer               MapLibre 5 custom layer (add with map._glAdd)
  *       .setBodies(b)        sun/moon from bodies()
  *       .setOptions({night, lights})
@@ -88,6 +88,8 @@
   // through MapLibre's projectTile() so it sits exactly on the globe.
   // Fragment: solar elevation from the per-pixel unit vector → twilight ramp →
   // premultiplied output (rgb = night tint + city lights, a = darkening).
+  // City lights come from two textures: a whole-world base and, once zoomed
+  // in, a sharper 8×8-tile patch around the view (u_pb = x0, y0, 2^z, 8).
   var VS_BODY =
     'attribute vec2 a_pos;varying vec2 v_merc;' +
     'void main(){v_merc=a_pos;gl_Position=projectTile(a_pos);}';
@@ -95,6 +97,7 @@
     'precision highp float;varying vec2 v_merc;' +
     'uniform vec3 u_sun;uniform vec3 u_moon;uniform float u_moon_illum;' +
     'uniform float u_night;uniform float u_lights_on;uniform sampler2D u_lights;' +
+    'uniform float u_patch_on;uniform sampler2D u_patch;uniform vec4 u_pb;uniform vec3 u_floor;' +
     'const float PI=3.141592653589793;' +
     'void main(){' +
     'float lon=v_merc.x*2.0*PI-PI;' +
@@ -109,21 +112,28 @@
     'float a=dark*u_night*(1.0-0.30*moonUp);' +
     'vec3 tint=mix(vec3(0.0,0.012,0.045),vec3(0.03,0.04,0.06),moonUp)*a;' +
     'vec3 city=vec3(0.0);' +
-    'if(u_lights_on>0.5){vec3 L=texture2D(u_lights,v_merc).rgb;' +
-    // Drop the imagery's navy background (~0,1,29) so only the lights add —
-    // and tile seams / a tile still loading can't show as a box.
-    'L=max(L-vec3(0.012,0.02,0.125),0.0);' +
-    'city=pow(L,vec3(1.6))*vec3(1.0,0.82,0.55)*1.35*lightsMask*u_night;}' +
+    'if(u_lights_on>0.5&&lightsMask>0.0){vec3 L=texture2D(u_lights,v_merc).rgb;' +
+    'if(u_patch_on>0.5){float px=v_merc.x*u_pb.z-u_pb.x;px-=u_pb.z*floor(px/u_pb.z);' +
+    'float py=v_merc.y*u_pb.z-u_pb.y;' +
+    'if(px<u_pb.w&&py>=0.0&&py<u_pb.w)L=texture2D(u_patch,vec2(px,py)/u_pb.w).rgb;}' +
+    // Drop the imagery's dark background (and Black Marble's faint moonlit
+    // land) so only the lights add — a tile still loading can't show as a box.
+    'L=max(L-u_floor,0.0);' +
+    'city=pow(L,vec3(1.45))*vec3(1.0,0.82,0.55)*2.0*lightsMask*u_night;}' +
     'gl_FragColor=vec4(tint+city,a);}';
 
-  var MESH_X = 96, MESH_Y = 64;
+  // Dense in latitude: texture coordinates interpolate linearly across each
+  // triangle while Mercator y → latitude is not linear, so tall cells would
+  // shift zoomed-in lights by kilometres (~4 km at 64 rows, ~0.25 km at 256).
+  var MESH_X = 96, MESH_Y = 256;
   function worldMesh() {
-    var a = [], dx = 1 / MESH_X, dy = 1 / MESH_Y;
+    var a = new Float32Array(MESH_X * MESH_Y * 12), k = 0, dx = 1 / MESH_X, dy = 1 / MESH_Y;
     for (var j = 0; j < MESH_Y; j++) for (var i = 0; i < MESH_X; i++) {
       var x0 = i * dx, y0 = j * dy, x1 = x0 + dx, y1 = y0 + dy;
-      a.push(x0, y0, x1, y0, x0, y1, x1, y0, x1, y1, x0, y1);
+      a[k++] = x0; a[k++] = y0; a[k++] = x1; a[k++] = y0; a[k++] = x0; a[k++] = y1;
+      a[k++] = x1; a[k++] = y0; a[k++] = x1; a[k++] = y1; a[k++] = x0; a[k++] = y1;
     }
-    return new Float32Array(a);
+    return a;
   }
 
   function compile(gl, type, src) {
@@ -132,13 +142,30 @@
     return s;
   }
 
+  // Tile centre / corners → unit vectors, for "is any of this tile at night"
+  // and "does it face the camera" (load order).
+  function tileVecs(z, x, y) {
+    var n = 1 << z, out = [];
+    [[0.5, 0.5], [0, 0], [1, 0], [0, 1], [1, 1]].forEach(function (f) {
+      var mx = (x + f[0]) / n, my = (y + f[1]) / n;
+      var lon = mx * 360 - 180, lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * my))) / RAD;
+      out.push(vecOf(lat, lon));
+    });
+    return out;
+  }
+  function dot3(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
   function createLayer(opts) {
     opts = opts || {};
     var map = null, gl = null, meshBuf = null, nVerts = 0, progs = {};
-    var lightsTex = null, lightsReady = false, lightsLoading = false;
     var sun = [0, 0, 1], moon = [0, 0, -1], moonIllum = 0;
     var nightOn = true, lightsOn = true;
     var NIGHT_STRENGTH = (opts.nightStrength != null) ? opts.nightStrength : 0.62;
+    var FLOOR = opts.lightsFloor || [0.045, 0.055, 0.095];
+    var BG = opts.lightsBackground || 'rgb(4,5,15)';
+    var BASE_Z = opts.lightsZoom != null ? opts.lightsZoom : 3;
+    var MAX_Z = opts.lightsMaxZoom != null ? opts.lightsMaxZoom : 8;
+    var T = 256, PATCH = 8;
 
     function prog(sd) {
       var key = sd.variantName || 'default';
@@ -151,84 +178,222 @@
       var loc = { a_pos: gl.getAttribLocation(p, 'a_pos') };
       ['u_projection_matrix', 'u_projection_fallback_matrix', 'u_projection_tile_mercator_coords',
        'u_projection_clipping_plane', 'u_projection_transition', 'u_sun', 'u_moon', 'u_moon_illum',
-       'u_night', 'u_lights_on', 'u_lights'].forEach(function (n) { loc[n] = gl.getUniformLocation(p, n); });
+       'u_night', 'u_lights_on', 'u_lights', 'u_patch_on', 'u_patch', 'u_pb', 'u_floor'].forEach(function (n) { loc[n] = gl.getUniformLocation(p, n); });
       progs[key] = { prog: p, loc: loc };
       return progs[key];
     }
 
-    // City lights: GIBS VIIRS 2012 night lights, one Mercator world texture
-    // stitched from tiles at lightsZoom (z3 = 8×8 tiles of 256 px = 2048 px,
-    // ~0.5 MB of JPEG). Power-of-two, so it gets mipmaps for the zoomed-out view.
-    // GIBS intermittently rejects requests in a 64-tile burst (the browser sees
-    // a CORS failure and the tile used to stay black — a missing 45°×41° box
-    // over the eastern US on 2026-11-10). So: at most 6 in flight, each tile
-    // retried with backoff, one more sweep for stragglers 20 s later, and the
-    // texture re-uploaded whenever a late tile lands.
-    function loadLights() {
-      if (lightsLoading || !opts.lightsTileUrl) return;
-      lightsLoading = true;
-      var z = opts.lightsZoom != null ? opts.lightsZoom : 3, n = 1 << z, T = 256;
-      var canvas = document.createElement('canvas');
-      canvas.width = canvas.height = n * T;
-      var ctx = canvas.getContext('2d');
-      // The imagery's own empty-surface navy, so a tile that never arrives
-      // matches its neighbours (the shader subtracts this floor anyway).
-      ctx.fillStyle = 'rgb(0,1,29)'; ctx.fillRect(0, 0, n * T, n * T);
-      var queue = [], active = 0, MAX = 6, pending = n * n, failed = [], swept = false, upT = null;
-      for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) queue.push({ x: x, y: y, tries: 0 });
-      function upload() {
-        if (!gl) return;
-        if (!lightsTex) {
-          lightsTex = gl.createTexture();
-          gl.bindTexture(gl.TEXTURE_2D, lightsTex);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        }
-        gl.bindTexture(gl.TEXTURE_2D, lightsTex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, canvas);
-        gl.generateMipmap(gl.TEXTURE_2D);
-        lightsReady = true;
-        if (map) map.triggerRepaint();
-      }
-      function uploadSoon() { if (upT) return; upT = setTimeout(function () { upT = null; upload(); }, 400); }
-      function settle(t, ok) {
-        active--;
-        if (ok) {
-          pending--;
-          if (pending === 0 || swept) uploadSoon();
-        } else if (t.tries < 4) {
-          setTimeout(function () { queue.push(t); pump(); }, 500 * Math.pow(3, t.tries - 1));   // 0.5, 1.5, 4.5 s
-        } else {
-          failed.push(t);
-          pending--;
-        }
-        if (pending === 0 && !swept) {
-          upload();
-          if (failed.length) {
-            swept = true;
-            setTimeout(function () {
-              var again = failed.splice(0);
-              again.forEach(function (f) { f.tries = 0; queue.push(f); });
-              pending += again.length;
-              pump();
-            }, 20000);
-          }
-        }
-        pump();
-      }
-      function pump() {
-        while (active < MAX && queue.length) (function (t) {
-          active++; t.tries++;
-          var img = new Image(); img.crossOrigin = 'anonymous';
-          img.onload = function () { try { ctx.drawImage(img, t.x * T, t.y * T, T, T); } catch (e) {} settle(t, true); };
-          img.onerror = function () { settle(t, false); };
-          img.src = opts.lightsTileUrl(z, t.x, t.y);
-        })(queue.shift());
-      }
+    // ── tile fetching (shared by the base and the zoom patch) ──
+    // GIBS intermittently rejects requests in a burst (the browser sees a CORS
+    // failure; a missing 45°×41° box over the eastern US on 2026-11-10), so:
+    // at most 6 in flight, retries with backoff, and a sweep for stragglers.
+    // The queue is re-sorted on every pump: night-side tiles facing the camera
+    // first, so the lights you can see arrive before the rest of the world.
+    var queue = [], active = 0, MAX_INFLIGHT = 6, gen = 0;
+    function camVec() {
+      try { var c = map.getCenter(); return vecOf(c.lat, c.lng); } catch (e) { return [0, 0, 1]; }
+    }
+    function tileNight(z, x, y) {
+      var v = tileVecs(z, x, y);
+      for (var i = 0; i < v.length; i++) if (dot3(v[i], sun) < 0.05) return true;
+      return false;
+    }
+    function rank(j) {
+      if (j.rank0 == null) return 0;
+      var v = tileVecs(j.z, j.x, j.y)[0];
+      return j.rank0 + (tileNight(j.z, j.x, j.y) ? 0 : 100) - dot3(v, camVec()) * 10;
+    }
+    function fetchTile(j) {
+      j.tries = 0;
+      queue.push(j);
       pump();
     }
+    function pump() {
+      if (!queue.length || active >= MAX_INFLIGHT) return;
+      queue.sort(function (a, b) { return rank(a) - rank(b); });
+      while (active < MAX_INFLIGHT && queue.length) (function (j) {
+        if (j.stale && j.stale()) return;
+        active++; j.tries++;
+        var img = new Image(); img.crossOrigin = 'anonymous';
+        img.onload = function () { active--; j.done(img); pump(); };
+        img.onerror = function () {
+          active--;
+          if (j.tries < 4) setTimeout(function () { queue.push(j); pump(); }, 500 * Math.pow(3, j.tries - 1));   // 0.5, 1.5, 4.5 s
+          else if (!j.swept) { j.swept = true; j.tries = 0; setTimeout(function () { queue.push(j); pump(); }, 20000); }
+          pump();
+        };
+        img.src = opts.lightsTileUrl(j.z, j.x, j.y);
+      })(queue.shift());
+    }
+
+    function makeTex() {
+      var t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return t;
+    }
+    function uploadCanvas(tex, canvas) {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      // MapLibre may leave these set by its own uploads.
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, canvas);
+      gl.generateMipmap(gl.TEXTURE_2D);
+    }
+
+    // ── base: one Mercator world texture (z3 = 8×8 tiles = 2048 px) ──
+    // A quick z2 pass (16 tiles, drawn 2× into the same canvas) lands first so
+    // the lights show as soon as they used to; z3 tiles then sharpen it.
+    var base = null;   // {canvas, ctx, tex, ready, done3: {}, upT}
+    function baseUploadSoon() {
+      if (base.upT) return;
+      base.upT = setTimeout(function () {
+        base.upT = null;
+        if (!gl) return;
+        if (!base.tex) base.tex = makeTex();
+        uploadCanvas(base.tex, base.canvas);
+        base.ready = true;
+        if (map) map.triggerRepaint();
+      }, base.ready ? 600 : 150);
+    }
+    function loadLights() {
+      if (base || !opts.lightsTileUrl) return;
+      var n = 1 << BASE_Z, px = n * T;
+      var canvas = document.createElement('canvas');
+      canvas.width = canvas.height = px;
+      var ctx = canvas.getContext('2d');
+      ctx.fillStyle = BG; ctx.fillRect(0, 0, px, px);
+      base = { canvas: canvas, ctx: ctx, tex: null, ready: false, done: {}, upT: null };
+      var b = base, zq = BASE_Z - 1, nq = 1 << zq;
+      if (zq >= 0) for (var y = 0; y < nq; y++) for (var x = 0; x < nq; x++) (function (x, y) {
+        fetchTile({ z: zq, x: x, y: y, rank0: -1000, stale: function () { return b !== base; }, done: function (img) {
+          if (b !== base) return;
+          // Each quick tile covers 2×2 base tiles; skip any already sharp.
+          for (var q = 0; q < 4; q++) {
+            var cx = x * 2 + (q & 1), cy = y * 2 + (q >> 1);
+            if (b.done[cx + ',' + cy]) continue;
+            try { b.ctx.drawImage(img, (q & 1) * 128, (q >> 1) * 128, 128, 128, cx * T, cy * T, T, T); } catch (e) {}
+          }
+          baseUploadSoon();
+        } });
+      })(x, y);
+      for (var y2 = 0; y2 < n; y2++) for (var x2 = 0; x2 < n; x2++) (function (x, y) {
+        fetchTile({ z: BASE_Z, x: x, y: y, rank0: 0, stale: function () { return b !== base; }, done: function (img) {
+          if (b !== base) return;
+          b.done[x + ',' + y] = true;
+          try { b.ctx.drawImage(img, x * T, y * T, T, T); } catch (e) {}
+          baseUploadSoon();
+          // A patch built before this tile landed is still showing the blur.
+          if (patch) refillPatchFromBase(x, y);
+        } });
+      })(x2, y2);
+    }
+
+    // ── zoom patch: 8×8 tiles at the zoom that matches the screen ──
+    // Rebuilt around the view when the camera settles (moveend). Night-side
+    // tiles only — daytime ones would never show. Until a sharp tile lands its
+    // square holds the base (scaled up), so nothing pops in as a box.
+    var patch = null;   // {z, x0, y0, canvas, ctx, tex, upT, have: {}}
+    var cache = {}, cacheKeys = [], CACHE_MAX = 256;
+    function cachePut(k, img) {
+      if (!cache[k]) { cacheKeys.push(k); if (cacheKeys.length > CACHE_MAX) delete cache[cacheKeys.shift()]; }
+      cache[k] = img;
+    }
+    function patchUploadSoon() {
+      if (!patch || patch.upT) return;
+      var p = patch;
+      p.upT = setTimeout(function () {
+        p.upT = null;
+        if (!gl || p !== patch) return;
+        if (!p.tex) p.tex = makeTex();
+        uploadCanvas(p.tex, p.canvas);
+        p.ready = true;
+        if (map) map.triggerRepaint();
+      }, 250);
+    }
+    // Draw base pixels into patch tile (i, j) (patch-relative).
+    function patchFromBase(p, i, j) {
+      var nz = 1 << p.z, tx = ((p.x0 + i) % nz + nz) % nz, ty = p.y0 + j;
+      var f = (1 << BASE_Z) * T / nz;      // base px per patch tile
+      try { p.ctx.drawImage(base.canvas, tx * f, ty * f, f, f, i * T, j * T, T, T); } catch (e) {}
+    }
+    function refillPatchFromBase(bx, by) {
+      var p = patch, s = 1 << (p.z - BASE_Z), nz = 1 << p.z, hit = false;
+      for (var j = 0; j < PATCH; j++) for (var i = 0; i < PATCH; i++) {
+        var tx = ((p.x0 + i) % nz + nz) % nz, ty = p.y0 + j;
+        if (Math.floor(tx / s) === bx && Math.floor(ty / s) === by && !p.have[i + ',' + j]) { patchFromBase(p, i, j); hit = true; }
+      }
+      if (hit) patchUploadSoon();
+    }
+    function wantedPatch() {
+      if (!map || !base) return null;
+      var z = map.getZoom(), dpr = Math.min(2, window.devicePixelRatio || 1);
+      var c = map.getContainer(), W = c.clientWidth || 800, H = c.clientHeight || 600;
+      // A 256-px tile at level z+1 is 1:1 with CSS pixels; lean sharper on HiDPI.
+      var pz = Math.min(MAX_Z, Math.round(z + 1 + (dpr >= 1.5 ? 0.5 : 0)));
+      var tileCss;
+      for (;;) {
+        tileCss = 512 * Math.pow(2, z - pz);
+        if (pz <= BASE_Z || (Math.ceil(W / tileCss) + 1 <= PATCH && Math.ceil(H / tileCss) + 1 <= PATCH)) break;
+        pz--;
+      }
+      if (pz <= BASE_Z) return null;
+      var ctr = map.getCenter(), nz = 1 << pz;
+      var mx = (ctr.lng + 180) / 360, sl = Math.sin(ctr.lat * RAD);
+      var my = 0.5 - Math.log((1 + sl) / (1 - sl)) / (4 * Math.PI);
+      var cx = mx * nz, cy = Math.max(0, Math.min(nz, my * nz));
+      var hx = W / 2 / tileCss + 0.5, hy = H / 2 / tileCss + 0.5;
+      return { z: pz, cx: cx, cy: cy, x0: Math.floor(cx - PATCH / 2), y0: Math.max(0, Math.min(nz - PATCH, Math.floor(cy - PATCH / 2))),
+               vx0: Math.floor(cx - hx), vx1: Math.floor(cx + hx), vy0: Math.max(0, Math.floor(cy - hy)), vy1: Math.min(nz - 1, Math.floor(cy + hy)) };
+    }
+    function updatePatch() {
+      if (!lightsOn || !nightOn || !gl) return;
+      var w = wantedPatch();
+      if (!w) { if (patch) { patch.off = true; if (map) map.triggerRepaint(); } return; }
+      var p = patch;
+      var fits = p && p.z === w.z && w.vx0 >= p.x0 && w.vx1 < p.x0 + PATCH && w.vy0 >= p.y0 && w.vy1 < p.y0 + PATCH;
+      if (!fits) {
+        if (!p) {
+          var cv = document.createElement('canvas'); cv.width = cv.height = PATCH * T;
+          p = patch = { canvas: cv, ctx: cv.getContext('2d'), tex: null, upT: null };
+        }
+        p.z = w.z; p.x0 = w.x0; p.y0 = w.y0; p.have = {}; p.queued = {}; p.ready = !!p.tex; p.gen = ++gen;
+        for (var j = 0; j < PATCH; j++) for (var i = 0; i < PATCH; i++) {
+          var nz = 1 << p.z, k = p.z + '/' + (((p.x0 + i) % nz + nz) % nz) + '/' + (p.y0 + j);
+          if (cache[k]) { try { p.ctx.drawImage(cache[k], i * T, j * T, T, T); } catch (e) {} p.have[i + ',' + j] = true; }
+          else patchFromBase(p, i, j);
+        }
+        // Drop queued patch tiles from the previous window.
+        queue = queue.filter(function (q) { return !q.patchGen || q.patchGen === p.gen; });
+        patchUploadSoon();
+      }
+      p.off = false;
+      // Fetch the visible, night-side tiles this window is still missing.
+      var nzz = 1 << p.z;
+      for (var vy = w.vy0; vy <= w.vy1; vy++) for (var vx = w.vx0; vx <= w.vx1; vx++) {
+        var ii = vx - p.x0, jj = vy - p.y0;
+        if (ii < 0 || jj < 0 || ii >= PATCH || jj >= PATCH || p.have[ii + ',' + jj] || p.queued[ii + ',' + jj]) continue;
+        var tx = ((vx % nzz) + nzz) % nzz;
+        if (!tileNight(p.z, tx, vy)) continue;
+        p.queued[ii + ',' + jj] = true;
+        (function (pp, g, i, j, z, x, y) {
+          fetchTile({ z: z, x: x, y: y, rank0: -2000, patchGen: g,
+            stale: function () { return patch !== pp || pp.gen !== g; },
+            done: function (img) {
+              cachePut(z + '/' + x + '/' + y, img);
+              if (patch !== pp || pp.gen !== g) return;
+              try { pp.ctx.drawImage(img, i * T, j * T, T, T); } catch (e) {}
+              pp.have[i + ',' + j] = true;
+              patchUploadSoon();
+            } });
+        })(p, p.gen, ii, jj, p.z, tx, vy);
+      }
+    }
+    var moveT = null;
+    function onMoveEnd() { clearTimeout(moveT); moveT = setTimeout(updatePatch, 120); }
 
     var layer = {
       id: opts.id || 'globe-light',
@@ -239,7 +404,8 @@
         meshBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, meshBuf);
         var mesh = worldMesh(); nVerts = mesh.length / 2;
         gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
-        if (lightsOn) loadLights();
+        map.on('moveend', onMoveEnd);
+        if (lightsOn) { loadLights(); onMoveEnd(); }
       },
       render: function (g, arg) {
         if (!gl || !nightOn || !arg || !arg.shaderData) return;
@@ -260,35 +426,49 @@
         gl.uniform3f(loc.u_moon, moon[0], moon[1], moon[2]);
         gl.uniform1f(loc.u_moon_illum, moonIllum);
         gl.uniform1f(loc.u_night, NIGHT_STRENGTH);
-        var useLights = lightsOn && lightsReady && lightsTex;
+        gl.uniform3f(loc.u_floor, FLOOR[0], FLOOR[1], FLOOR[2]);
+        var useLights = !!(lightsOn && base && base.ready && base.tex);
         gl.uniform1f(loc.u_lights_on, useLights ? 1 : 0);
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, useLights ? lightsTex : null);
+        gl.bindTexture(gl.TEXTURE_2D, useLights ? base.tex : null);
         gl.uniform1i(loc.u_lights, 0);
+        var usePatch = !!(useLights && patch && !patch.off && patch.ready && patch.tex);
+        gl.uniform1f(loc.u_patch_on, usePatch ? 1 : 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, usePatch ? patch.tex : null);
+        gl.uniform1i(loc.u_patch, 1);
+        if (usePatch) gl.uniform4f(loc.u_pb, patch.x0, patch.y0, 1 << patch.z, PATCH);
+        gl.activeTexture(gl.TEXTURE0);
         gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);   // premultiplied
         gl.disable(gl.DEPTH_TEST);
         gl.drawArrays(gl.TRIANGLES, 0, nVerts);
       },
       onRemove: function () {
         if (!gl) return;
+        if (map) map.off('moveend', onMoveEnd);
+        clearTimeout(moveT);
         if (meshBuf) gl.deleteBuffer(meshBuf);
-        if (lightsTex) gl.deleteTexture(lightsTex);
+        if (base && base.tex) gl.deleteTexture(base.tex);
+        if (patch && patch.tex) gl.deleteTexture(patch.tex);
         Object.keys(progs).forEach(function (k) { if (progs[k]) gl.deleteProgram(progs[k].prog); });
-        progs = {}; meshBuf = null; lightsTex = null; lightsReady = false; lightsLoading = false;
+        progs = {}; meshBuf = null; base = null; patch = null; queue = [];
         gl = null; map = null;
       }
     };
 
+    var bodiesT = null;
     return {
       layer: layer,
       setBodies: function (b) {
         if (!b) return;
         sun = b.sun.vec; moon = b.moon.vec; moonIllum = b.moon.illum;
         if (map) map.triggerRepaint();
+        // The terminator moves with the loop: pick up newly dark patch tiles.
+        if (patch && !bodiesT) bodiesT = setTimeout(function () { bodiesT = null; updatePatch(); }, 1500);
       },
       setOptions: function (o) {
         if (o.night != null) nightOn = !!o.night;
-        if (o.lights != null) { lightsOn = !!o.lights; if (lightsOn && gl) loadLights(); }
+        if (o.lights != null) { lightsOn = !!o.lights; if (lightsOn && gl) { loadLights(); updatePatch(); } }
         if (map) map.triggerRepaint();
       },
       destroy: function () { if (map && map.getLayer(layer.id)) map.removeLayer(layer.id); }

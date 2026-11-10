@@ -3595,7 +3595,7 @@
     // fetch it). Everything follows the DISPLAYED frame's time, so the
     // terminator sweeps with the loop. The night shade sits just above the
     // satellite (z 210) and below coastlines, tracks and markers.
-    var _GLOBE_LIGHT_SRC = 'globe_light.js?v=20261110cl1';
+    var _GLOBE_LIGHT_SRC = 'globe_light.js?v=20261110bm1';
     var _rtGlobeLight = null, _rtGlobeLightLoading = false, _rtGlobeBodies = null, _rtGlobeSky = null;
     var _rtGlobeLightOpts = { night: true, lights: true };
     try {
@@ -3617,9 +3617,12 @@
         if (_rtGlobeLight || !window.GlobeLight || !map) return;
         _rtGlobeLight = GlobeLight.createLayer({
             id: 'globe-light',
+            // NASA Black Marble 2016 (VIIRS, ~500 m): z3 world base, sharper
+            // patches up to z8 around the view when zoomed in (globe_light.js).
             lightsZoom: 3,
+            lightsMaxZoom: 8,
             lightsTileUrl: function (z, x, y) {
-                return GIBS_BASE + '/VIIRS_CityLights_2012/default/2012-01-01/GoogleMapsCompatible_Level8/' + z + '/' + y + '/' + x + '.jpg';
+                return GIBS_BASE + '/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/' + z + '/' + y + '/' + x + '.png';
             }
         });
         _rtGlobeLight.setOptions(_rtGlobeLightOpts);
