@@ -30,8 +30,8 @@
 
   var VS =
     'attribute vec2 a_pos;uniform mat4 u_matrix;uniform vec2 u_origin;uniform float u_scale;' +
-    'varying vec2 v_uv;void main(){vec2 m=u_origin+a_pos*u_scale;' +
-    'gl_Position=u_matrix*vec4(m,0.0,1.0);v_uv=vec2(a_pos.x,1.0-a_pos.y);}';
+    'uniform vec3 u_uv;varying vec2 v_uv;void main(){vec2 m=u_origin+a_pos*u_scale;' +
+    'gl_Position=u_matrix*vec4(m,0.0,1.0);v_uv=vec2(u_uv.x+a_pos.x*u_uv.z,u_uv.y-a_pos.y*u_uv.z);}';
   // MapLibre 5 path: render() gets an options object instead of a matrix, and
   // the vertex position must go through MapLibre's own projectTile() (from
   // shaderData.vertexShaderPrelude) so one shader serves both flat Mercator and
@@ -39,8 +39,8 @@
   // quad is a subdivided grid so tiles curve with the sphere.
   var VS5_BODY =
     'attribute vec2 a_pos;uniform vec2 u_origin;uniform float u_scale;' +
-    'varying vec2 v_uv;void main(){vec2 m=u_origin+a_pos*u_scale;' +
-    'gl_Position=projectTile(m);v_uv=vec2(a_pos.x,1.0-a_pos.y);}';
+    'uniform vec3 u_uv;varying vec2 v_uv;void main(){vec2 m=u_origin+a_pos*u_scale;' +
+    'gl_Position=projectTile(m);v_uv=vec2(u_uv.x+a_pos.x*u_uv.z,u_uv.y-a_pos.y*u_uv.z);}';
   var GRID_N = 16;   // cells per tile edge on the v5 mesh (512 triangles per tile draw)
   function gridMesh(n) {
     var a = [], d = 1 / n;
@@ -314,7 +314,7 @@
       if (--pending.n <= 0) _flipPending();
     }
 
-    var LOC_NAMES = ['u_matrix', 'u_origin', 'u_scale', 'u_idx', 'u_lut', 'u_opacity',
+    var LOC_NAMES = ['u_matrix', 'u_origin', 'u_scale', 'u_uv', 'u_idx', 'u_lut', 'u_opacity',
       'u_idx2', 'u_lut2', 'u_combo', 'u_projection_matrix', 'u_projection_fallback_matrix',
       'u_projection_tile_mercator_coords', 'u_projection_clipping_plane', 'u_projection_transition'];
     function _link(vsSrc) {
@@ -375,20 +375,6 @@
         var baseZ = baseZoomFor(active, z);
         // Coarse base (gapless) first, then sparse detail (storm sectors) on top.
         var levels = (z > baseZ) ? [baseZ, z] : [baseZ];
-        // A frame whose base is raised (global z5) would show holes while its z5
-        // tiles stream in, where the regular base (z4) used to be on screen at
-        // once. So the regular base level is also painted underneath — from
-        // tiles ALREADY in the cache only (never fetched), and only where a
-        // visible raised-base child is still unresolved.
-        var cacheOnlyZ = -1, baseVisSet = null;
-        var regularZ = Math.min(z, baseMaxZoom);
-        if (regularZ < baseZ && !comboMode) {
-          cacheOnlyZ = regularZ;
-          levels.unshift(regularZ);
-          baseVisSet = {};
-          var bv = visibleTiles(baseZ);
-          for (var bi = 0; bi < bv.length; bi++) baseVisSet[bv[bi][0] + '/' + bv[bi][1]] = 1;
-        }
 
         var pf = comboMode ? pairFrame(active) : null;   // paired Vis frame (null = none)
 
@@ -421,42 +407,68 @@
         gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);  // premultiplied (keeps fb alpha=1)
         gl.disable(gl.DEPTH_TEST);
 
+        // Draw a texture over tile (tx, ty) at zoom tz, sampling the sub-square of
+        // it that starts at (ux, uy) with side us (0, 1, 1 = the whole texture;
+        // uy counts down from the top because tiles upload FLIP_Y).
+        function draw(rec, rec2, tz, tx, ty, ux, uy, us) {
+          var ss = 1.0 / (1 << tz);
+          gl.uniform1f(loc.u_scale, ss);
+          gl.uniform3f(loc.u_uv, ux, uy, us);
+          gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, rec.tex); gl.uniform1i(loc.u_idx, 0);
+          if (comboMode) {
+            gl.activeTexture(gl.TEXTURE2);
+            gl.bindTexture(gl.TEXTURE_2D, (rec2 && rec2.tex) ? rec2.tex : blackTex);
+            gl.uniform1i(loc.u_idx2, 2);
+          }
+          // draw in the primary world + both neighbor copies (antimeridian display wrap)
+          for (var ci = 0; ci < copies.length; ci++) {
+            gl.uniform2f(loc.u_origin, tx * ss + copies[ci], ty * ss);
+            gl.drawArrays(mode, 0, nVerts);
+          }
+        }
+        function cached(f, tz, tx, ty, band) {      // a loaded texture, or null (never fetches)
+          var r = (f != null) ? tiles[tkey(f, tz, tx, ty, band)] : null;
+          if (r && r.tex) { r.used = ++useClock; return r; }
+          return null;
+        }
+
         for (var li = 0; li < levels.length; li++) {
-          var lz = levels[li], n = 1 << lz, s = 1.0 / n;
+          var lz = levels[li];
           var vis = visibleTiles(lz);
-          var cacheOnly = (lz === cacheOnlyZ);
-          for (var i = 0; i < vis.length && !cacheOnly; i++) {
+          for (var i = 0; i < vis.length; i++) {
             loadTile(active, lz, vis[i][0], vis[i][1]);
             if (pf) loadTile(pf, lz, vis[i][0], vis[i][1], 1);
           }
-          gl.uniform1f(loc.u_scale, s);
           for (var j = 0; j < vis.length; j++) {
             var cx = vis[j][0], cy = vis[j][1], rec = tiles[tkey(active, lz, cx, cy)];
             if (rec) rec.used = ++useClock;
-            if (!rec || !rec.tex) continue;               // not loaded / known-absent → coarser base shows through
-            if (cacheOnly) {
-              // Only while a visible child at the raised base is unresolved —
-              // once they are in, the stand-in stops (no double draw).
-              var d = 1 << (baseZ - lz), pending = false;
-              for (var cyy = 0; cyy < d && !pending; cyy++)
-                for (var cxx = 0; cxx < d && !pending; cxx++) {
-                  var kx = cx * d + cxx, ky = cy * d + cyy;
-                  if (baseVisSet[kx + '/' + ky] && !tiles[tkey(active, baseZ, kx, ky)]) pending = true;
-                }
-              if (!pending) continue;
+            if (rec && rec.tex) {
+              draw(rec, cached(pf, lz, cx, cy, 1), lz, cx, cy, 0.0, 1.0, 1.0);
+              continue;
             }
-            gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, rec.tex); gl.uniform1i(loc.u_idx, 0);
-            if (comboMode) {
-              var rec2 = pf ? tiles[tkey(pf, lz, cx, cy, 1)] : null;
-              if (rec2) rec2.used = ++useClock;
-              gl.activeTexture(gl.TEXTURE2);
-              gl.bindTexture(gl.TEXTURE_2D, (rec2 && rec2.tex) ? rec2.tex : blackTex);
-              gl.uniform1i(loc.u_idx2, 2);
+            // Known-absent, or a sparse detail tile (the base shows through).
+            if (rec || li > 0) continue;
+            // A BASE tile still loading — the zoom level just changed (mid-gesture
+            // too), or a loop frame flipped in before all its tiles arrived. Stand
+            // in with what the cache already holds for THIS frame (never fetched,
+            // never overlapping, so partial opacity stays even): the nearest
+            // loaded ancestor's matching sub-square, stretched over exactly this
+            // tile; else (zooming out) its loaded children, each in its quarter.
+            var done = false;
+            for (var up = 1; up <= lz && !done; up++) {
+              var ax = cx >> up, ay = cy >> up, ar = cached(active, lz - up, ax, ay);
+              if (!ar) continue;
+              var f = 1 << up, us = 1.0 / f;
+              draw(ar, cached(pf, lz - up, ax, ay, 1), lz, cx, cy,
+                   (cx - ax * f) * us, 1.0 - (cy - ay * f) * us, us);
+              done = true;
             }
-            // draw in the primary world + both neighbor copies (antimeridian display wrap)
-            for (var ci = 0; ci < copies.length; ci++) {
-              gl.uniform2f(loc.u_origin, cx * s + copies[ci], cy * s);
-              gl.drawArrays(mode, 0, nVerts);
+            if (!done) {
+              for (var q = 0; q < 4; q++) {
+                var qx = cx * 2 + (q & 1), qy = cy * 2 + (q >> 1);
+                var cr = cached(active, lz + 1, qx, qy);
+                if (cr) draw(cr, cached(pf, lz + 1, qx, qy, 1), lz + 1, qx, qy, 0.0, 1.0, 1.0);
+              }
             }
           }
         }
