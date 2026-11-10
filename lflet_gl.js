@@ -460,6 +460,15 @@
     };
     // Insert a GL layer at the stacking position for z (lower z = further back).
     // Among equal z, later additions sit on top (Leaflet insertion order).
+    // The matrix MapLibre 4 passed to custom layers: Mercator 0..1 → clip
+    // (transform.mercatorMatrix). 5's options.modelViewProjectionMatrix is the
+    // same view in WORLD-PIXEL units (×worldSize), so it can't stand in.
+    function _ml4Matrix(gm, a) {
+        if (!a || !a.shaderData) return a;          // MapLibre 4: already the matrix
+        var t = gm && gm.transform, mm = t && t.mercatorMatrix;
+        return mm || a.modelViewProjectionMatrix;
+    }
+    global.__lfletMl4Matrix = _ml4Matrix;   // for custom layers added straight to MapLibre (tc_vol_gl.js)
     Map.prototype._glAdd = function (def, z) {
         // getStyle() is undefined until MapLibre's 'load' fires. With the page's
         // scripts loading in parallel (defer), a fast frames.json can race the
@@ -483,10 +492,11 @@
         // get the equivalent matrix back, so they keep working on a flat map.
         if (def.type === 'custom' && !def.ml5 && !def._ml5Compat) {
             def._ml5Compat = true;
+            var gm = this._gl;
             ['render', 'prerender'].forEach(function (k) {
                 var fn = def[k]; if (typeof fn !== 'function') return;
                 def[k] = function (g, a) {
-                    return fn.call(this, g, (a && a.modelViewProjectionMatrix) ? a.modelViewProjectionMatrix : a);
+                    return fn.call(this, g, _ml4Matrix(gm, a));
                 };
             });
         }

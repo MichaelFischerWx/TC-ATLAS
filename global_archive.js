@@ -43,6 +43,15 @@ var TC_RADAR_LOOKUP_JSON = 'tc_radar_lookup.json?' + DATA_VER;
 var tcRadarLookup = null;    // storm_name_year → {case, n} (loaded async)
 var allStorms = [];          // Full storm metadata array
 var allTracks = {};          // SID → track points dict
+// A storm-detail deep link can restore before the track chunks land (it only
+// waits for the storm list); the detail view then waits here instead of
+// rendering "Track data not available" with no map.
+var _tracksAllLoaded = false, _detailAwaitingTrack = null;
+function _tracksLoadedFinal() {
+    _tracksAllLoaded = true;
+    var s = _detailAwaitingTrack; _detailAwaitingTrack = null;
+    if (s && selectedStorm === s) renderStormDetail(s);
+}
 var filteredStorms = [];     // Currently filtered subset
 var selectedStorm = null;    // Currently selected storm object
 var stormMap = null;         // Leaflet map (browser tab)
@@ -2172,6 +2181,7 @@ function loadData() {
                         if (loaded === chunks.length) {
                             var n = Object.keys(allTracks).length;
                             _cmpTracksArrived();
+                            _tracksLoadedFinal();
                             console.log('Loaded tracks for ' + n + ' storms from chunks');
                             showToast('Track data ready — ' + n.toLocaleString() + ' storm tracks');
                         }
@@ -2186,6 +2196,7 @@ function loadData() {
                 .then(function (data) {
                     allTracks = data;
                     _cmpTracksArrived();
+                    _tracksLoadedFinal();
                     var n = Object.keys(data).length;
                     console.log('Loaded tracks for ' + n + ' storms (single file)');
                     showToast('Track data ready — ' + n.toLocaleString() + ' storm tracks');
@@ -3373,6 +3384,11 @@ function renderStormDetail(storm) {
 
     // Get track data
     var track = allTracks[storm.sid];
+    if ((!track || track.length === 0) && !_tracksAllLoaded) {
+        _detailAwaitingTrack = storm;   // _tracksLoadedFinal() renders it
+        document.getElementById('timeline-chart').innerHTML = '<div style="padding:40px;text-align:center;color:#8b9ec2;">Loading track…</div>';
+        return;
+    }
     if (!track || track.length === 0) {
         document.getElementById('timeline-chart').innerHTML = '<div style="padding:40px;text-align:center;color:#8b9ec2;">Track data not available for this storm.</div>';
         return;

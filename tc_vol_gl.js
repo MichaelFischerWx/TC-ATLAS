@@ -259,12 +259,14 @@
                 uColor = gl.getUniformLocation(prog, 'uColor'); uLight = gl.getUniformLocation(prog, 'uLight');
                 uCut = gl.getUniformLocation(prog, 'uCut'); uZMax = gl.getUniformLocation(prog, 'uZMax');
                 aPos = gl.getAttribLocation(prog, 'aPos'); aNrm = gl.getAttribLocation(prog, 'aNrm');
-                state.gl = gl; uploadAll(gl);
+                state.gl = gl; state.glMap = map; uploadAll(gl);
             },
             onRemove: function (map, gl) { state.meshes.forEach(function (m) { if (m.vboP) { gl.deleteBuffer(m.vboP); gl.deleteBuffer(m.vboN); m.vboP = m.vboN = null; } }); },
             render: function (gl, matrix) {
                 if (!prog || !state.meshes.length) return;
-                var mat = matrix && matrix.defaultProjectionData ? matrix.defaultProjectionData.mainMatrix : matrix;   // v5 passes an options object
+                // MapLibre 5 passes an options object; the Mercator 0..1 matrix
+                // 4.x passed directly is transform.mercatorMatrix (lflet_gl helper).
+                var mat = window.__lfletMl4Matrix ? window.__lfletMl4Matrix(state.glMap, matrix) : matrix;
                 gl.useProgram(prog);
                 gl.uniformMatrix4fv(uMatrix, false, mat);
                 gl.uniform3f(uOrigin, state.origin.x, state.origin.y, 0);
