@@ -5885,11 +5885,26 @@
     // Without this step, `_sst_rel` carries the seasonal cycle of
     // (region SST − tropical-mean SST), which swamps the year-to-year
     // signal users want to see on Panel F.
+    //
+    // A preliminary (month-to-date) row's `_sst_rel` is the mean of the
+    // days observed so far, so subtracting a FULL-month climatology
+    // leaks the within-month seasonal cycle into it (early-November AMO
+    // read ~0.5 °C too warm because the box cools all month). Those rows
+    // use `_sst_rel_projected` instead (climo + month-to-date anomaly),
+    // the same column Panels B and D already plot for the preliminary
+    // month.
     function _relativeAnomalySeries(region) {
         var idx = state.indices;
         var rel = idx.values[region + '_sst_rel'];
         if (!rel) return null;
         var prelim = idx.preliminary || [];
+        var relProj = idx.values[region + '_sst_rel_projected'];
+        if (relProj) {
+            rel = rel.map(function (v, i) {
+                var p = relProj[i];
+                return (prelim[i] && p !== null && p !== undefined) ? p : v;
+            });
+        }
         // Per-month 1991-2020 climo
         var climSum = [0,0,0,0,0,0,0,0,0,0,0,0];
         var climN = [0,0,0,0,0,0,0,0,0,0,0,0];
@@ -5983,6 +5998,21 @@
                 hovertemplate: name + ' · %{x|%Y-%m}: %{y:+.2f} °C<extra></extra>',
             }];
             if (prelimX.length) {
+                // Dotted link from the last finalized month to the
+                // preliminary star(s), so the star reads as the line's
+                // next point instead of a marker floating beside it.
+                var lastX = solidX.length ? solidX[solidX.length - 1] : null;
+                var lastY = solidY.length ? solidY[solidY.length - 1] : null;
+                if (lastX !== null && lastY !== null && prelimY[0] !== null) {
+                    out.push({
+                        type: 'scatter', mode: 'lines',
+                        x: [lastX].concat(prelimX),
+                        y: [lastY].concat(prelimY),
+                        line: { color: color, width: 1.5, dash: 'dot' },
+                        legendgroup: name + ' (P)',
+                        showlegend: false, hoverinfo: 'skip',
+                    });
+                }
                 out.push({
                     type: 'scatter', mode: 'markers',
                     x: prelimX, y: prelimY,
@@ -5990,6 +6020,7 @@
                         symbol: 'star-open', size: 12,
                         color: color, line: { color: color, width: 2 },
                     },
+                    legendgroup: name + ' (P)',
                     name: name + ' (P)',
                     hovertemplate: name +
                         ' · %{x|%Y-%m}: %{y:+.2f} °C (preliminary)<extra></extra>',

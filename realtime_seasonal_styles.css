@@ -408,11 +408,14 @@ body.seasonal-maximized .seasonal-header {
        ~260 px of blank space under it. Panels are all taller than that
        and align-items: start never stretched them, so nothing else moves. */
     grid-auto-rows: auto;
-    /* Each panel sizes to its own content — without this, a short panel
-       in a row (e.g. Panel E with N=3 analogs) lets its tall row-mate
-       (Panel F) overflow its own border because the grid cell collapses
-       to the shorter content. */
-    align-items: start;
+    /* Two panels that share a row stretch to the taller one, so their
+       top and bottom edges always line up, whatever each holds (number
+       of analogs, wrapped ledes, a chart still loading). This used to be
+       `start`: under the old fixed 280 px rows a stretched panel was
+       clipped to the row and its content overflowed the border. With
+       auto rows the row is as tall as its tallest panel, so nothing
+       overflows. */
+    align-items: stretch;
 }
 
 @media (max-width: 980px) {
