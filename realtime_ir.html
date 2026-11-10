@@ -57,11 +57,21 @@
          MapLibre via the lflet_gl.js facade (gl-engine-swap branch). -->
     <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css?v=1.9.4" />
     <link href="assets/vendor/maplibre/maplibre-gl.css?v=4.7.1" rel="stylesheet" />
-    <!-- Globe preview: ?globe=1 runs the map on MapLibre 5 (globe projection);
-         everyone else stays on 4.7.1 and never fetches it. The engine script
-         itself is chosen next to the deferred engine tag below. -->
+    <!-- Globe view runs the map on MapLibre 5 (globe projection); everyone
+         else stays on 4.7.1 and never fetches it. 5 loads when the URL says
+         ?globe=1 or the visitor left the globe on last time (localStorage
+         rtGlobe, set by the Globe button); ?globe=0 clears that. The engine
+         script itself is chosen next to the deferred engine tag below. -->
     <script>
-    if (/[?&]globe=1(&|$)/.test(location.search)) {
+    window.__rtGlobeBoot = (function () {
+        var q = location.search;
+        try {
+            if (/[?&]globe=0(&|$)/.test(q)) { localStorage.removeItem('rtGlobe'); return false; }
+            if (/[?&]globe=1(&|$)/.test(q)) return true;
+            return localStorage.getItem('rtGlobe') === '1';
+        } catch (e) { return /[?&]globe=1(&|$)/.test(q); }
+    })();
+    if (window.__rtGlobeBoot) {
         document.write('<link href="assets/vendor/maplibre5/maplibre-gl.css?v=5.24.0" rel="stylesheet" />' +
                        '<link rel="preload" as="script" href="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0">');
     }
@@ -93,7 +103,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261110ui1">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261110gw1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -2838,12 +2848,13 @@
          the parser unblocked, and makes every URL visible to the preload
          scanner so the whole bundle downloads IN PARALLEL. The old
          document.write chain forced a serial download of ~3 MB. -->
-    <!-- Globe preview (?globe=1): load MapLibre 5 now (blocking, already
-         preloaded from <head>) and keep it in window.__ml5. The deferred 4.7.1
-         tag below still runs and overwrites window.maplibregl; lflet_gl.js
-         (the next deferred script) restores 5 from __ml5 before any use. -->
+    <!-- Globe view (window.__rtGlobeBoot, set in <head>): load MapLibre 5 now
+         (blocking, already preloaded from <head>) and keep it in window.__ml5.
+         The deferred 4.7.1 tag below still runs and overwrites
+         window.maplibregl; lflet_gl.js (the next deferred script) restores 5
+         from __ml5 before any use. -->
     <script>
-    if (/[?&]globe=1(&|$)/.test(location.search)) {
+    if (window.__rtGlobeBoot) {
         document.write('<script src="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0"><\/script>' +
                        '<script>window.__ml5 = window.maplibregl;<\/script>');
     }
@@ -2914,7 +2925,7 @@
     <script defer src="tc_mw_layer.js?v=20261109gb6"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261010tm1"></script>
-    <script defer src="realtime_ir.js?v=20261110ui1"></script>
+    <script defer src="realtime_ir.js?v=20261110gw1"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
