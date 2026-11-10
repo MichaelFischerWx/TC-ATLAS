@@ -57,6 +57,15 @@
          MapLibre via the lflet_gl.js facade (gl-engine-swap branch). -->
     <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css?v=1.9.4" />
     <link href="assets/vendor/maplibre/maplibre-gl.css?v=4.7.1" rel="stylesheet" />
+    <!-- Globe preview: ?globe=1 runs the map on MapLibre 5 (globe projection);
+         everyone else stays on 4.7.1 and never fetches it. The engine script
+         itself is chosen next to the deferred engine tag below. -->
+    <script>
+    if (/[?&]globe=1(&|$)/.test(location.search)) {
+        document.write('<link href="assets/vendor/maplibre5/maplibre-gl.css?v=5.24.0" rel="stylesheet" />' +
+                       '<link rel="preload" as="script" href="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0">');
+    }
+    </script>
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -84,7 +93,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261108gn2">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261109gb7">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -118,7 +127,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261104sd1">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261101m1">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261109gb3">
     <link rel="stylesheet" href="satellite_styles.css?v=20261104st1">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261104sd1">
 </head>
@@ -2829,10 +2838,20 @@
          the parser unblocked, and makes every URL visible to the preload
          scanner so the whole bundle downloads IN PARALLEL. The old
          document.write chain forced a serial download of ~3 MB. -->
+    <!-- Globe preview (?globe=1): load MapLibre 5 now (blocking, already
+         preloaded from <head>) and keep it in window.__ml5. The deferred 4.7.1
+         tag below still runs and overwrites window.maplibregl; lflet_gl.js
+         (the next deferred script) restores 5 from __ml5 before any use. -->
+    <script>
+    if (/[?&]globe=1(&|$)/.test(location.search)) {
+        document.write('<script src="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0"><\/script>' +
+                       '<script>window.__ml5 = window.maplibregl;<\/script>');
+    }
+    </script>
     <script defer src="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1"></script>
-    <script defer src="lflet_gl.js?v=20261104cr1"></script>
+    <script defer src="lflet_gl.js?v=20261109gb7"></script>
     <!-- Single-channel idx mosaic WebGL layer (flag-gated ?ir2a=1). -->
-    <script defer src="mosaic_gl_layer.js?v=20260904a"></script>
+    <script defer src="mosaic_gl_layer.js?v=20261109gb1"></script>
     <script>
     // Plotly (~1 MB gzipped) is only needed once a chart renders, but a
     // synchronous tag here serializes the whole page: the document.write
@@ -2892,10 +2911,10 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20261019rc1"></script>
     <script defer src="sonde_card.js?v=20261010tm1"></script>
-    <script defer src="tc_mw_layer.js?v=20261020au1"></script>
+    <script defer src="tc_mw_layer.js?v=20261109gb6"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261010tm1"></script>
-    <script defer src="realtime_ir.js?v=20261108gn2"></script>
+    <script defer src="realtime_ir.js?v=20261109gb7"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
