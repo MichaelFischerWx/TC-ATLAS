@@ -1070,6 +1070,52 @@ def _fetch_completed_month_grid_from_daily(
     return acc["grid"], acc["trop_mean"]
 
 
+def apply_monthly_detrend(df):
+    """Fill `{region}_sst_dt` and `{region}_sst_dt_projected` on every row
+    of a monthly indices frame.
+
+    Per (region, calendar month): fit SST linearly in year across the
+    non-preliminary rows (NOAA-finalized and daily-derived), then
+    subtract that trend from every row's SST, and from its projected
+    full-month SST where it has one (the preliminary row). Shared by the
+    full backfill (build_indices) and the daily job's monthly refresh, so
+    a month added between backfills gets the same detrended value the
+    next backfill would give it.
+    """
+    import pandas as pd
+    df = df.copy()
+    when = pd.to_datetime(df["date"])
+    years = when.dt.year.to_numpy(dtype=np.float64)
+    months = when.dt.month.to_numpy()
+    prelim = df["preliminary"].fillna(False).astype(bool).to_numpy()
+
+    def _num(col):
+        if col not in df.columns:
+            return None
+        return pd.to_numeric(df[col], errors="coerce").to_numpy(
+            dtype=np.float64, na_value=np.nan)
+
+    for name in REGIONS:
+        sst = _num(f"{name}_sst")
+        sst_p = _num(f"{name}_sst_projected")
+        dt = np.full(len(df), np.nan)
+        dt_p = np.full(len(df), np.nan)
+        for m in range(1, 13):
+            in_month = months == m
+            fit = in_month & ~prelim & np.isfinite(sst)
+            if fit.sum() < 4:
+                continue
+            slope, intercept = np.polyfit(years[fit], sst[fit], 1)
+            trend = slope * years[in_month] + intercept
+            dt[in_month] = np.round(sst[in_month] - trend, 4)
+            # Finalized rows have no projected SST, so they stay NaN here.
+            if sst_p is not None:
+                dt_p[in_month] = np.round(sst_p[in_month] - trend, 4)
+        df[f"{name}_sst_dt"] = dt
+        df[f"{name}_sst_dt_projected"] = dt_p
+    return df
+
+
 def build_indices(climo_path: Path, out_path: Path,
                   year_start: int = INDICES_START_YEAR,
                   year_end: int | None = None,
@@ -1194,42 +1240,9 @@ def build_indices(climo_path: Path, out_path: Path,
                 log.info("  appended preliminary row for %s (n=%d days)",
                          prelim["date"], prelim["n_days"])
 
-    # Detrended SST: per-(region, calendar-month) linear-in-year trend fit
-    # across finalized rows only, subtracted off every row (finalized +
-    # preliminary). Result is the year's deviation from the locally-fit
-    # trend, stored as `{region}_sst_dt`. Done AFTER prelim append so the
-    # prelim row also gets a detrended value.
-    df["_year"] = pd.to_datetime(df["date"]).dt.year
-    df["_month"] = pd.to_datetime(df["date"]).dt.month
-    for name in REGIONS:
-        col_sst = f"{name}_sst"
-        col_dt = f"{name}_sst_dt"
-        col_sst_p = f"{name}_sst_projected"
-        col_dt_p = f"{name}_sst_dt_projected"
-        df[col_dt] = np.nan
-        df[col_dt_p] = np.nan
-        for m in range(1, 13):
-            mask = (df["_month"] == m) & (~df["preliminary"])
-            if mask.sum() < 4:
-                continue
-            ys = df.loc[mask, "_year"].values.astype(np.float64)
-            vs = df.loc[mask, col_sst].values.astype(np.float64)
-            slope, intercept = np.polyfit(ys, vs, 1)
-            full_mask = (df["_month"] == m)
-            full_ys = df.loc[full_mask, "_year"].values.astype(np.float64)
-            full_vs = df.loc[full_mask, col_sst].values.astype(np.float64)
-            df.loc[full_mask, col_dt] = np.round(
-                full_vs - (slope * full_ys + intercept), 4
-            )
-            # Apply the same trend to the projected full-month SST so
-            # the preliminary row also gets a meaningful detrended-
-            # projected value. Finalized rows have NaN here.
-            if col_sst_p in df.columns:
-                proj_vs = df.loc[full_mask, col_sst_p].values.astype(np.float64)
-                df.loc[full_mask, col_dt_p] = np.round(
-                    proj_vs - (slope * full_ys + intercept), 4
-                )
-    df = df.drop(columns=["_year", "_month"])
+    # Detrended SST. Done AFTER the prelim append so the prelim row also
+    # gets a detrended value.
+    df = apply_monthly_detrend(df)
     # The preliminary row (appended without the column) lands as NaN here.
     df["daily_derived"] = df["daily_derived"].fillna(False).astype(bool)
 

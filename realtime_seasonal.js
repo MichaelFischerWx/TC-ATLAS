@@ -5939,10 +5939,22 @@
         var v = state.idx.variable;
         var nino34, amo, nta, tsa;
         if (v === 'sst_dt') {
-            nino34 = idx.values.nino34_sst_dt;
-            amo = idx.values.atl_amo_sst_dt;
-            nta = idx.values.nta_sst_dt;
-            tsa = idx.values.tsa_sst_dt;
+            // Preliminary month: the projected value, for the same
+            // month-to-date reason as _relativeAnomalySeries.
+            var dtSeries = function (region) {
+                var base = idx.values[region + '_sst_dt'];
+                var proj = idx.values[region + '_sst_dt_projected'];
+                var pre = idx.preliminary || [];
+                if (!base || !proj) return base;
+                return base.map(function (val, i) {
+                    var p = proj[i];
+                    return (pre[i] && p !== null && p !== undefined) ? p : val;
+                });
+            };
+            nino34 = dtSeries('nino34');
+            amo = dtSeries('atl_amo');
+            nta = dtSeries('nta');
+            tsa = dtSeries('tsa');
         } else if (v === 'sst_rel') {
             nino34 = _relativeAnomalySeries('nino34');
             amo = _relativeAnomalySeries('atl_amo');

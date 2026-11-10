@@ -693,17 +693,16 @@ def refresh_monthly_preliminary(climo_mean: xr.DataArray) -> None:
     logic the backfill uses) → drop any old preliminary for this month →
     splice the fresh row in → upload parquet + JSON sidecar.
 
-    Note: the `{region}_sst_dt` (detrended) column for the preliminary
-    row is left as NaN here. Computing the per-region linear-in-year
-    trend would require iterating all finalized rows of this month,
-    region-by-region. For tonight, Panel C's `Variable=SST detrended`
-    selector simply won't have a preliminary star for the current month
-    until the next full backfill; raw SST / anom / rel-anom are all
-    fresh.
+    The detrended columns (`{region}_sst_dt`, `_sst_dt_projected`) are
+    recomputed over the whole frame with the backfill's own
+    `apply_monthly_detrend`, so daily-derived and preliminary months get a
+    detrended value too. (They used to stay NaN until the next full
+    backfill, which left the Detrended views ending months early.)
     """
     import pandas as pd
     from build_oisst_history import (_fetch_current_month_preliminary,
                                      _fetch_completed_month_from_daily,
+                                     apply_monthly_detrend,
                                      REGIONS,
                                      CLIMO_START_YEAR, CLIMO_END_YEAR)
 
@@ -782,6 +781,8 @@ def refresh_monthly_preliminary(climo_mean: xr.DataArray) -> None:
 
     # The current-month prelim row was aligned with missing cols → NA above.
     df["daily_derived"] = df["daily_derived"].fillna(False).astype(bool)
+
+    df = apply_monthly_detrend(df)
 
     df.to_parquet(local, compression="snappy", index=False)
     _upload_blob(local, name, "application/octet-stream")
