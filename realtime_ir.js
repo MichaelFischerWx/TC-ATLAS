@@ -3469,9 +3469,9 @@
         return _rt3DOn;
     }
     // ── Globe view (spike) — MapLibre 5 globe projection on the Global Map ──
-    // The mosaic custom layer, basemap, tracks and markers all follow the
-    // projection natively; the facade hides the flat-only canvas overlays
-    // (env/recon barbs, microwave) while it is on. ?globe=1 starts in it.
+    // The mosaic custom layer, basemap, tracks and markers follow the
+    // projection natively; env/recon barbs redraw globe-aware and the
+    // microwave swaths switch to a GL twin (tc_mw_layer.js). ?globe=1 starts in it.
     var _rtGlobeOn = false, _rtGlobeMinZoom = null;
     function _rtGlobeAvailable() { return !!(map && map.canGlobe && map.canGlobe()); }
     // Zoom at which the whole sphere fits with a margin: MapLibre's globe radius
@@ -7066,7 +7066,7 @@
                     globeBtn = L.DomUtil.create('button', 'ir-3d-mode-btn ir-globe-mode-btn', wrap);
                     globeBtn.id = 'ir-globe-mode-btn';
                     globeBtn.type = 'button';
-                    globeBtn.title = 'Show the Global Map as a globe. Drag to spin. Wind barbs and microwave show on the flat map only.';
+                    globeBtn.title = 'Show the Global Map as a globe, lit by the sun at the shown frame time. Drag to spin.';
                     globeBtn.innerHTML = '<span class="ir-3d-mode-glyph" aria-hidden="true"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span><span class="ir-3d-mode-text">Globe</span>';
                     globeBtn.addEventListener('click', function () { _rtGlobeToggle(); });
                     if (/[?&]globe=1\b/.test(location.search)) setTimeout(function () { _rtGlobeToggle(true); }, 0);
@@ -26130,7 +26130,8 @@
 
         onAdd: function (map) {
             this._map = map;
-            var c = L.DomUtil.create('canvas', 'leaflet-wind-canvas');
+            // lflet-globe-ok: this canvas draws correctly on the globe (see _redraw).
+            var c = L.DomUtil.create('canvas', 'leaflet-wind-canvas lflet-globe-ok');
             c.style.position = 'absolute';
             c.style.pointerEvents = 'none';
             c.style.zIndex = 425;
@@ -26198,6 +26199,10 @@
             return this;
         },
 
+        // Projection switched (flat ↔ globe): the facade calls this once the
+        // new projection has rendered.
+        _onGlobe: function () { this._redraw(); },
+
         _redraw: function () {
             if (!this._map || !this._canvas) return;
             var size = this._map.getSize();
@@ -26220,11 +26225,27 @@
             var z = this._map.getZoom();
             var spacing = z <= 2 ? 8 : z <= 3 ? 5 : z <= 4 ? 3 : z <= 5 ? 1.5 : 1;
 
+            // Globe: sample the whole sphere once (no world copies) and let the
+            // far-side test below drop the hidden half.
+            var onGlobe = !!(this._map.isGlobe && this._map.isGlobe());
             var b = this._map.getBounds();
-            var sLat = Math.floor(b.getSouth() / spacing) * spacing;
-            var nLat = Math.ceil(b.getNorth() / spacing) * spacing;
-            var wLon = Math.floor(b.getWest() / spacing) * spacing;
-            var eLon = Math.ceil(b.getEast() / spacing) * spacing;
+            var sLat = onGlobe ? -80 : Math.floor(b.getSouth() / spacing) * spacing;
+            var nLat = onGlobe ? 80 : Math.ceil(b.getNorth() / spacing) * spacing;
+            var wLon = onGlobe ? -180 : Math.floor(b.getWest() / spacing) * spacing;
+            var eLon = onGlobe ? 180 - spacing : Math.ceil(b.getEast() / spacing) * spacing;
+            // Globe: foreshortening packs the grid ever tighter toward the limb.
+            // Thin in SCREEN space instead — one barb per cell about one grid
+            // step wide (measured at the view center) — so the spacing you see
+            // stays even out to the rim. The last ~8° before the limb is dropped.
+            var cv = null, cell = 0, used = null;
+            if (onGlobe) {
+                var cc = this._map.getCenter(), cla = cc.lat * Math.PI / 180, clo = cc.lng * Math.PI / 180;
+                cv = [Math.cos(cla) * Math.cos(clo), Math.cos(cla) * Math.sin(clo), Math.sin(cla)];
+                var p0 = this._map.latLngToContainerPoint([cc.lat, cc.lng]);
+                var p1 = this._map.latLngToContainerPoint([cc.lat + (cc.lat > 80 ? -spacing : spacing), cc.lng]);
+                cell = Math.max(16, 0.85 * Math.sqrt((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y)));
+                used = {};
+            }
 
             var meta = this._meta;
             var uSpan = (meta.u_max - meta.u_min) / 255.0;
@@ -26246,6 +26267,24 @@
                     if (uv[idx + 3] === 0) continue;
                     var u_ms = meta.u_min + uv[idx] * uSpan;
                     var v_ms = meta.v_min + uv[idx + 1] * vSpan;
+                    if (onGlobe) {
+                        var pla = lat * Math.PI / 180, plo = lon * Math.PI / 180;
+                        if (Math.cos(pla) * Math.cos(plo) * cv[0] + Math.cos(pla) * Math.sin(plo) * cv[1] + Math.sin(pla) * cv[2] < 0.14) continue;
+                        if (this._map.isLatLngHidden([lat, lon])) continue;
+                        var gp = this._map.latLngToContainerPoint([lat, lon]);
+                        if (gp.x < -20 || gp.y < -20 || gp.x > size.x + 20 || gp.y > size.y + 20) continue;
+                        var ck = Math.floor(gp.x / cell) + ':' + Math.floor(gp.y / cell);
+                        if (used[ck]) continue;
+                        used[ck] = 1;
+                        // u/v are east/north components: turn the glyph so its
+                        // "north" follows the meridian on the sphere.
+                        ctx.save();
+                        ctx.translate(gp.x, gp.y);
+                        ctx.rotate(this._map.northAngle([lat, lon]));
+                        _drawWindBarb(ctx, 0, 0, u_ms, v_ms, lat < 0);
+                        ctx.restore();
+                        continue;
+                    }
                     var pt = this._map.latLngToContainerPoint([lat, lon]);
                     _drawWindBarb(ctx, pt.x, pt.y, u_ms, v_ms, lat < 0);
                 }
@@ -32846,7 +32885,7 @@
                 _rp.style.zIndex = 443;          // above overlayPane(400), below markers(600)
                 _rp.style.pointerEvents = 'none';
             } catch (e) {}
-            var c = L.DomUtil.create('canvas', 'leaflet-recon-canvas');
+            var c = L.DomUtil.create('canvas', 'leaflet-recon-canvas lflet-globe-ok');   // globe-aware (see _redraw)
             c.style.position = 'absolute';
             c.style.pointerEvents = 'none';
             map.getPane('reconPane').appendChild(c);
@@ -32893,8 +32932,10 @@
             var targetS = z <= 4 ? 600 : z <= 5 ? 300 : z <= 6 ? 150 : z <= 7 ? 60 : 30;
             return Math.max(1, Math.round(targetS / this._cadence(track)));
         },
+        _onGlobe: function () { this._redraw(); },
         _redraw: function () {
             if (!this._map || !this._canvas) return;
+            var map = this._map, onGlobe = !!(map.isGlobe && map.isGlobe());
             var size = this._map.getSize();
             this._canvas.width = size.x; this._canvas.height = size.y;
             L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0, 0]));
@@ -32916,12 +32957,16 @@
                 ctx.beginPath();
                 var started = false;
                 for (var i = 0; i < track.length; i += pStride) {
+                    // Globe: lift the pen over the far side instead of drawing
+                    // a chord through the planet.
+                    if (onGlobe && map.isLatLngHidden([track[i].lat, track[i].lon])) { started = false; continue; }
                     var lp = this._map.latLngToContainerPoint([track[i].lat, track[i].lon]);
                     if (!started) { ctx.moveTo(lp.x, lp.y); started = true; }
                     else ctx.lineTo(lp.x, lp.y);
                 }
                 // Always finish on the true last fix so the path reaches the aircraft.
-                if (started && track.length && ((track.length - 1) % pStride)) {
+                if (started && track.length && ((track.length - 1) % pStride) &&
+                    !(onGlobe && map.isLatLngHidden([track[track.length - 1].lat, track[track.length - 1].lon]))) {
                     var lpEnd = this._map.latLngToContainerPoint([track[track.length - 1].lat, track[track.length - 1].lon]);
                     ctx.lineTo(lpEnd.x, lpEnd.y);
                 }
@@ -32931,12 +32976,20 @@
                 for (var j = 0; j < track.length; j += stride) {
                     var ob = track[j];
                     if (ob.lat == null || ob.lon == null) continue;
-                    if (!b.contains([ob.lat, ob.lon])) continue;
+                    if (onGlobe ? map.isLatLngHidden([ob.lat, ob.lon]) : !b.contains([ob.lat, ob.lon])) continue;
                     var pt = this._map.latLngToContainerPoint([ob.lat, ob.lon]);
+                    if (onGlobe && (pt.x < -20 || pt.y < -20 || pt.x > size.x + 20 || pt.y > size.y + 20)) continue;
                     var fresh = this._latestMs &&
                         (this._latestMs - Date.parse(ob.t)) <= _RT_RECON_FRESH_MS;
                     var bc = _reconVarColor(_rtReconColorVar, _reconObVal(ob, _rtReconColorVar));
-                    _rtDrawReconBarb(ctx, pt.x, pt.y, ob.wdir, ob.wspd_kt, ob.lat < 0, fresh, bc);
+                    if (onGlobe) {
+                        // wdir is from true north: turn the glyph to the local meridian.
+                        ctx.save(); ctx.translate(pt.x, pt.y); ctx.rotate(map.northAngle([ob.lat, ob.lon]));
+                        _rtDrawReconBarb(ctx, 0, 0, ob.wdir, ob.wspd_kt, ob.lat < 0, fresh, bc);
+                        ctx.restore();
+                    } else {
+                        _rtDrawReconBarb(ctx, pt.x, pt.y, ob.wdir, ob.wspd_kt, ob.lat < 0, fresh, bc);
+                    }
                     this._drawn.push({ x: pt.x, y: pt.y, ob: ob, tail: this._aircraft[ai].tail });
                 }
             }

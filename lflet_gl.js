@@ -540,15 +540,19 @@
     // ── Globe projection (MapLibre 5+) ────────────────────────────
     // GL-native layers (rasters, lines, fills, circles, the mosaic custom layer,
     // maplibregl.Marker) follow the projection on their own. The DOM panes hold
-    // only the hand-drawn canvas overlays (env/recon barbs, microwave), which
-    // place pixels on a flat plane — hidden while on the globe, redrawn on exit.
+    // the hand-drawn canvas overlays. A canvas that knows how to draw on the
+    // globe (skips far-side points via isLatLngHidden, turns glyphs to local
+    // north via northAngle) carries the class lflet-globe-ok and stays visible;
+    // anything else in a pane is hidden while on the globe and redrawn on exit.
+    // Layers with an _onGlobe(on) hook hear about each switch once the new
+    // projection has rendered (so their projected points are already right).
     var _globeCssDone = false;
     function _globeCss() {
         if (_globeCssDone) return; _globeCssDone = true;
         try {
             var s = document.createElement('style');
             // Far-side markers (opacity 0, see Marker) must not catch hovers/clicks either.
-            s.textContent = '.lflet-globe > .leaflet-pane{display:none !important}'
+            s.textContent = '.lflet-globe > .leaflet-pane > :not(.lflet-globe-ok){display:none !important}'
                 + '.lflet-globe .maplibregl-marker-covered{pointer-events:none !important}';
             document.head.appendChild(s);
         } catch (e) {}
@@ -573,7 +577,39 @@
                 if (l && l._glRedraw) setTimeout(l._glRedraw, 0);
             });
         }
+        this._gl.once('render', function () {
+            Object.keys(self._layers).forEach(function (k) {
+                var l = self._layers[k];
+                if (l && typeof l._onGlobe === 'function') { try { l._onGlobe(on); } catch (e) {} }
+            });
+        });
+        this._gl.triggerRepaint();
         return this;
+    };
+    // True when ll is on the far side of the globe (always false on the flat
+    // map). Uses MapLibre's own occlusion test — the one Marker uses — so
+    // canvas glyphs and DOM markers disappear at exactly the same limb.
+    Map.prototype.isLatLngHidden = function (ll) {
+        if (!this._globe) return false;
+        var t = this._gl.transform, l = toLatLng(ll);
+        try {
+            if (t && typeof t.isLocationOccluded === 'function')
+                return !!t.isLocationOccluded(new maplibregl.LngLat(l.lng, l.lat));
+        } catch (e) {}
+        return false;
+    };
+    // Screen rotation (radians, clockwise) that turns a north-up glyph drawn at
+    // ll to point along the local meridian. 0 on the flat Mercator map, where
+    // north is always straight up.
+    Map.prototype.northAngle = function (ll) {
+        if (!this._globe) return 0;
+        var l = toLatLng(ll), d = l.lat > 89 ? -0.25 : 0.25;
+        try {
+            var a = this._gl.project([l.lng, l.lat]), b = this._gl.project([l.lng, l.lat + d]);
+            var dx = b.x - a.x, dy = b.y - a.y;
+            if (d < 0) { dx = -dx; dy = -dy; }
+            return Math.atan2(dx, -dy);
+        } catch (e) { return 0; }
     };
     // Popups are not registered in _layers (eachLayer callers expect real layers),
     // so hasLayer answers for an open popup via maplibregl.Popup.isOpen().
