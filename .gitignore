@@ -61,3 +61,6 @@ data/era5_600_monthly/
 
 # staged build context for deploy_sear_job.sh (copied from ~/github/MLBT)
 sear_job_ctx/
+
+# SEAR record v2 local build (bin/build_sear_hist_v2.py writes ~/Data/sear_hist_v2; symlink it here to serve locally)
+sear-hist/

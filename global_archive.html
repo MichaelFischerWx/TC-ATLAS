@@ -89,11 +89,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20261110v5b">
+    <link rel="preload" as="script" href="global_archive.js?v=20261111s1">
     <link rel="preload" as="script" href="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261104sd1">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20261101m1">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20261111s1">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -144,6 +144,10 @@
             <button class="ga-tab" role="tab" aria-selected="false" data-tab="reanalysis" onclick="switchTab('reanalysis')"
                     title="GHOST recon-independent intensity reanalysis (research, not an official analysis)">
                 <span class="tab-full">GHOST Reanalysis</span><span class="tab-short">GHOST</span> <span class="ga-beta-chip">BETA</span>
+            </button>
+            <button class="ga-tab" role="tab" aria-selected="false" data-tab="sear" onclick="switchTab('sear')"
+                    title="SEAR: experimental 10-m wind estimates from reconnaissance flight-level wind (research, not an official analysis)">
+                <span class="tab-full">SEAR Surface Winds</span><span class="tab-short">SEAR</span> <span class="ga-beta-chip">EXP</span>
             </button>
             <!-- Climatology + Environment moved to tc_climatology.html
                  (TC Climatology in the top nav). Old #tab=climatology and
@@ -1565,6 +1569,149 @@
             </div>
         </section>
 
+        <!-- TAB 5: SEAR (experimental 10-m wind from reconnaissance flight-level wind).
+             global_archive_sear.js; data = cdn.tcatlas.org/sear-hist/v2/ (bin/build_sear_hist_v2.py). -->
+        <section id="tab-sear" class="ga-tab-content" role="tabpanel">
+            <div class="gra-toolbar gsr-toolbar">
+                <div class="gra-tgroup gsr-tg-flight">
+                    <label for="gsr-flight">Flight</label>
+                    <button type="button" class="ga-btn ga-btn-xs gsr-step" id="gsr-fprev" title="Previous flight" aria-label="Previous flight" disabled>&#9664;&#xFE0E;</button>
+                    <select id="gsr-flight" class="gra-version gsr-flight" disabled aria-label="Flight">
+                        <option>Pick a storm first</option>
+                    </select>
+                    <button type="button" class="ga-btn ga-btn-xs gsr-step" id="gsr-fnext" title="Next flight" aria-label="Next flight" disabled>&#9654;&#xFE0E;</button>
+                </div>
+                <div class="gra-tgroup gsr-tg-color">
+                    <label>Color by</label>
+                    <div class="gra-seg" id="gsr-color" role="group" aria-label="Color the flight track by">
+                        <button class="active" data-c="y">SEAR 10-m</button>
+                        <button data-c="fl">Flight level</button>
+                        <button data-c="z">Height</button>
+                    </div>
+                </div>
+                <div class="gra-tgroup gsr-tg-view">
+                    <label>View</label>
+                    <div class="gra-seg" id="gsr-view" role="group" aria-label="Plan view">
+                        <button class="active" data-v="map">Map</button>
+                        <button data-v="rel">Storm-relative</button>
+                    </div>
+                </div>
+                <span class="gra-tb-spacer" aria-hidden="true"></span>
+                <div class="gra-tgroup gsr-tg-ver">
+                    <label>Data</label>
+                    <span class="gsr-ver" id="gsr-ver" tabindex="0">Historical record</span>
+                </div>
+                <button type="button" class="gra-about-btn" id="gsr-about-btn" title="What is SEAR?">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg>
+                    <span>About SEAR</span>
+                </button>
+            </div>
+
+            <div class="browser-layout gra-layout gsr-layout">
+                <div class="browser-map-wrap gsr-main">
+                    <div class="gsr-plan">
+                        <div id="gsr-map"></div>
+                        <div id="gsr-rel" class="gsr-rel" hidden></div>
+                        <div id="gsr-badge" class="gra-count gsr-badge">Experimental &middot; not an official analysis</div>
+                        <div id="gsr-legend" class="ga-legend gra-legend gsr-legend"></div>
+                        <div id="gsr-loading" class="map-overlay-loading">
+                            <div class="tc-spinner"></div><span>Loading the SEAR record&hellip;</span>
+                        </div>
+                    </div>
+                    <div class="gsr-series" id="gsr-series">
+                        <div class="gsr-series-head">
+                            <div class="gsr-series-title" id="gsr-ts-title">Flight-level wind and SEAR along the flight</div>
+                            <div class="gsr-pills" id="gsr-pills" role="group" aria-label="Series shown"></div>
+                            <button type="button" class="ga-btn ga-btn-xs" id="gsr-save" title="Save this chart as a PNG" disabled>
+                                <svg class="gra-btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>PNG</button>
+                        </div>
+                        <div id="gsr-ts" class="gsr-ts"></div>
+                        <div id="gsr-ts-empty" class="gsr-ts-empty">Pick a storm on the map or in the list, then a flight.</div>
+                    </div>
+
+                    <div id="gsr-about-scrim" class="gra-scrim"></div>
+                    <div id="gsr-about" class="gra-about gsr-about" role="dialog" aria-labelledby="gsr-about-h">
+                        <button id="gsr-about-x" class="gra-about-x" title="Close">&times;</button>
+                        <h3 id="gsr-about-h">SEAR &mdash; surface wind from reconnaissance flight level</h3>
+                        <p class="gra-about-lede">SEAR (Surface Estimation from Aircraft Reconnaissance) turns the
+                            wind an aircraft measures at flight level into an estimate of the 10-m wind beneath it.
+                            This tab shows SEAR applied to the historical reconnaissance record, one flight at a time.</p>
+                        <h4>How an estimate is made</h4>
+                        <ol class="gsr-about-steps">
+                            <li><b>Flight level to 500&nbsp;m.</b> A model trained on NOAA tail Doppler radar
+                                analyses (TC-RADAR) scales the flight-level wind down to 500&nbsp;m.</li>
+                            <li><b>500&nbsp;m to the lowest 150&nbsp;m.</b> A second model, trained on GPS dropsondes,
+                                takes it to the mean wind of the lowest 150&nbsp;m.</li>
+                            <li><b>To 10&nbsp;m.</b> A factor measured from the dropsondes&rsquo; lowest levels
+                                finishes the chain.</li>
+                        </ol>
+                        <p>The headline value is on the 10-s-peak scale that forecasters use for flight-level
+                            wind, with a correction for the radius of maximum wind. Gaps in the SEAR line are
+                            observations it does not score: more than 250&nbsp;km from the center, an aircraft
+                            outside the 1&ndash;3&nbsp;km heights it was trained at, or a very light wind.</p>
+                        <h4>Which model this is</h4>
+                        <p id="gsr-about-model">The historical record is scored with the record&rsquo;s own model
+                            chain, whose first step learned from radar winds alone. The real-time SEAR product
+                            switched on 29&nbsp;Sep&nbsp;2026 to a newer chain whose first step learns from the
+                            aircraft&rsquo;s own wind, so a real-time value for the same flight can differ.</p>
+                        <h4>Reading it</h4>
+                        <ul>
+                            <li><b>Pass maxima</b> are the strongest estimate on each eyewall pass. A pass marked
+                                <em>VDM</em> comes from the vortex data message&rsquo;s maximum flight-level wind,
+                                where no flight-level file samples it.</li>
+                            <li><b>Best track</b> is drawn for comparison only. SEAR is not fitted to it.</li>
+                            <li><b>SFMR</b>, where shown, is a shape and sanity reference only. It is not what
+                                SEAR is calibrated or verified against; dropsondes are.</li>
+                            <li>Storms before 1997 predate SEAR&rsquo;s training data (older aircraft navigation),
+                                so their estimates are <em>extrapolated</em>.</li>
+                        </ul>
+                        <p class="gra-about-cite">SEAR is an unpublished research method. These estimates are
+                            provided for scientific transparency and are <strong>not an official forecast or
+                            analysis</strong>. Please contact Dr.&nbsp;Michael Fischer
+                            (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu</a>)
+                            before citing or redistributing them.</p>
+                    </div>
+                </div>
+
+                <aside class="browser-sidebar gra-side gsr-side" aria-label="SEAR storms">
+                    <div class="gsr-pane" id="gsr-pane-list">
+                        <div class="gra-side-head">
+                            <h3 class="gra-side-title">Storms with SEAR estimates</h3>
+                            <div id="gsr-sub" class="gra-sub">&mdash;</div>
+                            <div class="sb-search">
+                                <svg class="sb-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                                <input type="search" id="gsr-search" class="sb-search-input gra-search"
+                                       placeholder="Search name, year or ATCF (e.g. Ian 2022)"
+                                       autocomplete="off" spellcheck="false" aria-label="Search SEAR storms">
+                            </div>
+                            <div class="gra-chips gra-sorts" id="gsr-sorts" role="group" aria-label="Order the list">
+                                <button class="gra-chip active" data-sort="max">Max SEAR</button>
+                                <button class="gra-chip" data-sort="year">Season</button>
+                                <button class="gra-chip" data-sort="name">Name</button>
+                                <button class="gra-chip" data-sort="flights">Flights</button>
+                            </div>
+                        </div>
+                        <div id="gsr-list" class="gra-list"></div>
+                    </div>
+                    <div class="gsr-pane" id="gsr-pane-storm" hidden>
+                        <div class="gra-side-head gsr-storm-head">
+                            <button type="button" class="gsr-back" id="gsr-back">&#9664;&#xFE0E; All storms</button>
+                            <h3 class="gra-side-title" id="gsr-st-name">&mdash;</h3>
+                            <div id="gsr-st-sub" class="gra-sub"></div>
+                            <div class="gsr-tiles" id="gsr-tiles"></div>
+                        </div>
+                        <div class="gsr-life-wrap">
+                            <div class="gsr-sec-h">Pass maxima through the storm&rsquo;s life</div>
+                            <div id="gsr-life" class="gsr-life"></div>
+                        </div>
+                        <div class="gsr-sec-h gsr-fl-h">Flights <span id="gsr-fl-n"></span></div>
+                        <div id="gsr-flights" class="gra-list gsr-flights"></div>
+                    </div>
+                    <div class="gra-foot gsr-foot" id="gsr-foot"></div>
+                </aside>
+            </div>
+        </section>
+
         <!-- Climatology + Environment tabs moved to tc_climatology.html.
              Old #tab=climatology / #tab=environment URLs redirect via the
              inline <head> script. The "TC Climatology →" tab button at the
@@ -1617,10 +1764,12 @@
     <script defer src="lflet_gl.js?v=20261110gz1"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20261019rc1"></script>
-    <script defer src="global_archive.js?v=20261110v5b"></script>
+    <script defer src="global_archive.js?v=20261111s1"></script>
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
     <script defer src="global_archive_ghostra.js?v=20261101n1"></script>
+    <!-- SEAR tab: boots on switchTab('sear'), like the GHOST tab. -->
+    <script defer src="global_archive_sear.js?v=20261111s1"></script>
 </body>
 </html>

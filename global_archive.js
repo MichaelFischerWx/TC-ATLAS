@@ -2079,6 +2079,10 @@ window.switchTab = function (tabName) {
     if (tabName === 'reanalysis' && typeof activateGhostRAView === 'function') {
         activateGhostRAView();
     }
+    // SEAR (global_archive_sear.js) boots the same way, on first activation.
+    if (tabName === 'sear' && typeof activateSearView === 'function') {
+        activateSearView();
+    }
     // Environment tab is a launch card to climatology_globe.html — no
     // dynamic boot needed (the engine lives on its own page so the
     // vendored GC-ATLAS engine can run un-scoped).
@@ -11554,6 +11558,11 @@ function buildShareHash() {
         }
     }
 
+    // SEAR tab: the open storm and flight (global_archive_sear.js)
+    if (tab === 'sear' && typeof window.searShareParams === 'function') {
+        params = params.concat(window.searShareParams());
+    }
+
     // Compare tab: encode storm SIDs and alignment
     if (tab === 'compare' && compareStorms.length > 0) {
         params.push('storms=' + compareStorms.map(function (s) { return s.sid; }).join(','));
@@ -11758,6 +11767,8 @@ function restoreFromHash() {
         // GHOST Reanalysis: switchTab writes #tab=reanalysis into the URL, so a
         // shared or reloaded link must land on that tab, not the Storm Browser.
         if (params.tab === 'reanalysis') switchTab('reanalysis');
+        // SEAR: the tab reads its own storm / flight (sear=, flight=) from the hash at load.
+        if (params.tab === 'sear') switchTab('sear');
 
         // tab=climatology and tab=environment are handled by an inline
         // <head> redirect to tc_climatology.html, so we never reach this
