@@ -453,6 +453,7 @@
         atcf = String(atcf).toUpperCase();
         var r = byAtcf[atcf]; if (!r) return;
         sel = atcf; storm = null; flight = null; fIdx = -1;
+        $('gsr-maxnote').hidden = true;
         var req = ++stormReq;
         $('gsr-pane-list').hidden = true;
         $('gsr-pane-storm').hidden = false;
@@ -473,13 +474,21 @@
             renderStorm();
             var i = -1;
             if (flightKey) j.flights.forEach(function (f, k) { if (f.key === flightKey) i = k; });
-            if (i < 0) i = bestFlight(j);
-            if (i >= 0) selectFlight(i, true);
+            /* Land on the storm's maximum. When a vortex message sets it and no flight
+               file covers it (165 storms), open the flight nearest it in time, say so
+               above the chart, and in the Satellite view show the image at the maximum. */
+            var mp = maxPassIdx(j), vdmMax = mp >= 0 && j.passes[mp].f == null;
+            sat.pass = (vdmMax && !flightKey && view === 'sat') ? mp : null;
+            sat.R = null; sat.idx = null;
+            if (i < 0) i = landingFlight(j, mp);
+            renderMaxNote(j, mp);
+            if (i >= 0) selectFlight(i, true, true);
             else {
                 fitStorm();
                 renderLegend();
                 renderEmptySeries('No flight-level file for this storm in the record. Its pass maxima come from ' +
-                    'vortex data messages (the maximum flight-level wind of each center fix).');
+                    'vortex data messages (the maximum flight-level wind of each center fix).' +
+                    (vdmMax ? ' <button type="button" class="gsr-linkbtn" data-satpass="' + mp + '">See the storm maximum on the satellite image</button>' : ''));
                 if (view === 'sat') renderSat();
                 drawPassLayer();
                 syncHash();
@@ -492,6 +501,42 @@
         });
         syncHash();
     }
+    /* Index of the pass that sets the storm maximum, or -1 when an observation sets it. */
+    function maxPassIdx(j) {
+        if (j.max_src === 'obs' || j.pass_max_kt == null) return -1;
+        for (var k = 0; k < j.passes.length; k++) if (j.passes[k].y_corr_kt === j.pass_max_kt) return k;
+        return -1;
+    }
+    /* The flight that holds the maximum, else the one nearest it in time. */
+    function landingFlight(j, mp) {
+        if (!j.flights.length) return -1;
+        if (mp < 0) return bestFlight(j);
+        var p = j.passes[mp];
+        if (p.f != null) return p.f;
+        var tp = Date.parse(p.t) / 1000, best = -1, bd = Infinity;
+        j.flights.forEach(function (f, k) {
+            var d = tp < f.t0 ? f.t0 - tp : tp > f.t1 ? tp - f.t1 : 0;
+            if (d < bd) { bd = d; best = k; }
+        });
+        return best;
+    }
+    function renderMaxNote(j, mp) {
+        var el = $('gsr-maxnote'), p = mp >= 0 ? j.passes[mp] : null;
+        if (!p || p.f != null || !j.flights.length) { el.hidden = true; el.innerHTML = ''; return; }
+        el.hidden = false;
+        el.innerHTML = 'Storm maximum <b>' + r0(passV(p)) + ' kt</b>, ' + esc(utc(Date.parse(p.t))) +
+            ', is a vortex-message pass: no flight-level file covers it. ' +
+            '<button type="button" class="gsr-linkbtn" data-satpass="' + mp + '">See it on the satellite image</button>';
+    }
+    /* Satellite view at one vortex-message pass (no flight file behind it). */
+    function enterPassMode(k) {
+        if (!storm || !storm.passes[k]) return;
+        sat.pass = k; sat.idx = null; sat.R = null;
+        if (view !== 'sat') document.querySelector('#gsr-view [data-v="sat"]').click();
+        else renderSat();
+    }
+    function passMode() { return (storm && sat.pass != null) ? storm.passes[sat.pass] || null : null; }
+    function passR(p) { return Math.max(60, Math.min(200, ((p && p.rmw_km) || 20) * 8)); }
     function bestFlight(j) {
         var best = -1, bv = -1;
         j.flights.forEach(function (f, k) {
@@ -502,6 +547,7 @@
     }
     function closeStorm() {
         sel = null; storm = null; flight = null; fIdx = -1; stormReq++; flightReq++;
+        sat.pass = null; $('gsr-maxnote').hidden = true;
         $('gsr-pane-list').hidden = false;
         $('gsr-pane-storm').hidden = true;
         clearFlightLayers();
@@ -626,8 +672,9 @@
     // ══════════════════════════════════════════════════════════════
     //  flight
     // ══════════════════════════════════════════════════════════════
-    function selectFlight(k, fit) {
+    function selectFlight(k, fit, keepPass) {
         if (!storm || k < 0 || k >= storm.flights.length) return;
+        if (!keepPass && sat.pass != null) { sat.pass = null; sat.R = null; sat.idx = null; }   // a picked flight leaves the pass view
         fIdx = k;
         var f = storm.flights[k], ck = storm.atcf + '/' + f.key, req = ++flightReq;
         flight = null;
@@ -938,6 +985,7 @@
             ts.on('plotly_click', function (ev) {
                 if (view !== 'sat' || !flight || !ev.points || !ev.points.length || !irMeta[sat.sid]) return;
                 var x = ev.points[0].x; x = typeof x === 'number' ? x : Date.parse(String(x).replace(' ', 'T') + 'Z');
+                sat.pass = null;                      // the chart is the flight's: leave the pass view
                 sat.focus = x; sat.what = 'the time you picked';
                 showSatFrame(nearestFrame(irMeta[sat.sid], x));
             });
@@ -1047,6 +1095,16 @@
         };
         if (leg.length) data.push(mk(leg, 'circle', 'Pass maximum'));
         if (fix.length) data.push(mk(fix, 'diamond-open', 'VDM pass'));
+        data.forEach(function (tr) {
+            if (tr.name === 'VDM pass') tr.hovertemplate = '%{x|%d %b %H:%M} UTC<br>VDM pass %{y:.0f} kt<br>click: see it on the satellite image<extra></extra>';
+        });
+        var mpi = maxPassIdx(storm);
+        if (mpi >= 0) {      // ring + label on the pass that sets the storm maximum
+            var mp = storm.passes[mpi];
+            data.push({ x: [D(Date.parse(mp.t))], y: [passV(mp)], type: 'scatter', mode: 'markers+text', hoverinfo: 'skip',
+                text: [r0(passV(mp))], textposition: 'top center', textfont: { size: 10, color: B.text },
+                marker: { symbol: 'circle-open', size: 15, line: { color: B.text, width: 1.5 } }, customdata: [mpi] });
+        }
         var shapes = [];
         if (fIdx >= 0) {
             var f = storm.flights[fIdx];
@@ -1067,7 +1125,7 @@
                 if (!pt || pt.customdata == null || !storm) return;
                 var p = storm.passes[pt.customdata];
                 if (p && p.f != null && p.f !== fIdx) selectFlight(p.f, true);
-                else if (p && p.f == null && window.GAArchive) GA().toast('This pass comes from a vortex message; no flight-level file covers it.');
+                else if (p && p.f == null) enterPassMode(pt.customdata);   // no flight file: show it on the image
             });
         });
     }
@@ -1160,7 +1218,8 @@
         if (view !== 'sat') return;
         fillSatCmaps();
         clearTimeout(_satRetry);
-        if (!flight) {
+        var pm = passMode();
+        if (!flight && !pm) {
             satNone(sel ? (storm && !storm.flights.length
                 ? 'This storm has no flight-level file in the record, so there is no flight to draw.'
                 : 'Loading the flight&hellip;') : 'Pick a storm, then a flight, to see it on the satellite image.');
@@ -1174,9 +1233,13 @@
             _satRetry = setTimeout(renderSat, 1000);
             return;
         }
-        if (sat.focus == null) satReset();
+        if (pm) {
+            sat.focus = Date.parse(pm.t);
+            sat.what = (sat.pass === maxPassIdx(storm)) ? 'the storm maximum' : 'this vortex-message pass';
+            if (sat.R == null) sat.R = passR(pm);
+        } else if (sat.focus == null) satReset();
         loadIRMeta(r.sid, t).then(function (m) {
-            if (view !== 'sat' || !flight || byAtcf[sel].sid !== r.sid) return;
+            if (view !== 'sat' || (!flight && !passMode()) || byAtcf[sel].sid !== r.sid) return;
             if (!m || !m.available || !m.frames || !m.frames.length) {
                 satNone('No infrared image for this storm' + (m && m.reason ? ': ' + esc(m.reason) : '') + '.');
                 return;
@@ -1221,7 +1284,7 @@
             : ' · ' + Math.abs(dt) + ' min ' + (dt < 0 ? 'before ' : 'after ') + sat.what;
         $('gsr-sat-prev').disabled = idx <= 0;
         $('gsr-sat-next').disabled = idx >= m.frames.length - 1;
-        markSeriesImage(ms);
+        markSeriesImage(passMode() ? null : ms);   // a pass-mode image belongs to no flight on the chart
         var key = sat.sid + '/' + idx;
         if (irFrames[key]) return paintSat(irFrames[key], key);
         satMsg('Loading the infrared image&hellip;');
@@ -1303,7 +1366,7 @@
         if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
             cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
         }
-        if (sat.R == null) sat.R = satDefaultR();
+        if (sat.R == null) sat.R = passMode() ? passR(passMode()) : flight ? satDefaultR() : 150;
         var k = (H * dpr) / (2 * sat.R);
         return { cv: cv, W: W * dpr, H: H * dpr, dpr: dpr, k: k };
     }
@@ -1334,7 +1397,8 @@
         ctx.fillStyle = '#05080d';
         ctx.fillRect(0, 0, g.W, g.H);
         var tb = sat.tb;
-        if (!tb || !sat.off || !flight) return;
+        var pm = passMode();
+        if (!tb || !sat.off || (!flight && !pm)) return;
         var c = satCenter(), b = tb.b, cl = Math.cos(c.lat * Math.PI / 180);
         var toCx = function (xkm) { return g.W / 2 + xkm * g.k; }, toCy = function (ykm) { return g.H / 2 - ykm * g.k; };
         // image: the visible km window -> lon/lat -> source px, clamped to the frame
@@ -1378,6 +1442,22 @@
             ctx.fillText(rk + ' km', toCx(rk * 0.7071) + 3 * px, toCy(rk * 0.7071) - 3 * px);
         });
         ctx.restore();
+        if (pm) {   // a vortex-message pass: its RMW about the center (the message gives no bearing)
+            if (pm.rmw_km) {
+                ctx.save();
+                ctx.setLineDash([6 * px, 4 * px]);
+                [['rgba(0,0,0,.6)', 4 * px], ['#fbbf24', 2 * px]].forEach(function (pass) {
+                    ctx.strokeStyle = pass[0]; ctx.lineWidth = pass[1];
+                    ctx.beginPath(); ctx.arc(toCx(0), toCy(0), pm.rmw_km * g.k, 0, 2 * Math.PI); ctx.stroke();
+                });
+                ctx.restore();
+            }
+            satCross(ctx, toCx(0), toCy(0), px);
+            var rr = (pm.rmw_km || 0) * g.k;
+            satLabel(ctx, r0(passV(pm)) + ' kt SEAR \u00b7 VDM flight level ' + r0(pm.fl_peak_kt) + ' kt' +
+                (pm.rmw_km ? ' \u00b7 RMW ' + Math.round(pm.rmw_km) + ' km' : ''), toCx(0) + rr * 0.72 + 8 * px, toCy(0) - rr * 0.72 - 8 * px, px);
+            return;
+        }
         // flight pattern: halo line, then dots colored like the map
         var o = flight.obs, n = o.t.length;
         ctx.save(); ctx.lineJoin = 'round';
@@ -1516,7 +1596,10 @@
             sat.R = Math.max(30, Math.min(1100, sat.R * (e.deltaY > 0 ? 1.12 : 1 / 1.12)));
             drawSat();
         }, { passive: false });
-        cv.addEventListener('dblclick', function () { if (flight) { sat.R = satDefaultR(); drawSat(); } });
+        cv.addEventListener('dblclick', function () {
+            if (passMode()) sat.R = passR(passMode()); else if (flight) sat.R = satDefaultR(); else return;
+            drawSat();
+        });
         cv.addEventListener('mousemove', satRead);
         cv.addEventListener('mouseleave', function () { $('gsr-sat-read').textContent = ''; });
         if (typeof ResizeObserver !== 'undefined') new ResizeObserver(function () { if (view === 'sat') drawSat(); }).observe($('gsr-sat'));
@@ -1581,6 +1664,10 @@
             if (flight) renderSeries();
         });
         $('gsr-save').onclick = savePng;
+        $('gsr-series').addEventListener('click', function (e) {
+            var b = e.target.closest('[data-satpass]');
+            if (b) enterPassMode(+b.getAttribute('data-satpass'));
+        });
         // About
         showAbout = function (on) {
             $('gsr-about').classList.toggle('open', on);

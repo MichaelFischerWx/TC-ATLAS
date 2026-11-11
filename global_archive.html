@@ -93,7 +93,7 @@
     <link rel="preload" as="script" href="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261104sd1">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20261111s4">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20261111s5">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -1642,6 +1642,7 @@
                             <button type="button" class="ga-btn ga-btn-xs" id="gsr-save" title="Save this chart as a PNG" disabled>
                                 <svg class="gra-btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>PNG</button>
                         </div>
+                        <div id="gsr-maxnote" class="gsr-maxnote" hidden></div>
                         <div id="gsr-ts" class="gsr-ts"></div>
                         <div id="gsr-ts-empty" class="gsr-ts-empty">Pick a storm on the map or in the list, then a flight.</div>
                     </div>
@@ -1796,6 +1797,6 @@
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
     <script defer src="global_archive_ghostra.js?v=20261101n1"></script>
     <!-- SEAR tab: boots on switchTab('sear'), like the GHOST tab. -->
-    <script defer src="global_archive_sear.js?v=20261111s4"></script>
+    <script defer src="global_archive_sear.js?v=20261111s5"></script>
 </body>
 </html>

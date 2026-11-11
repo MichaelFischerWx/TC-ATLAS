@@ -4358,11 +4358,24 @@ input[type="range"].ga-range::-moz-range-thumb {
 :root[data-theme="dark"] .gsr-pill-y i, :root[data-theme="dark"] .gsr-pill-y30 i { border-top-color: #f472b6; }
 :root[data-theme="dark"] .gsr-pill-y5 i { border-top-color: #38bdf8; }
 :root[data-theme="dark"] .gsr-pill-bt i { border-top-color: #cbd5e1; }
+.gsr-maxnote {
+    flex: none; margin: 2px 12px 0; padding: 5px 10px; border-radius: var(--radius-lg);
+    background: rgba(244, 115, 33, .10); color: var(--text); font-size: 0.75rem; line-height: 1.45;
+}
+.gsr-maxnote[hidden] { display: none; }
+.gsr-maxnote b { color: #be185d; font-weight: 600; }
+:root[data-theme="dark"] .gsr-maxnote b { color: #f472b6; }
+.gsr-linkbtn {
+    border: 0; background: none; padding: 0; cursor: pointer; font: 600 0.75rem var(--font-sans);
+    color: var(--um-green); text-decoration: underline; text-underline-offset: 2px;
+}
+:root[data-theme="dark"] .gsr-linkbtn { color: var(--blue-light); }
+.gsr-ts-empty .gsr-linkbtn { font-size: 0.8125rem; margin-left: 4px; }
 .gsr-ts { flex: 1 1 auto; min-height: 0; }
 /* no flight open: the series panel is a one-line prompt */
-#tab-sear.gsr-noflight .gsr-series { flex: 0 0 64px; min-height: 0; }
+#tab-sear.gsr-noflight .gsr-series { flex: 0 0 auto; min-height: 64px; }
 #tab-sear.gsr-noflight .gsr-pills, #tab-sear.gsr-noflight #gsr-save { display: none; }
-#tab-sear.gsr-noflight .gsr-ts-empty { top: 26px; padding: 4px 20px; }
+#tab-sear.gsr-noflight .gsr-ts-empty { position: static; padding: 2px 20px 10px; }
 .gsr-ts[hidden] { display: none; }
 
 /* sidebar: list pane / storm pane */
@@ -4419,7 +4432,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     #tab-sear .browser-map-wrap { flex: none; height: auto; }
     .gsr-plan { flex: none; height: 46vh; min-height: 280px; }
     .gsr-series { flex: none; height: 340px; min-height: 0; }
-    #tab-sear.gsr-noflight .gsr-series { height: 72px; }
+    #tab-sear.gsr-noflight .gsr-series { height: auto; }
     #tab-sear .browser-sidebar { flex: none; height: auto; }
     .browser-sidebar.gsr-side { width: 100%; min-width: 0; overflow: visible; }
     .gsr-toolbar { gap: 8px; padding: 8px 10px; }
