@@ -93,7 +93,7 @@
     <link rel="preload" as="script" href="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261104sd1">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20261111s3">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20261111s4">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -1593,7 +1593,8 @@
                     <label>View</label>
                     <div class="gra-seg" id="gsr-view" role="group" aria-label="Plan view">
                         <button class="active" data-v="map">Map</button>
-                        <button data-v="rel">Storm-relative</button>
+                        <button data-v="rel"><span class="gsr-full">Storm-relative</span><span class="gsr-short">Relative</span></button>
+                        <button data-v="sat" title="The archive's infrared image nearest a time, with the flight pattern placed on it">Satellite</button>
                     </div>
                 </div>
                 <span class="gra-tb-spacer" aria-hidden="true"></span>
@@ -1612,6 +1613,22 @@
                     <div class="gsr-plan">
                         <div id="gsr-map"></div>
                         <div id="gsr-rel" class="gsr-rel" hidden></div>
+                        <!-- Satellite view: the archive IR frame nearest a time (same frames as
+                             Storm Detail / GHOST Reanalysis), flight pattern drawn on top. -->
+                        <div id="gsr-sat" class="gsr-sat" hidden>
+                            <canvas id="gsr-sat-canvas" class="gsr-sat-canvas"></canvas>
+                            <div class="gsr-sat-head">
+                                <button type="button" class="gsr-sat-btn" id="gsr-sat-prev" title="Previous image (3 h earlier)" aria-label="Previous image">&#9664;&#xFE0E;</button>
+                                <div class="gsr-sat-when"><b id="gsr-sat-time">&mdash;</b><span id="gsr-sat-dt"></span></div>
+                                <button type="button" class="gsr-sat-btn" id="gsr-sat-next" title="Next image (3 h later)" aria-label="Next image">&#9654;&#xFE0E;</button>
+                                <select id="gsr-sat-cmap" class="gsr-sat-cmap" aria-label="Infrared colormap" title="Infrared colormap"></select>
+                                <button type="button" class="gsr-sat-btn" id="gsr-sat-zout" title="Zoom out" aria-label="Zoom out">&minus;</button>
+                                <button type="button" class="gsr-sat-btn" id="gsr-sat-zin" title="Zoom in" aria-label="Zoom in">+</button>
+                            </div>
+                            <div class="gsr-sat-bar"><canvas id="gsr-sat-bar" width="256" height="8"></canvas><div id="gsr-sat-ticks" class="gsr-sat-ticks"></div></div>
+                            <div id="gsr-sat-read" class="gsr-sat-read"></div>
+                            <div id="gsr-sat-msg" class="gsr-sat-msg"></div>
+                        </div>
                         <div id="gsr-badge" class="gra-count gsr-badge">Experimental &middot; not an official analysis</div>
                         <div id="gsr-legend" class="ga-legend gra-legend gsr-legend"></div>
                         <div id="gsr-loading" class="map-overlay-loading">
@@ -1663,6 +1680,11 @@
                                 within 250&nbsp;km of the center, with the aircraft below 5&nbsp;km. The time series
                                 still draws every observation, including jet-stream winds far from the storm and the
                                 occasional bad stretch in older 10-s files.</li>
+                            <li><b>Satellite</b> shows the archive&rsquo;s infrared image (the same 3-hourly images as
+                                Storm Detail) nearest a time: the flight&rsquo;s strongest pass, or any time you click
+                                on the chart. The flight is drawn by each observation&rsquo;s distance and bearing from
+                                the storm center, placed on the image&rsquo;s best-track center, so the pattern lines up
+                                with the storm rather than with the ground.</li>
                             <li><b>Best track</b> is drawn for comparison only. SEAR is not fitted to it.</li>
                             <li><b>SFMR</b>, where shown, is a shape and sanity reference only. It is not what
                                 SEAR is calibrated or verified against; dropsondes are.</li>
@@ -1774,6 +1796,6 @@
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
     <script defer src="global_archive_ghostra.js?v=20261101n1"></script>
     <!-- SEAR tab: boots on switchTab('sear'), like the GHOST tab. -->
-    <script defer src="global_archive_sear.js?v=20261111s3"></script>
+    <script defer src="global_archive_sear.js?v=20261111s4"></script>
 </body>
 </html>

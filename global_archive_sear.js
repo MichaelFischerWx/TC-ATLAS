@@ -480,6 +480,7 @@
                 renderLegend();
                 renderEmptySeries('No flight-level file for this storm in the record. Its pass maxima come from ' +
                     'vortex data messages (the maximum flight-level wind of each center fix).');
+                if (view === 'sat') renderSat();
                 drawPassLayer();
                 syncHash();
             }
@@ -510,6 +511,7 @@
         fillFlightSelect();
         renderEmptySeries('Pick a storm on the map or in the list, then a flight.');
         if (view === 'rel') renderRel();
+        if (view === 'sat') renderSat();
         renderLegend();
         renderList();
         syncHash();
@@ -646,8 +648,10 @@
             flight = j;
             prepFlight(j);
             drawFlight(fit !== false);
+            satReset();
             renderSeries();
             if (view === 'rel') renderRel();
+            if (view === 'sat') renderSat();
             syncHash();
         }).catch(function (e) {
             if (req !== flightReq) return;
@@ -792,6 +796,7 @@
             setSrc(L_HL, { type: 'FeatureCollection', features: [{ type: 'Feature',
                 geometry: { type: 'Point', coordinates: [o.ulon[i], o.lat[i]] }, properties: {} }] });
         }
+        if (view === 'sat') { sat.hover = i; drawSat(); }
         var rel = $('gsr-rel');
         if (view === 'rel' && rel && rel._fullLayout && window.Plotly && rel._hlTrace != null) {
             try { Plotly.restyle(rel, { x: [[o.x[i]]], y: [[o.yy[i]]] }, [rel._hlTrace]); } catch (e) { }
@@ -909,11 +914,15 @@
             xaxis: ax(B, { type: 'date', hoverformat: fmtT }),
             yaxis: ax(B, { title: 'kt', range: [0, Math.ceil((ymax * 1.12) / 10) * 10], fixedrange: false }),
             shapes: [{ type: 'line', xref: 'x', yref: 'paper', x0: o.ds[0], x1: o.ds[0], y0: 0, y1: 1, visible: false,
-                line: { color: B.axis, width: 1, dash: 'dot' } }]
+                line: { color: B.axis, width: 1, dash: 'dot' } },
+                // the satellite image's time (Satellite view only)
+                { type: 'line', xref: 'x', yref: 'paper', x0: o.ds[0], x1: o.ds[0], y0: 0, y1: 1, visible: false,
+                    line: { color: '#0ea5e9', width: 2 } }]
         };
         if (right) layout.yaxis2 = ax(B, { title: right === 'r' ? 'radius, km' : 'height, km', overlaying: 'y', side: 'right',
             showgrid: false, rangemode: 'tozero', range: right === 'r' ? [0, Math.min(600, maxOf(o.r) * 1.05 || 300)] : undefined });
         plot(ts, data, layout).then(function () {
+            if (view === 'sat' && sat.idx != null && irMeta[sat.sid]) markSeriesImage(frameMs(irMeta[sat.sid].frames[sat.idx]));
             if (ts._gsrWired) return;
             ts._gsrWired = true;
             ts.on('plotly_hover', function (ev) {
@@ -921,7 +930,17 @@
                 var x = ev.points[0].x; x = typeof x === 'number' ? x : Date.parse(String(x).replace(' ', 'T') + 'Z');
                 highlight(nearestIdx(flight.obs.ms, x), 'ts');
             });
-            ts.on('plotly_unhover', function () { setSrc(L_HL, EMPTY); _hlLast = -1; });
+            ts.on('plotly_unhover', function () {
+                setSrc(L_HL, EMPTY); _hlLast = -1;
+                if (view === 'sat' && sat.hover >= 0) { sat.hover = -1; drawSat(); }
+            });
+            /* Satellite view: a click on the chart asks for the image nearest that time. */
+            ts.on('plotly_click', function (ev) {
+                if (view !== 'sat' || !flight || !ev.points || !ev.points.length || !irMeta[sat.sid]) return;
+                var x = ev.points[0].x; x = typeof x === 'number' ? x : Date.parse(String(x).replace(' ', 'T') + 'Z');
+                sat.focus = x; sat.what = 'the time you picked';
+                showSatFrame(nearestFrame(irMeta[sat.sid], x));
+            });
         });
     }
     function maxOf(a) { var m = 0; for (var i = 0; i < a.length; i++) if (a[i] != null && a[i] > m) m = a[i]; return m; }
@@ -1066,6 +1085,444 @@
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  satellite view: the archive's infrared image nearest a time,
+    //  with the flight pattern drawn on it
+    // ══════════════════════════════════════════════════════════════
+    /* The same frames as Storm Detail and the GHOST Reanalysis chip: /global/ir/meta
+       lists one frame per best-track time (3-hourly), each a ~20-degree box of uint8
+       brightness temperature centered on the best-track position, pre-rendered on the
+       CDN (v7/ir/<sid>/<idx>.json) with the API as fallback. The track goes to
+       /ir/meta VERBATIM, exactly as those views send it, so all three share one frame
+       index space and one set of warmed R2 objects.
+
+       The flight is placed by each observation's distance and bearing from the
+       record's own center (r, az), around the image's best-track center. That lines
+       the pattern up with the storm in the picture; plotting the as-flown lat/lon on
+       a single 3-hourly snapshot would smear it along the storm's motion. */
+    var API = 'https://api.tcatlas.org';
+    var irMeta = {}, irMetaReq = {}, irFrames = {};
+    var sat = { sid: null, idx: null, focus: null, what: '', tb: null, off: null, R: null, hover: -1, key: '' };
+    var IR_CMAPS = [['claude-ir', 'Claude IR'], ['enhanced', 'Enhanced IR'], ['dvorak', 'Dvorak BD'],
+        ['grayscale', 'Greyscale'], ['funktop', 'Funktop'], ['avn', 'AVN'], ['nhc', 'NHC'], ['rammb', 'RAMMB'], ['irb', 'IR-B']];
+    var satCmap = null;
+    var KM = 111.32;
+
+    /* No image to show: clear it and hide the image's chrome (time, colorbar,
+       readout) so nothing from the previous storm lingers next to the message. */
+    function satNone(t) {
+        sat.tb = null; sat.idx = null;
+        $('gsr-sat').classList.add('gsr-sat-none');
+        markSeriesImage(null);
+        drawSat();
+        satMsg(t);
+    }
+    function satMsg(t) {
+        var m = $('gsr-sat-msg');
+        m.innerHTML = t || '';
+        m.style.display = t ? '' : 'none';
+    }
+    function satLut() {
+        var maps = GA() && GA().irColormaps ? GA().irColormaps() : null;
+        return maps ? (maps[satCmap] || maps['claude-ir'] || maps.enhanced) : null;
+    }
+    function fillSatCmaps() {
+        var s = $('gsr-sat-cmap');
+        if (s.options.length) return;
+        var maps = GA() && GA().irColormaps ? GA().irColormaps() : {};
+        var stored = null;
+        try { stored = localStorage.getItem('gsr-ir-cmap'); } catch (e) { }
+        satCmap = (stored && maps[stored]) ? stored : ((GA() && GA().irColormapName && GA().irColormapName()) || 'claude-ir');
+        s.innerHTML = IR_CMAPS.filter(function (c) { return maps[c[0]]; })
+            .map(function (c) { return '<option value="' + c[0] + '">' + c[1] + '</option>'; }).join('');
+        s.value = satCmap;
+    }
+    /* The time the image should match: the flight's strongest pass, else its
+       strongest scored observation, else the middle of the flight. */
+    function satDefaultFocus() {
+        var P = flightPasses().map(function (i) { return storm.passes[i]; });
+        if (P.length) {
+            var best = P[0];
+            P.forEach(function (p) { if (passV(p) > passV(best)) best = p; });
+            return { t: Date.parse(best.t), what: 'the strongest pass' };
+        }
+        var o = flight.obs, k = -1;
+        for (var i = 0; i < o.y.length; i++) if (o.y[i] != null && (k < 0 || o.y[i] > o.y[k])) k = i;
+        if (k >= 0) return { t: o.ms[k], what: 'the strongest SEAR estimate' };
+        return { t: (o.ms[0] + o.ms[o.ms.length - 1]) / 2, what: 'mid-flight' };
+    }
+    function satReset() {
+        sat.idx = null; sat.tb = null; sat.off = null; sat.R = null; sat.hover = -1; sat.key = '';
+        var f = satDefaultFocus();
+        sat.focus = f.t; sat.what = f.what;
+    }
+    var _satRetry = null;
+    function renderSat() {
+        if (view !== 'sat') return;
+        fillSatCmaps();
+        clearTimeout(_satRetry);
+        if (!flight) {
+            satNone(sel ? (storm && !storm.flights.length
+                ? 'This storm has no flight-level file in the record, so there is no flight to draw.'
+                : 'Loading the flight&hellip;') : 'Pick a storm, then a flight, to see it on the satellite image.');
+            return;
+        }
+        var r = byAtcf[sel];
+        if (!r || !r.sid) { satNone('No best-track match for this storm, so no satellite image.'); return; }
+        var t = btTrack(r);
+        if (!t || !t.length) {
+            satMsg('Waiting for the best track&hellip;');
+            _satRetry = setTimeout(renderSat, 1000);
+            return;
+        }
+        if (sat.focus == null) satReset();
+        loadIRMeta(r.sid, t).then(function (m) {
+            if (view !== 'sat' || !flight || byAtcf[sel].sid !== r.sid) return;
+            if (!m || !m.available || !m.frames || !m.frames.length) {
+                satNone('No infrared image for this storm' + (m && m.reason ? ': ' + esc(m.reason) : '') + '.');
+                return;
+            }
+            sat.sid = r.sid;
+            showSatFrame(nearestFrame(m, sat.focus));
+        }).catch(function (e) {
+            if (window.TCErrors) TCErrors.log(e, 'SEAR satellite frame list');
+            satMsg('Could not load the satellite frame list. <a href="#" id="gsr-sat-retry">Try again</a>');
+            var a = $('gsr-sat-retry');
+            if (a) a.onclick = function (ev) { ev.preventDefault(); delete irMetaReq[r.sid]; renderSat(); };
+        });
+    }
+    function loadIRMeta(sid, t) {
+        if (irMeta[sid]) return Promise.resolve(irMeta[sid]);
+        if (irMetaReq[sid]) return irMetaReq[sid];
+        satMsg('Loading the satellite frame list&hellip;');
+        var trk = t.map(function (p) { return { t: p.t, la: p.la, lo: p.lo }; });
+        irMetaReq[sid] = fetchJSON(API + '/global/ir/meta?sid=' + encodeURIComponent(sid) +
+            '&track=' + encodeURIComponent(JSON.stringify(trk))).then(function (j) {
+            irMeta[sid] = j; return j;
+        }).catch(function (e) { delete irMetaReq[sid]; throw e; });
+        return irMetaReq[sid];
+    }
+    function frameMs(f) { return Date.parse(f.datetime + 'Z'); }
+    function nearestFrame(m, t) {
+        var best = 0, bd = Infinity;
+        for (var i = 0; i < m.frames.length; i++) {
+            var d = Math.abs(frameMs(m.frames[i]) - t);
+            if (d < bd) { bd = d; best = i; }
+        }
+        return best;
+    }
+    function showSatFrame(idx) {
+        var m = irMeta[sat.sid];
+        if (!m || idx < 0 || idx >= m.frames.length) return;
+        sat.idx = idx;
+        var f = m.frames[idx], ms = frameMs(f);
+        $('gsr-sat-time').innerHTML = '<span class="gsr-full">IR </span>' + esc(utc(ms));   // the year is in the flight label
+        var dt = Math.round((ms - sat.focus) / 60000);
+        $('gsr-sat-dt').textContent = dt === 0 ? ' · at ' + sat.what
+            : ' · ' + Math.abs(dt) + ' min ' + (dt < 0 ? 'before ' : 'after ') + sat.what;
+        $('gsr-sat-prev').disabled = idx <= 0;
+        $('gsr-sat-next').disabled = idx >= m.frames.length - 1;
+        markSeriesImage(ms);
+        var key = sat.sid + '/' + idx;
+        if (irFrames[key]) return paintSat(irFrames[key], key);
+        satMsg('Loading the infrared image&hellip;');
+        var direct = m.frame_cdn_base ? m.frame_cdn_base + '/' + sat.sid + '/' + idx + '.json' : null;
+        var api = API + '/global/ir/frame?sid=' + encodeURIComponent(sat.sid) + '&frame_idx=' + idx +
+            '&lat=' + f.lat + '&lon=' + f.lon + '&dt=' + encodeURIComponent(f.datetime);
+        (direct ? fetch(direct).then(function (r) { return r.ok ? r.json() : fetchJSON(api); }) : fetchJSON(api))
+            .then(function (j) {
+                if (!j || !j.tb_data) throw new Error('no IR data for this frame');
+                irFrames[key] = j;
+                if (sat.idx === idx && sat.sid + '/' + idx === key) paintSat(j, key);
+            }).catch(function (e) {
+                if (sat.idx !== idx) return;
+                sat.tb = null; drawSat();
+                satMsg('No infrared image for ' + esc(utc(ms)) + ' (' + esc(e.message || e) + '). Step to another image.');
+            });
+    }
+    /* uint8 Tb: 0 = no data, 1..255 linear over [tb_vmin, tb_vmax] (global_archive.js decodeTbData). */
+    function paintSat(j, key) {
+        var bin = atob(j.tb_data), raw = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
+        sat.tb = { raw: raw, rows: j.tb_rows, cols: j.tb_cols, vmin: j.tb_vmin, vmax: j.tb_vmax, b: j.bounds,
+            source: j.source || null, at: j.actual_datetime || null };
+        sat.key = key;
+        $('gsr-sat').classList.remove('gsr-sat-none');
+        colorSat();
+        var src = sat.tb.source === 'gridsat' ? 'GridSat-B1 8 km' : sat.tb.source === 'hursat' ? 'HURSAT' : 'MergIR 4 km';
+        var sub = sat.tb.source === 'hursat' && sat.tb.at ? ' (scan ' + utc(sat.tb.at, { date: false }) + ')' : '';
+        $('gsr-sat-time').title = 'Infrared brightness temperature, ' + src + sub +
+            '. The same image Storm Detail shows for this time.';
+        satMsg('');
+        drawSat();
+    }
+    /* One LUT pass into an offscreen canvas at source resolution; zoom and hover
+       only re-blit it. No-data is a grey checker that belongs to no colormap. */
+    function colorSat() {
+        var tb = sat.tb; if (!tb) return;
+        var lut = satLut();
+        if (!sat.off) sat.off = document.createElement('canvas');
+        sat.off.width = tb.cols; sat.off.height = tb.rows;
+        var octx = sat.off.getContext('2d'), im = octx.createImageData(tb.cols, tb.rows), d = im.data;
+        for (var i = 0, n = tb.rows * tb.cols; i < n; i++) {
+            var v = tb.raw[i], o = i * 4;
+            if (v === 0) {
+                var yy = (i / tb.cols) | 0, xx = i - yy * tb.cols, q = (((xx >> 3) + (yy >> 3)) & 1) ? 122 : 98;
+                d[o] = d[o + 1] = d[o + 2] = q;
+            } else if (lut) {
+                var k = v * 4; d[o] = lut[k]; d[o + 1] = lut[k + 1]; d[o + 2] = lut[k + 2];
+            } else { d[o] = d[o + 1] = d[o + 2] = 255 - v; }
+            d[o + 3] = 255;
+        }
+        octx.putImageData(im, 0, 0);
+        drawSatBar();
+    }
+    function drawSatBar() {
+        var tb = sat.tb, lut = satLut(), c = $('gsr-sat-bar'), tk = $('gsr-sat-ticks');
+        if (!tb || !lut) { c.parentNode.style.display = 'none'; return; }
+        c.parentNode.style.display = '';
+        var ctx = c.getContext('2d'), im = ctx.createImageData(256, 8);
+        for (var x = 0; x < 256; x++) {
+            var v = Math.max(1, Math.min(255, x)), k = v * 4;
+            for (var y = 0; y < 8; y++) { var o = (y * 256 + x) * 4; im.data[o] = lut[k]; im.data[o + 1] = lut[k + 1]; im.data[o + 2] = lut[k + 2]; im.data[o + 3] = 255; }
+        }
+        ctx.putImageData(im, 0, 0);
+        var html = [];
+        [-80, -60, -40, -20, 0, 20].forEach(function (cdeg) {
+            var raw = 1 + (cdeg + 273.15 - tb.vmin) * 254 / (tb.vmax - tb.vmin);
+            if (raw < 1 || raw > 255) return;
+            html.push('<span style="left:' + (raw / 256 * 100).toFixed(1) + '%">' + (cdeg > 0 ? '+' : cdeg < 0 ? '−' : '') + Math.abs(cdeg) + '</span>');
+        });
+        tk.innerHTML = html.join('') + '<em>°C</em>';
+    }
+    /* km (east, north) of the image center <-> canvas px. The image center is the
+       frame's best-track position; source pixels are a regular lat/lon grid. */
+    function satGeom() {
+        var cv = $('gsr-sat-canvas'), box = $('gsr-sat');
+        var W = box.clientWidth, H = box.clientHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
+        if (!W || !H) return null;
+        if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+            cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+        }
+        if (sat.R == null) sat.R = satDefaultR();
+        var k = (H * dpr) / (2 * sat.R);
+        return { cv: cv, W: W * dpr, H: H * dpr, dpr: dpr, k: k };
+    }
+    function satDefaultR() {
+        /* Frame the core: eight radii of maximum wind at the strongest pass (Melissa's
+           13-km RMW opens at ~100 km, a broad storm at the 200-km cap); without an
+           RMW, where most of the scored observations are. */
+        var P = flightPasses().map(function (k) { return storm.passes[k]; }).filter(function (p) { return p.rmw_km; });
+        if (P.length) {
+            var best = P[0];
+            P.forEach(function (p) { if (passV(p) > passV(best)) best = p; });
+            return Math.max(60, Math.min(200, best.rmw_km * 8));
+        }
+        var o = flight.obs, rs = [];
+        for (var i = 0; i < o.r.length; i++) if (o.y[i] != null && o.r[i] != null) rs.push(o.r[i]);
+        rs.sort(function (a, b) { return a - b; });
+        var R = rs.length ? rs[Math.floor(rs.length * 0.75)] : 150;
+        return Math.max(60, Math.min(200, R * 1.1));
+    }
+    function satCenter() {
+        var b = sat.tb && sat.tb.b;
+        return b ? { lat: (b.north + b.south) / 2, lon: (b.west + b.east) / 2 } : null;
+    }
+    function drawSat() {
+        var g = satGeom(); if (!g) return;
+        var ctx = g.cv.getContext('2d');
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = '#05080d';
+        ctx.fillRect(0, 0, g.W, g.H);
+        var tb = sat.tb;
+        if (!tb || !sat.off || !flight) return;
+        var c = satCenter(), b = tb.b, cl = Math.cos(c.lat * Math.PI / 180);
+        var toCx = function (xkm) { return g.W / 2 + xkm * g.k; }, toCy = function (ykm) { return g.H / 2 - ykm * g.k; };
+        // image: the visible km window -> lon/lat -> source px, clamped to the frame
+        var halfX = g.W / 2 / g.k, halfY = g.H / 2 / g.k;
+        var lonL = c.lon - halfX / (KM * cl), lonR = c.lon + halfX / (KM * cl);
+        var latT = c.lat + halfY / KM, latB = c.lat - halfY / KM;
+        var sxPerLon = tb.cols / (b.east - b.west), syPerLat = tb.rows / (b.north - b.south);
+        var s0x = (lonL - b.west) * sxPerLon, s1x = (lonR - b.west) * sxPerLon;
+        var s0y = (b.north - latT) * syPerLat, s1y = (b.north - latB) * syPerLat;
+        var d0x = 0, d1x = g.W, d0y = 0, d1y = g.H, sc;
+        sc = (d1x - d0x) / (s1x - s0x);
+        if (s0x < 0) { d0x -= s0x * sc; s0x = 0; } if (s1x > tb.cols) { d1x -= (s1x - tb.cols) * sc; s1x = tb.cols; }
+        sc = (d1y - d0y) / (s1y - s0y);
+        if (s0y < 0) { d0y -= s0y * sc; s0y = 0; } if (s1y > tb.rows) { d1y -= (s1y - tb.rows) * sc; s1y = tb.rows; }
+        ctx.imageSmoothingEnabled = false;          // crisp pixels: the data's real resolution
+        if (s1x > s0x && s1y > s0y) ctx.drawImage(sat.off, s0x, s0y, s1x - s0x, s1y - s0y, d0x, d0y, d1x - d0x, d1y - d0y);
+        var px = g.dpr;
+        // coastlines
+        if (satCoast) {
+            ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+            [['rgba(0,0,0,.55)', 3 * px], ['rgba(255,255,255,.9)', 1.2 * px]].forEach(function (pass) {
+                ctx.strokeStyle = pass[0]; ctx.lineWidth = pass[1]; ctx.beginPath();
+                eachCoastRun(c, halfX, halfY, cl, function (run) {
+                    for (var i = 0; i < run.length; i += 2) {
+                        var X = toCx(run[i]), Y = toCy(run[i + 1]);
+                        if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+                    }
+                });
+                ctx.stroke();
+            });
+            ctx.restore();
+        } else loadCoast();
+        // range rings
+        ctx.save();
+        ctx.setLineDash([4 * px, 4 * px]); ctx.lineWidth = 1 * px; ctx.strokeStyle = 'rgba(255,255,255,.45)';
+        ctx.font = (10 * px) + 'px "DM Sans", -apple-system, Helvetica, Arial, sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,.75)';
+        [50, 100, 200, 300].forEach(function (rk) {
+            if (rk > Math.max(halfX, halfY) * 1.3) return;
+            ctx.beginPath(); ctx.arc(toCx(0), toCy(0), rk * g.k, 0, 2 * Math.PI); ctx.stroke();
+            ctx.fillText(rk + ' km', toCx(rk * 0.7071) + 3 * px, toCy(rk * 0.7071) - 3 * px);
+        });
+        ctx.restore();
+        // flight pattern: halo line, then dots colored like the map
+        var o = flight.obs, n = o.t.length;
+        ctx.save(); ctx.lineJoin = 'round';
+        [['rgba(0,0,0,.6)', 3.2 * px], ['rgba(255,255,255,.75)', 1.2 * px]].forEach(function (pass) {
+            ctx.strokeStyle = pass[0]; ctx.lineWidth = pass[1]; ctx.beginPath();
+            var pen = false;
+            for (var i = 0; i < n; i++) {
+                if (o.x[i] == null || o.r[i] > 600) { pen = false; continue; }
+                var X = toCx(o.x[i]), Y = toCy(o.yy[i]);
+                if (pen) ctx.lineTo(X, Y); else ctx.moveTo(X, Y);
+                pen = true;
+            }
+            ctx.stroke();
+        });
+        for (var i = 0; i < n; i++) {
+            if (o.x[i] == null || o.r[i] > 600) continue;
+            var v = colorBy === 'fl' ? o.fl[i] : colorBy === 'z' ? o.z[i] : o.y[i];
+            ctx.beginPath(); ctx.arc(toCx(o.x[i]), toCy(o.yy[i]), 2.4 * px, 0, 2 * Math.PI);
+            ctx.fillStyle = colorBy === 'z' ? zColor(v) : ktColor(v); ctx.fill();
+            ctx.lineWidth = 0.6 * px; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.stroke();
+        }
+        ctx.restore();
+        // best-track center of the image (the frame is cut about it)
+        satCross(ctx, toCx(0), toCy(0), px);
+        // pass maxima
+        flightPasses().forEach(function (k) {
+            var p = storm.passes[k];
+            if (p.r == null || p.az == null) return;
+            var a = p.az * Math.PI / 180, X = toCx(p.r * Math.sin(a)), Y = toCy(p.r * Math.cos(a));
+            satStar(ctx, X, Y, 7 * px, ktColor(passV(p)), px);
+            satLabel(ctx, String(Math.round(passV(p))), X + 9 * px, Y - 9 * px, px);
+        });
+        // the observation under the chart / map cursor
+        if (sat.hover >= 0 && sat.hover < n && o.x[sat.hover] != null) {
+            ctx.beginPath(); ctx.arc(toCx(o.x[sat.hover]), toCy(o.yy[sat.hover]), 8 * px, 0, 2 * Math.PI);
+            ctx.lineWidth = 2.6 * px; ctx.strokeStyle = '#0f172a'; ctx.stroke();
+            ctx.lineWidth = 1.4 * px; ctx.strokeStyle = '#f8fafc'; ctx.stroke();
+        }
+    }
+    function satCross(ctx, x, y, px) {
+        var gap = 4 * px, arm = 9 * px;
+        ctx.save(); ctx.lineCap = 'round';
+        [['rgba(0,0,0,.65)', 4.4 * px], ['#38bdf8', 2 * px]].forEach(function (pass) {
+            ctx.strokeStyle = pass[0]; ctx.lineWidth = pass[1]; ctx.beginPath();
+            ctx.moveTo(x - gap - arm, y); ctx.lineTo(x - gap, y); ctx.moveTo(x + gap, y); ctx.lineTo(x + gap + arm, y);
+            ctx.moveTo(x, y - gap - arm); ctx.lineTo(x, y - gap); ctx.moveTo(x, y + gap); ctx.lineTo(x, y + gap + arm);
+            ctx.stroke();
+        });
+        ctx.restore();
+    }
+    function satStar(ctx, x, y, r, fill, px) {
+        ctx.save(); ctx.beginPath();
+        for (var i = 0; i < 10; i++) {
+            var a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r;
+            ctx[i ? 'lineTo' : 'moveTo'](x + rr * Math.cos(a), y + rr * Math.sin(a));
+        }
+        ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+        ctx.lineWidth = 1.4 * px; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+        ctx.restore();
+    }
+    function satLabel(ctx, s, x, y, px) {
+        ctx.save();
+        ctx.font = '600 ' + (11 * px) + 'px "DM Sans", -apple-system, Helvetica, Arial, sans-serif';
+        ctx.lineWidth = 3 * px; ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.lineJoin = 'round';
+        ctx.strokeText(s, x, y); ctx.fillStyle = '#ffffff'; ctx.fillText(s, x, y);
+        ctx.restore();
+    }
+    /* Vendored Natural Earth 10m simplified coastline, the asset the GHOST chip and
+       the realtime viewer use. Runs are converted to km about the image center. */
+    var satCoast = null, _coastLoading = false;
+    function loadCoast() {
+        if (satCoast || _coastLoading) return;
+        _coastLoading = true;
+        fetch('assets/coastlines/ne_10m_coastline_simplified.geojson').then(function (r) { return r.json(); })
+            .then(function (gj) { satCoast = gj; drawSat(); })
+            .catch(function () { _coastLoading = false; });
+    }
+    function eachCoastRun(c, halfX, halfY, cl, fn) {
+        var feats = satCoast.features || [], padX = halfX * 1.1, padY = halfY * 1.1;
+        for (var i = 0; i < feats.length; i++) {
+            var gm = feats[i].geometry; if (!gm) continue;
+            var lines = gm.type === 'LineString' ? [gm.coordinates] : gm.type === 'MultiLineString' ? gm.coordinates : null;
+            if (!lines) continue;
+            for (var L2 = 0; L2 < lines.length; L2++) {
+                var cs = lines[L2], run = null;
+                for (var k = 0; k < cs.length; k++) {
+                    var lon = cs[k][0]; while (lon - c.lon > 180) lon -= 360; while (c.lon - lon > 180) lon += 360;
+                    var x = (lon - c.lon) * KM * cl, y = (cs[k][1] - c.lat) * KM;
+                    if (Math.abs(x) <= padX && Math.abs(y) <= padY) {
+                        if (!run) run = [];
+                        run.push(x, y);
+                    } else if (run) { run.push(x, y); fn(run); run = null; }
+                }
+                if (run) fn(run);
+            }
+        }
+    }
+    /* Cursor readout: brightness temperature and where it is. */
+    function satRead(ev) {
+        var g = satGeom(), tb = sat.tb, out = $('gsr-sat-read');
+        if (!g || !tb || !sat.off) { out.textContent = ''; return; }
+        var rect = g.cv.getBoundingClientRect();
+        var X = (ev.clientX - rect.left) * g.dpr, Y = (ev.clientY - rect.top) * g.dpr;
+        var xkm = (X - g.W / 2) / g.k, ykm = (g.H / 2 - Y) / g.k, c = satCenter(), b = tb.b;
+        var lat = c.lat + ykm / KM, lon = c.lon + xkm / (KM * Math.cos(c.lat * Math.PI / 180));
+        var col = Math.floor((lon - b.west) / (b.east - b.west) * tb.cols), row = Math.floor((b.north - lat) / (b.north - b.south) * tb.rows);
+        if (col < 0 || row < 0 || col >= tb.cols || row >= tb.rows) { out.textContent = ''; return; }
+        var v = tb.raw[row * tb.cols + col], r = Math.sqrt(xkm * xkm + ykm * ykm);
+        var az = (Math.atan2(xkm, ykm) * 180 / Math.PI + 360) % 360;
+        var tc = v ? (tb.vmin + (v - 1) * (tb.vmax - tb.vmin) / 254 - 273.15) : null;
+        out.textContent = (tc == null ? 'no data' : (tc < 0 ? '−' : '') + Math.abs(tc).toFixed(0) + ' °C') +
+            ' · ' + Math.round(r) + ' km ' + compass(az) + ' of the best-track center';
+    }
+    /* The image time on the series chart (shapes[1]), so the reader sees which
+       part of the flight the picture belongs to. */
+    function markSeriesImage(ms) {
+        var ts = $('gsr-ts');
+        if (!ts || !ts._fullLayout || !window.Plotly || !ts.layout.shapes || ts.layout.shapes.length < 2) return;
+        var show = view === 'sat' && ms != null;
+        try { Plotly.relayout(ts, { 'shapes[1].x0': D(ms || 0), 'shapes[1].x1': D(ms || 0), 'shapes[1].visible': show }); } catch (e) { }
+    }
+    function wireSat() {
+        $('gsr-sat-prev').onclick = function () { if (sat.idx > 0) showSatFrame(sat.idx - 1); };
+        $('gsr-sat-next').onclick = function () { var m = irMeta[sat.sid]; if (m && sat.idx < m.frames.length - 1) showSatFrame(sat.idx + 1); };
+        $('gsr-sat-zin').onclick = function () { if (sat.R) { sat.R = Math.max(30, sat.R / 1.4); drawSat(); } };
+        $('gsr-sat-zout').onclick = function () { if (sat.R) { sat.R = Math.min(1100, sat.R * 1.4); drawSat(); } };
+        $('gsr-sat-cmap').onchange = function () {
+            satCmap = this.value;
+            try { localStorage.setItem('gsr-ir-cmap', satCmap); } catch (e) { }
+            colorSat(); drawSat();
+        };
+        var cv = $('gsr-sat-canvas');
+        cv.addEventListener('wheel', function (e) {
+            if (!sat.R || !sat.tb) return;
+            e.preventDefault();
+            sat.R = Math.max(30, Math.min(1100, sat.R * (e.deltaY > 0 ? 1.12 : 1 / 1.12)));
+            drawSat();
+        }, { passive: false });
+        cv.addEventListener('dblclick', function () { if (flight) { sat.R = satDefaultR(); drawSat(); } });
+        cv.addEventListener('mousemove', satRead);
+        cv.addEventListener('mouseleave', function () { $('gsr-sat-read').textContent = ''; });
+        if (typeof ResizeObserver !== 'undefined') new ResizeObserver(function () { if (view === 'sat') drawSat(); }).observe($('gsr-sat'));
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  wiring
     // ══════════════════════════════════════════════════════════════
     var showAbout = function () { };
@@ -1095,14 +1552,19 @@
         $('gsr-fnext').onclick = function () { if (storm && fIdx < storm.flights.length - 1) selectFlight(fIdx + 1, true); };
         segWire('gsr-color', 'c', function (v) {
             colorBy = v;
-            if (flight) { drawFlight(false); if (view === 'rel') renderRel(); } else renderLegend();
+            if (flight) { drawFlight(false); if (view === 'rel') renderRel(); if (view === 'sat') drawSat(); } else renderLegend();
         });
         segWire('gsr-view', 'v', function (v) {
             view = v;
             $('gsr-rel').hidden = v !== 'rel';
-            $('gsr-map').style.visibility = v === 'rel' ? 'hidden' : '';
-            if (v === 'rel') renderRel(); else setTimeout(function () { gmap.invalidateSize(); }, 30);
+            $('gsr-sat').hidden = v !== 'sat';
+            $('gsr-map').style.visibility = v === 'map' ? '' : 'hidden';
+            markSeriesImage(v === 'sat' && sat.idx != null && irMeta[sat.sid] ? frameMs(irMeta[sat.sid].frames[sat.idx]) : null);
+            if (v === 'rel') renderRel();
+            else if (v === 'sat') renderSat();
+            else setTimeout(function () { gmap.invalidateSize(); }, 30);
         });
+        wireSat();
         // series pills
         $('gsr-pills').innerHTML = SERIES.map(function (s) {
             return '<button type="button" class="gsr-pill gsr-pill-' + s.k + (seriesOn[s.k] ? ' on' : '') + '" data-k="' + s.k + '" aria-pressed="' +
