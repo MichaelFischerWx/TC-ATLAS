@@ -4319,9 +4319,15 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gsr-side { display: flex; flex-direction: column; }
 .gsr-pane { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .gsr-pane[hidden] { display: none; }
+.gsr-item .gra-meta { overflow: hidden; }
+.gsr-item .gra-meta > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .gsr-num b { font-size: 0.875rem; font-weight: 600; color: #be185d; }
 :root[data-theme="dark"] .gsr-num b { color: #f472b6; }
 .gsr-none { font-size: 0.6875rem; color: var(--text-dim); }
+.gsr-vdm {
+    font-size: 0.5625rem; font-weight: 600; letter-spacing: .04em; padding: 0 4px; border-radius: var(--radius-sm);
+    background: var(--ga-hover); color: var(--slate); vertical-align: 1px;
+}
 .gsr-storm-head { gap: 7px; }
 .gsr-back {
     align-self: flex-start; height: 26px; padding: 0 9px; border-radius: var(--radius-pill); cursor: pointer;

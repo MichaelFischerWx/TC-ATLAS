@@ -93,7 +93,7 @@
     <link rel="preload" as="script" href="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261104sd1">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20261111s1">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20261111s3">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -1659,6 +1659,10 @@
                             <li><b>Pass maxima</b> are the strongest estimate on each eyewall pass. A pass marked
                                 <em>VDM</em> comes from the vortex data message&rsquo;s maximum flight-level wind,
                                 where no flight-level file samples it.</li>
+                            <li><b>Flight-level maxima</b> in the list and tiles count only the storm&rsquo;s core:
+                                within 250&nbsp;km of the center, with the aircraft below 5&nbsp;km. The time series
+                                still draws every observation, including jet-stream winds far from the storm and the
+                                occasional bad stretch in older 10-s files.</li>
                             <li><b>Best track</b> is drawn for comparison only. SEAR is not fitted to it.</li>
                             <li><b>SFMR</b>, where shown, is a shape and sanity reference only. It is not what
                                 SEAR is calibrated or verified against; dropsondes are.</li>
@@ -1770,6 +1774,6 @@
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
     <script defer src="global_archive_ghostra.js?v=20261101n1"></script>
     <!-- SEAR tab: boots on switchTab('sear'), like the GHOST tab. -->
-    <script defer src="global_archive_sear.js?v=20261111s1"></script>
+    <script defer src="global_archive_sear.js?v=20261111s3"></script>
 </body>
 </html>

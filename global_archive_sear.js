@@ -101,6 +101,15 @@
             ? s.name.charAt(0) + s.name.slice(1).toLowerCase() : s.atcf;
         return n + ' ' + s.year;
     }
+    /* The flight-level MAXIMA count only the storm's core (bin/build_sear_hist_v2.py
+       CORE_R_KM / CORE_Z_M): farther out the files carry jet-stream winds and some bad
+       stretches in old 10-s files. The time series still draws every observation. */
+    function inCore(o, i) { return o.r[i] != null && o.r[i] <= 250 && o.z[i] != null && o.z[i] >= 300 && o.z[i] <= 5000; }
+    function flTitle(src) {
+        return ' title="' + (src === 'vdm'
+            ? 'Maximum flight-level wind reported in a vortex data message; no flight-level file in the record covers it'
+            : 'Maximum flight-level wind within 250 km of the center, aircraft below 5 km') + '"';
+    }
     function isFix(p) { return String(p.src || '').indexOf('fix') === 0; }
     function passV(p) { return p.y_corr_kt != null ? p.y_corr_kt : p.y_kt; }
 
@@ -186,7 +195,7 @@
             rows = Object.keys(j.storms || {}).map(function (a) {
                 var s = j.storms[a];
                 var r = { atcf: a, name: s.name, year: s.year, sid: s.sid, basin: s.basin, era: s.era,
-                    max_kt: s.max_kt, max_src: s.max_src, at: s.max_at || null, fl_max_kt: s.fl_max_kt,
+                    max_kt: s.max_kt, max_src: s.max_src, at: s.max_at || null, fl_max_kt: s.fl_max_kt, fl_src: s.fl_max_src || null,
                     n_flights: s.n_flights || 0, n_passes: s.n_passes || 0 };
                 r.label = stormLabel(r);
                 r.hay = (r.label + ' ' + a + ' ' + (s.name || '')).toLowerCase();
@@ -426,10 +435,13 @@
                 '<span class="gra-rk">' + (sortKey === 'max' && !q ? (i + 1) : '') + '</span>' +
                 '<div class="gra-it-main"><div class="gra-nm">' + esc(r.label) +
                 (r.era === 'extrapolated' ? '<span class="gra-flag" title="Before 1997: outside SEAR’s training era, extrapolated">pre-1997</span>' : '') + '</div>' +
-                '<div class="gra-meta"><span>' + esc(r.atcf) + '</span><span>' + r.n_flights + ' flight' + (r.n_flights === 1 ? '' : 's') +
+                '<div class="gra-meta"><span>' + esc(r.atcf) + '</span><span' +
+                (r.n_flights ? '>' + r.n_flights + ' flight' + (r.n_flights === 1 ? '' : 's')
+                    : ' title="No flight-level file in the record: its passes come from vortex data messages">VDM fixes only') +
                 ' · ' + r.n_passes + ' passes</span></div></div>' +
                 '<div class="gra-it-vals"><div class="gra-num gsr-num"><b>' + r0(r.max_kt) + '</b> kt</div>' +
-                '<div class="gra-num">FL ' + r0(r.fl_max_kt) + '</div></div></div>');
+                '<div class="gra-num"' + flTitle(r.fl_src) + '>FL ' + r0(r.fl_max_kt) + (r.fl_src === 'vdm' ? ' <span class="gsr-vdm">VDM</span>' : '') +
+                '</div></div></div>');
         });
         el.innerHTML = html.join('');
     }
@@ -508,12 +520,13 @@
         var bt = btPeak(r);
         var sub = [r.atcf];
         if (j.basin) sub.push(j.basin);
-        sub.push(j.flights.length + ' flight' + (j.flights.length === 1 ? '' : 's'));
+        sub.push(j.flights.length ? j.flights.length + ' flight' + (j.flights.length === 1 ? '' : 's') : 'vortex messages only');
         $('gsr-st-sub').textContent = sub.join(' · ');
         var maxWhere = j.max_src === 'obs' ? 'on a flight' : (/^fix/.test(j.max_src) ? 'VDM pass' : 'eyewall pass');
         var tiles = [
             ['Max SEAR 10-m', '<b class="gsr-pk">' + r0(j.max_kt) + '</b> kt', maxWhere],
-            ['Max flight level', '<b>' + r0(j.fl_max_kt) + '</b> kt', 'in the record’s files'],
+            ['Max flight level', '<b>' + r0(j.fl_max_kt) + '</b> kt',
+                j.fl_max_src === 'vdm' ? 'from a vortex message' : 'within 250 km, below 5 km'],
             ['Best-track peak', '<b>' + r0(bt) + '</b> kt', 'comparison only']
         ];
         $('gsr-tiles').innerHTML = tiles.map(function (t) {
@@ -589,7 +602,7 @@
                 '<div class="gra-meta"><span>' + esc(tailName(f.tail)) + '</span><span>' + esc(kindShort(f)) +
                 (f.n_passes ? ' · ' + f.n_passes + ' pass' + (f.n_passes === 1 ? '' : 'es') : '') + '</span></div></div>' +
                 '<div class="gra-it-vals"><div class="gra-num gsr-num">' + (v ? '<b>' + r0(v) + '</b> kt' : '<span class="gsr-none">not scored</span>') + '</div>' +
-                '<div class="gra-num">FL ' + r0(f.fl_max_kt) + '</div></div></div>';
+                '<div class="gra-num"' + flTitle('flight') + '>FL ' + r0(f.fl_max_kt) + '</div></div></div>';
         }).join('');
     }
     function fillFlightSelect() {
@@ -884,7 +897,10 @@
             yaxis: 'y2', type: 'scattergl', mode: 'lines', line: { color: '#1fa187', width: 1 }, opacity: 0.6,
             hovertemplate: 'Height %{y:.2f} km<extra></extra>' });
         var ymax = 40;
-        [o.fl, o.y].forEach(function (a) { for (var i = 0; i < a.length; i++) if (a[i] != null && a[i] < 220 && a[i] > ymax) ymax = a[i]; });
+        for (var i = 0; i < o.fl.length; i++) {   // axis from the storm's core, as the maxima are
+            if (o.y[i] != null && o.y[i] > ymax) ymax = o.y[i];
+            if (o.fl[i] != null && o.fl[i] > ymax && inCore(o, i)) ymax = o.fl[i];
+        }
         P.forEach(function (p) { if (passV(p) > ymax) ymax = passV(p); });
         var layout = {
             paper_bgcolor: B.paper_bgcolor, plot_bgcolor: B.plot_bgcolor, font: B.font, hoverlabel: B.hoverlabel,

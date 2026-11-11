@@ -22,7 +22,7 @@ fix passes dropped where a leg flight covers them), so a storm's maximum here eq
 
 Output (plain JSON in OUT; --upload gzips each object to R2 under sear-hist/v2/):
   index.json        {schema:2, model, chain, generated, sources:{name:{path, mtime}},
-                     storms:{ATCF:{name, year, sid, basin, era, max_kt, max_src, max_at, n_flights, n_passes, fl_max_kt, t0}}}
+                     storms:{ATCF:{name, year, sid, basin, era, max_kt, max_src, max_at, n_flights, n_passes, fl_max_kt, fl_max_src, t0}}}
                     max_at = {t, lat, lon[, pos]} of the storm's maximum; a fix-operator pass has no aircraft longitude,
                     so it takes the best-track center at that time (pos:"bt")
   <ATCF>.json       {atcf, name, year, sid, basin, era, model, max_kt, max_src, max_at, obs_max_kt, pass_max_kt, fl_max_kt,
@@ -33,7 +33,9 @@ Output (plain JSON in OUT; --upload gzips each object to R2 under sear-hist/v2/)
   <ATCF>/<key>.json {atcf, key, mission, tail, src, kind,
                      obs:{t:[epoch s], lat, lon, fl:[kt], z:[m], p:[hPa], y5:[kt], y:[kt], y30:[kt],
                           r:[km], az:[deg], rr:[r/RMW], sf:[kt]}}         # null where missing / not scored
-  fl  = the flight-level wind SEAR scales (HDOB: the reported peak 10-s wind; HRD: the file's wind)
+  fl  = the flight-level wind SEAR scales (HDOB: the reported peak 10-s wind; HRD: the file's wind), unfiltered
+  fl_max_kt (flights, storms) = the maximum within 250 km of the center with the aircraft at 0.3-5 km; a storm's
+        also takes its passes' peaks, fl_max_src "vdm" when a vortex message's max flight-level wind sets it
   y5  = SEAR's 500-m step (Stage 1, 10-s-peak scale); y = 10-m, 10-s-peak scale, RMW-corrected (the headline,
         = v1 y); y30 = 10-m, 30-s scale; sf = SFMR as reported in the HDOB (shape / sanity reference only)
 
@@ -70,7 +72,11 @@ KT = 1.943844
 MODEL = "SEAR Stage 1 v4 (local RMW, w_rel) / Stage 2 v8, trained through 2024 -- MLBT historical record"
 CHAIN = {"stage1": "v4", "stage2": "v8", "note": "historical record; the real-time job runs Stage 1 v6.1 / Stage 2 v11"}
 GAP_S = 3 * 3600          # a (mission, tail) record splits into flights at gaps longer than this
-FL_SANE_KT = 200          # flight-level maxima ignore values above this (spikes); the arrays keep them
+# Flight-level MAXIMA (not the arrays) count only the storm's core: within CORE_R_KM of the center with the
+# aircraft between CORE_Z_M. Outside it the record carries G-IV jet-stream winds (Ingrid 2013: 176 kt at 13 km,
+# 1,190 km out) and bad stretches in old USAF 10-s files (Mitch 1998: a ramp to 222 kt at 7.4 km, 360 km out).
+CORE_R_KM = 250
+CORE_Z_M = (300, 5000)
 COLS = ["atcf", "mission_id", "tail", "observation_time_utc", "aircraft_latitude", "aircraft_longitude",
         "aircraft_height_km", "fl_pres_mb", "radius_km", "azimuth_deg", "r_over_rmw", "wind_ms",
         "flight_level_peak_kt", "sfmr_kt", "stage1_peak_500m_ms",
@@ -212,6 +218,13 @@ def bt_pos(tracks, sid, t):
     return float(np.interp(t, T, la)), ((x + 180) % 360) - 180
 
 
+def core_mask(h):
+    """Observations that count toward a flight-level maximum (see CORE_R_KM / CORE_Z_M)."""
+    fl = h.fl.to_numpy(float); r = h.radius_km.to_numpy(float); z = h.aircraft_height_km.to_numpy(float) * 1000
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(fl) & (r <= CORE_R_KM) & (z >= CORE_Z_M[0]) & (z <= CORE_Z_M[1])
+
+
 def split_flights(g):
     """Flights = runs of one (mission, tail) with no gap > GAP_S. Returns a list of index arrays."""
     out = []
@@ -255,7 +268,7 @@ def build(a):
         for mis, tail, src, ix, t0, t1 in (split_flights(g) if len(g) else []):
             h = g.loc[ix]
             yy = h.y.to_numpy(float); ff = h.fl.to_numpy(float)
-            ffs = ff[np.isfinite(ff) & (ff <= FL_SANE_KT)]
+            ffs = ff[core_mask(h)]
             key = safe_key(pd.Timestamp(t0, unit="s").strftime("%Y%m%dT%H%M"), tail, mis)
             z = h.aircraft_height_km.to_numpy(float) * 1000
             flights.append({"key": key, "mission": mis, "tail": tail, "src": src, "kind": flight_kind(src, tail),
@@ -351,13 +364,20 @@ def build(a):
                 bp = bt_pos(tracks, names.get(atcf, {}).get("sid"), at["t"])
                 if bp:
                     at.update({"lat": at["lat"] if at["lat"] is not None else fnum(bp[0], 2), "lon": fnum(bp[1], 2), "pos": "bt"})
-        sane = fl_arr[np.isfinite(fl_arr) & (fl_arr <= FL_SANE_KT)]
-        flmax = int(round(sane.max())) if len(sane) else None
+        # storm flight-level maximum: the core of the flight files, or a pass's own peak -- for a fix pass that is
+        # the vortex message's maximum flight-level wind, the only flight-level number when no file covers it
+        core = fl_arr[core_mask(g)] if len(g) else np.array([])
+        flmax, fl_src = (int(round(core.max())), "flight") if len(core) else (None, None)
+        for q in passes:
+            v = q["fl_peak_kt"]
+            if v is not None and (flmax is None or v > flmax):
+                flmax, fl_src = int(round(v)), ("vdm" if q["src"].startswith("fix") else "flight")
         era = "extrapolated" if int(atcf[-4:]) < 1997 else "trained"   # SEAR training data start 1997 (ruling 54)
         nm = names.get(atcf, {})
         out = {"atcf": atcf, "name": nm.get("name"), "year": nm.get("year") or int(atcf[-4:]), "sid": nm.get("sid"),
                "basin": nm.get("basin"), "schema": 2, "model": MODEL, "chain": CHAIN, "era": era,
-               "max_kt": mx, "max_src": src_mx, "max_at": at, "obs_max_kt": omax, "pass_max_kt": pmax, "fl_max_kt": flmax,
+               "max_kt": mx, "max_src": src_mx, "max_at": at, "obs_max_kt": omax, "pass_max_kt": pmax,
+               "fl_max_kt": flmax, "fl_max_src": fl_src,
                "flights": flights, "passes": passes,
                "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
         sd = OUT / atcf
@@ -372,7 +392,8 @@ def build(a):
         (OUT / f"{atcf}.json").write_text(raw); nb += len(raw)
         total += nb
         index["storms"][atcf] = {"name": nm.get("name"), "year": out["year"], "sid": nm.get("sid"), "basin": nm.get("basin"),
-                                 "era": era, "max_kt": mx, "max_src": src_mx, "max_at": at, "fl_max_kt": flmax,
+                                 "era": era, "max_kt": mx, "max_src": src_mx, "max_at": at,
+                                 "fl_max_kt": flmax, "fl_max_src": fl_src,
                                  "n_flights": len(flights), "n_passes": len(passes),
                                  "t0": flights[0]["t0"] if flights else (int(pd.Timestamp(passes[0]["t"]).timestamp()) if passes else None)}
         print(f"{atcf} {nm.get('name') or '':<10} {len(flights):3d} flights {len(g):7,d} obs {len(passes):3d} passes "
@@ -391,24 +412,34 @@ def upload(atcfs):
         files = [f for f in files if f.name == "index.json" or f.stem in keep or f.parent.name in keep]
     idx = [f for f in files if f.name == "index.json" and f.parent == OUT]
     body = [f for f in files if f not in idx]
+    from concurrent.futures import ThreadPoolExecutor
+
+    def put(f, cc):
+        cli.put_object(Bucket="tc-atlas-rt", Key=f"{PREFIX}/{f.relative_to(OUT).as_posix()}",
+                       Body=gzip.compress(f.read_bytes(), 9), ContentType="application/json",
+                       ContentEncoding="gzip", CacheControl=cc)
+
     n = 0
-    for f in body + idx:                       # the index goes last, so it never points at a missing object
-        key = f"{PREFIX}/{f.relative_to(OUT).as_posix()}"
-        cc = "public, max-age=3600" if f in idx else "public, max-age=86400"
-        cli.put_object(Bucket="tc-atlas-rt", Key=key, Body=gzip.compress(f.read_bytes(), 9),
-                       ContentType="application/json", ContentEncoding="gzip", CacheControl=cc)
-        n += 1
-        if n % 200 == 0:
-            print(f"  {n}/{len(files)}", flush=True)
+    with ThreadPoolExecutor(max_workers=16) as ex:      # one put is ~1 s of latency; 16 at a time
+        for _ in ex.map(lambda f: put(f, "public, max-age=86400"), body):
+            n += 1
+            if n % 500 == 0:
+                print(f"  {n}/{len(files)}", flush=True)
+    for f in idx:                              # the index goes last, so it never points at a missing object
+        put(f, "public, max-age=3600"); n += 1
     print(f"uploaded {n} objects to {PREFIX}/")
 
 
 def main() -> int:
+    global OUT
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--atcf", nargs="*")
     ap.add_argument("--upload", action="store_true", help="after building, gzip + upload to R2")
     ap.add_argument("--upload-only", action="store_true", help="upload OUT as it is, no rebuild")
+    ap.add_argument("--out", help=f"build directory (default {OUT})")
     a = ap.parse_args()
+    if a.out:
+        OUT = Path(a.out).expanduser()
     if not a.upload_only:
         build(a)
     if a.upload or a.upload_only:
