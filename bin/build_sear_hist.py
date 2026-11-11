@@ -18,6 +18,7 @@ y30 = pred_10m_rmwcorr (30-s scale). The page joins obs by time (+-20 s) and air
 so it works for both the 30-s HDOB missions and NOAA's 1-s/10-s HRD flight-level files.
 
 Usage: python3 bin/build_sear_hist.py [--atcf AL142024 ...] [--no-upload]
+       python3 bin/build_sear_hist.py --upload-only      # after a --no-upload build has been checked
 """
 from __future__ import annotations
 
@@ -60,11 +61,32 @@ def r2_client():
                         region_name="auto")
 
 
+def upload_only(atcfs) -> int:
+    from concurrent.futures import ThreadPoolExecutor
+    cli = r2_client()
+    body = sorted(f for f in OUT.glob("*.json") if f.name != "index.json" and (not atcfs or f.stem in atcfs))
+
+    def put(f):   # storm files are written gzipped; same headers as the inline upload in main()
+        cli.put_object(Bucket="tc-atlas-rt", Key=f"{PREFIX}/{f.name}", Body=f.read_bytes(), ContentType="application/json",
+                       ContentEncoding="gzip", CacheControl="public, max-age=86400")
+
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        list(ex.map(put, body))
+    cli.put_object(Bucket="tc-atlas-rt", Key=f"{PREFIX}/index.json", Body=(OUT / "index.json").read_bytes(),
+                   ContentType="application/json", CacheControl="public, max-age=3600")
+    print(f"uploaded {len(body)} storm files + index to {PREFIX}/")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--atcf", nargs="*")
     ap.add_argument("--no-upload", action="store_true")
+    ap.add_argument("--upload-only", action="store_true",
+                    help="upload what OUT already holds (16 at a time, index last), no rebuild -- build with --no-upload first")
     a = ap.parse_args()
+    if a.upload_only:
+        return upload_only(a.atcf)
     OUT.mkdir(parents=True, exist_ok=True)
     cli = None if a.no_upload else r2_client()
     idx_p = OUT / "index.json"
