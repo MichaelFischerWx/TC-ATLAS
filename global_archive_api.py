@@ -5436,6 +5436,7 @@ def _load_fl_helpers():
     try:
         from tc_radar_api import (
             HRD_FL_BASE,
+            _aoml_fetch,
             _hrd_fetch_text,
             _hrd_parse_directory,
             _resolve_hrd_storm_name,
@@ -5445,6 +5446,7 @@ def _load_fl_helpers():
         )
         _fl_helpers = {
             "HRD_FL_BASE": HRD_FL_BASE,
+            "fetch": _aoml_fetch,           # (content, text); FTP twin when AOML's web server fails
             "fetch_text": _hrd_fetch_text,
             "parse_dir": _hrd_parse_directory,
             "resolve_name": _resolve_hrd_storm_name,
@@ -6064,13 +6066,10 @@ def _fl_parse_text(text: str, filename: str, h: dict) -> list:
 def _fl_fetch_and_parse(file_url: str, filename: str, center_lat: float, center_lon: float,
                         h: dict, now: float) -> dict:
     """Fetch an FL file from AOML and parse it into the full result dict."""
-    # Fetch the file from AOML
+    # Fetch the file from AOML (its FTP server when the web server is down)
     try:
-        import requests as _req
-        resp = _req.get(file_url, timeout=60)
-        resp.raise_for_status()
-        text = resp.text
-        source_size = len(resp.content)
+        content, text = h["fetch"](file_url, timeout=60)
+        source_size = len(content)
     except Exception as e:
         raise HTTPException(502, f"Could not fetch flight-level file: {e}")
 
@@ -6238,10 +6237,7 @@ def _quick_max_wind_from_file(file_url: str) -> dict | None:
     if not h:
         return None
     try:
-        import requests as _req
-        resp = _req.get(file_url, timeout=30)
-        resp.raise_for_status()
-        text = resp.text
+        _, text = h["fetch"](file_url, timeout=30)
     except Exception:
         return None
 

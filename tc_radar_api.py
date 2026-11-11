@@ -6724,9 +6724,109 @@ _AOML_HOST = "www.aoml.noaa.gov"
 _AOML_COOLDOWN_S = 300
 _aoml_down_until = 0.0
 
+# AOML's FTP server carries the same HRD tree and stayed up through the
+# 2026-11 web outage, when every www.aoml.noaa.gov URL bounced to a
+# temp.aoml.oarcloud.noaa.gov 403 page (the whole flight-level archive, and
+# with it Storm Detail's HRD missions, read as empty). When the web server
+# fails, listings and files come from FTP instead. URLs handed to callers stay
+# the canonical https ones, so cache keys and saved links never change.
+_AOML_WEB_PREFIX = "https://www.aoml.noaa.gov/ftp/pub/hrd/"
+_AOML_FTP_PREFIX = "ftp://ftp.aoml.noaa.gov/hrd/pub/"
+_AOML_FTP_TIMEOUT_S = 60
+_aoml_log = _logging.getLogger("tc-atlas.aoml")
 
-def _hrd_fetch_text(url: str, timeout: int = 30) -> str:
-    """Fetch text content from a URL (for HRD archive access)."""
+
+def _aoml_ftp_url(url: str) -> Optional[str]:
+    """The FTP twin of an AOML web-archive URL, or None for any other URL."""
+    return _AOML_FTP_PREFIX + url[len(_AOML_WEB_PREFIX):] if url.startswith(_AOML_WEB_PREFIX) else None
+
+
+def _aoml_ftp_bytes(ftp_url: str, timeout: int = _AOML_FTP_TIMEOUT_S) -> bytes:
+    """Fetch one file (or the LIST of a directory URL ending in '/') over anonymous FTP.
+    ftplib directly: urllib's ftp:// handler stalls ~30 s per request against this
+    server (2026-11-11: 30.9 s for a listing ftplib returns in 0.4 s)."""
+    import ftplib
+    import io
+    from urllib.parse import urlparse
+    u = urlparse(ftp_url)
+    with ftplib.FTP(timeout=timeout) as f:
+        f.connect(u.hostname)
+        f.login()
+        if u.path.endswith("/"):
+            f.cwd(u.path)
+            lines: list[str] = []
+            f.retrlines("LIST", lines.append)
+            return "\n".join(lines).encode("latin-1")
+        buf = io.BytesIO()
+        f.retrbinary("RETR " + u.path, buf.write)
+        return buf.getvalue()
+
+
+def _aoml_ftp_listing(ftp_url: str) -> list[str]:
+    """Names in an FTP directory, directories with a trailing '/' as Apache lists them.
+    A LIST line is `perms links owner group size mon day time-or-year name`; the name
+    can contain spaces ("20051023H1 _drops.pdf"), so split at most 8 times."""
+    text = _aoml_ftp_bytes(ftp_url).decode("latin-1")
+    names = []
+    for line in text.splitlines():
+        parts = line.split(None, 8)
+        if len(parts) < 9 or parts[8] in (".", ".."):
+            continue
+        names.append(parts[8] + ("/" if line.startswith("d") else ""))
+    return names
+
+
+def _aoml_fetch(url: str, timeout: int = 60) -> tuple[bytes, str]:
+    """(content, text) of an AOML archive file: the web server first, its FTP twin when
+    the web server fails or is cooling down. Other hosts: a plain GET. `text` decodes
+    like requests does for text/plain without a charset (ISO-8859-1)."""
+    ftp = _aoml_ftp_url(url)
+    try:
+        return _aoml_web_bytes(url, timeout)
+    except Exception as e:
+        if not ftp:
+            raise
+        _aoml_log.info(f"AOML web failed ({type(e).__name__}); reading {ftp}")
+        content = _aoml_ftp_bytes(ftp, max(timeout, _AOML_FTP_TIMEOUT_S))
+        return content, content.decode("latin-1")
+
+
+def _aoml_web_bytes(url: str, timeout: int) -> tuple[bytes, str]:
+    """GET with the AOML cooldown and off-site-redirect checks of _hrd_fetch_text."""
+    global _aoml_down_until
+    from urllib.parse import urlparse
+    import requests as _req
+    aoml = urlparse(url).hostname == _AOML_HOST
+    if aoml and time.time() < _aoml_down_until:
+        raise ConnectionError(f"{_AOML_HOST} failed recently; skipping {url}")
+    try:
+        resp = _req.get(url, timeout=timeout)
+    except (_req.exceptions.Timeout, _req.exceptions.ConnectionError):
+        if aoml:
+            _aoml_down_until = time.time() + _AOML_COOLDOWN_S
+        raise
+    if aoml and urlparse(resp.url).hostname != _AOML_HOST:
+        _aoml_down_until = time.time() + _AOML_COOLDOWN_S
+        raise ConnectionError(f"{url} redirected off {_AOML_HOST} to {resp.url}")
+    resp.raise_for_status()
+    return resp.content, resp.text
+
+
+def _hrd_fetch_text(url: str, timeout: int = 30, ftp_fallback: bool = True) -> str:
+    """Fetch text content from a URL (for HRD archive access). AOML archive URLs fall
+    back to the FTP twin when the web server fails (see _aoml_ftp_url)."""
+    ftp = _aoml_ftp_url(url) if ftp_fallback else None
+    try:
+        return _hrd_fetch_text_web(url, timeout)
+    except Exception as e:
+        if not ftp:
+            raise
+        _aoml_log.info(f"AOML web failed ({type(e).__name__}); reading {ftp}")
+        return _aoml_ftp_bytes(ftp, max(timeout, _AOML_FTP_TIMEOUT_S)).decode("latin-1")
+
+
+def _hrd_fetch_text_web(url: str, timeout: int = 30) -> str:
+    """Fetch text content from a URL over HTTP(S) only (the pre-fallback behaviour)."""
     global _aoml_down_until
     from urllib.parse import urlparse
     aoml = urlparse(url).hostname == _AOML_HOST
@@ -6767,10 +6867,17 @@ def _hrd_parse_directory(url: str, max_age: float = _HRD_DIR_CACHE_TTL) -> list[
             _hrd_dir_cache.move_to_end(url)
             return links
 
-    html = _hrd_fetch_text(url)
-    parser = _HRDLinkParser()
-    parser.feed(html)
-    links = parser.links
+    try:
+        html = _hrd_fetch_text_web(url)
+        parser = _HRDLinkParser()
+        parser.feed(html)
+        links = parser.links
+    except Exception as e:
+        ftp = _aoml_ftp_url(url)        # AOML web down: list the same directory over FTP
+        if not ftp:
+            raise
+        _aoml_log.info(f"AOML web listing failed ({type(e).__name__}); listing {ftp}")
+        links = _aoml_ftp_listing(ftp if ftp.endswith("/") else ftp + "/")
     _hrd_dir_cache[url] = (links, now)
     if len(_hrd_dir_cache) > 100:
         _hrd_dir_cache.popitem(last=False)
