@@ -9,10 +9,11 @@
 #      two anomaly PNGs (raw + Vecchi-Soden relative) and updates
 #      latest.json + analog_preliminary_distances.json in
 #      gs://${GCS_IR_CACHE_BUCKET}/seasonal/.
-#   2. A Cloud Scheduler job that triggers it daily at 16:00 UTC. NOAA's
+#   2. A Cloud Scheduler job that triggers it daily at 17:00 UTC. NOAA's
 #      preliminary OISST v2.1 day-(D-1) file is released ~13-14 UTC on day
-#      D and PSL's THREDDS mirror lags another 1-2 hours, so 16 UTC is the
-#      earliest slot that reliably sees the freshest slab on first try.
+#      D, but PSL's THREDDS mirror posts it at a drifting time after that:
+#      on 2026-06-07 day D-1 was still absent at 16:01 UTC. 17 UTC catches
+#      it on more days; a late-posting day lags one day until the next run.
 #
 # Reuses the env-overlay Docker image (Dockerfile.env). Override the
 # entrypoint at job-create time so this job runs the seasonal script.
@@ -50,7 +51,7 @@ fi
 JOB_NAME="tc-atlas-seasonal-job"
 REGION="us-east1"                 # match env-overlay + API region
 SCHEDULER_NAME="tc-atlas-seasonal-schedule"
-SCHEDULE="0 16 * * *"             # daily at 16:00 UTC (after PSL OISST mirror catches NOAA's ~13-14 UTC publish)
+SCHEDULE="0 17 * * *"             # daily at 17:00 UTC (PSL posts day D-1 at a drifting time; 16:00 often missed it)
 TIMEZONE="UTC"
 BUCKET="${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}"
 
