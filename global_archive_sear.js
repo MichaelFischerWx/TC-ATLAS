@@ -144,6 +144,16 @@
     var stormCache = {}, flightCache = {};
     var sel = null, storm = null, fIdx = -1, flight = null, flightReq = 0, stormReq = 0;
     var colorBy = 'y', view = 'map';
+    /* Plan view for an open storm: the reader's last choice on this device, Satellite
+       until they pick one. The storm list always shows the map (Satellite needs a
+       flight). viewAuto = the view was applied by default rather than clicked, so a
+       storm without imagery falls back to the map instead of showing a message. */
+    var VIEW_KEY = 'gsr-view', viewAuto = false;
+    function prefView() {
+        var v = null;
+        try { v = localStorage.getItem(VIEW_KEY); } catch (e) { }
+        return (v === 'map' || v === 'rel' || v === 'sat') ? v : 'sat';
+    }
     var SERIES = [   // the time-series pills; `on` = default
         { k: 'fl', label: 'Flight level', on: true },
         { k: 'y5', label: 'SEAR 500 m', on: false, title: 'SEAR’s first step: the flight-level wind brought down to 500 m (radar-taught)' },
@@ -459,6 +469,10 @@
         var r = byAtcf[atcf]; if (!r) return;
         sel = atcf; storm = null; flight = null; fIdx = -1;
         $('gsr-maxnote').hidden = true;
+        var want = prefView();
+        if (want === 'sat' && !(r.year >= 1980)) want = 'map';   // the IR archive starts in 1980 (GridSat-B1)
+        viewAuto = true;
+        if (want !== view) applyView(want);
         var req = ++stormReq;
         $('gsr-pane-list').hidden = true;
         $('gsr-pane-storm').hidden = false;
@@ -537,7 +551,8 @@
     function enterPassMode(k) {
         if (!storm || !storm.passes[k]) return;
         sat.pass = k; sat.idx = null; sat.R = null;
-        if (view !== 'sat') document.querySelector('#gsr-view [data-v="sat"]').click();
+        viewAuto = false;      // asked for: explain a missing image rather than fall back
+        if (view !== 'sat') applyView('sat');
         else renderSat();
     }
     function passMode() { return (storm && sat.pass != null) ? storm.passes[sat.pass] || null : null; }
@@ -561,8 +576,8 @@
         try { gmap.flyTo(LANDING[0], LANDING[1], { duration: 0.6 }); } catch (e) { }
         fillFlightSelect();
         renderEmptySeries('Pick a storm on the map or in the list, then a flight.');
-        if (view === 'rel') renderRel();
-        if (view === 'sat') renderSat();
+        viewAuto = false;
+        if (view !== 'map') applyView('map');      // the list is picked from the map
         renderLegend();
         renderList();
         syncHash();
@@ -1179,6 +1194,11 @@
         drawSat();
         satMsg(t);
     }
+    /* Nothing to draw. Opened by default: show the map instead; asked for: say why. */
+    function noImagery(t) {
+        if (viewAuto) { applyView('map'); return; }
+        satNone(t);
+    }
     function satMsg(t) {
         var m = $('gsr-sat-msg');
         m.innerHTML = t || '';
@@ -1225,13 +1245,15 @@
         clearTimeout(_satRetry);
         var pm = passMode();
         if (!flight && !pm) {
-            satNone(sel ? (storm && !storm.flights.length
-                ? 'This storm has no flight-level file in the record, so there is no flight to draw.'
-                : 'Loading the flight&hellip;') : 'Pick a storm, then a flight, to see it on the satellite image.');
+            if (sel && storm && !storm.flights.length) {
+                noImagery('This storm has no flight-level file in the record, so there is no flight to draw.');
+                return;
+            }
+            satNone(sel ? 'Loading the flight&hellip;' : 'Pick a storm, then a flight, to see it on the satellite image.');
             return;
         }
         var r = byAtcf[sel];
-        if (!r || !r.sid) { satNone('No best-track match for this storm, so no satellite image.'); return; }
+        if (!r || !r.sid) { noImagery('No best-track match for this storm, so no satellite image.'); return; }
         var t = btTrack(r);
         if (!t || !t.length) {
             satMsg('Waiting for the best track&hellip;');
@@ -1246,13 +1268,14 @@
         loadIRMeta(r.sid, t).then(function (m) {
             if (view !== 'sat' || (!flight && !passMode()) || byAtcf[sel].sid !== r.sid) return;
             if (!m || !m.available || !m.frames || !m.frames.length) {
-                satNone('No infrared image for this storm' + (m && m.reason ? ': ' + esc(m.reason) : '') + '.');
+                noImagery('No infrared image for this storm' + (m && m.reason ? ': ' + esc(m.reason) : '') + '.');
                 return;
             }
             sat.sid = r.sid;
             showSatFrame(nearestFrame(m, sat.focus));
         }).catch(function (e) {
             if (window.TCErrors) TCErrors.log(e, 'SEAR satellite frame list');
+            if (viewAuto) { applyView('map'); return; }
             satMsg('Could not load the satellite frame list. <a href="#" id="gsr-sat-retry">Try again</a>');
             var a = $('gsr-sat-retry');
             if (a) a.onclick = function (ev) { ev.preventDefault(); delete irMetaReq[r.sid]; renderSat(); };
@@ -1261,13 +1284,44 @@
     function loadIRMeta(sid, t) {
         if (irMeta[sid]) return Promise.resolve(irMeta[sid]);
         if (irMetaReq[sid]) return irMetaReq[sid];
-        satMsg('Loading the satellite frame list&hellip;');
         var trk = t.map(function (p) { return { t: p.t, la: p.la, lo: p.lo }; });
+        var local = !noLocalMeta[sid] && localIRMeta(sid, trk);
+        if (local) { irMeta[sid] = local; return Promise.resolve(local); }
+        satMsg('Loading the satellite frame list&hellip;');
         irMetaReq[sid] = fetchJSON(API + '/global/ir/meta?sid=' + encodeURIComponent(sid) +
             '&track=' + encodeURIComponent(JSON.stringify(trk))).then(function (j) {
             irMeta[sid] = j; return j;
         }).catch(function (e) { delete irMetaReq[sid]; throw e; });
         return irMetaReq[sid];
+    }
+    /* The frame list /global/ir/meta would return, built here from the same track:
+       global_archive_api._build_mergir_frame_list (the first track point in each
+       3-hour bin, binned by flooring the hour, sorted by time). Its frame_idx keys
+       the rendered frames on R2, so the tab reads them straight from the CDN and
+       skips the API round trip (9-13 s for a storm the instance has not seen).
+       Frames carry their datetime; a mismatch (the API changed) drops back to the
+       API's list for that storm. 1980+ only: MergIR from 1998, GridSat-B1 before;
+       older storms (HURSAT) keep the API path. The /v7/ prefix is the API's
+       _GCS_CACHE_VERSION: after a bump every frame misses here and the API renders. */
+    var IR_CDN = 'https://cdn.tcatlas.org/v7/ir', noLocalMeta = {};
+    function localIRMeta(sid, trk) {
+        var yr = +String(sid).slice(0, 4);
+        if (!(yr >= 1980)) return null;
+        var seen = {}, frames = [];
+        trk.forEach(function (p) {
+            if (!p.t || !p.la || !p.lo) return;            // the API skips a falsy lat or lon too
+            var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})/.exec(p.t);
+            if (!m) return;
+            var h = Math.floor(+m[4] / 3) * 3, hh = (h < 10 ? '0' : '') + h, key = m[1] + m[2] + m[3] + hh;
+            if (seen[key]) return;
+            seen[key] = 1;
+            frames.push({ datetime: m[1] + '-' + m[2] + '-' + m[3] + 'T' + hh + ':00:00', lat: +p.la, lon: +p.lo });
+        });
+        if (!frames.length) return null;
+        frames.sort(function (a, b) { return a.datetime < b.datetime ? -1 : a.datetime > b.datetime ? 1 : 0; });
+        frames.forEach(function (f, i) { f.index = i; });
+        return { sid: sid, available: true, source: yr >= 1998 ? 'mergir' : 'gridsat', n_frames: frames.length,
+            frames: frames, frame_cdn_base: IR_CDN, client: true };
     }
     function frameMs(f) { return Date.parse(f.datetime + 'Z'); }
     function nearestFrame(m, t) {
@@ -1298,6 +1352,13 @@
             '&lat=' + f.lat + '&lon=' + f.lon + '&dt=' + encodeURIComponent(f.datetime);
         (direct ? fetch(direct).then(function (r) { return r.ok ? r.json() : fetchJSON(api); }) : fetchJSON(api))
             .then(function (j) {
+                if (m.client && j && j.datetime && j.datetime.slice(0, 16) !== f.datetime.slice(0, 16)) {
+                    // this list and the stored frames disagree: use the API's list for this storm
+                    noLocalMeta[sat.sid] = true;
+                    delete irMeta[sat.sid]; delete irMetaReq[sat.sid];
+                    if (sat.idx === idx) { sat.idx = null; renderSat(); }
+                    return;
+                }
                 if (!j || !j.tb_data) throw new Error('no IR data for this frame');
                 irFrames[key] = j;
                 if (sat.idx === idx && sat.sid + '/' + idx === key) paintSat(j, key);
@@ -1691,14 +1752,9 @@
             if (flight) { drawFlight(false); if (view === 'rel') renderRel(); if (view === 'sat') drawSat(); } else renderLegend();
         });
         segWire('gsr-view', 'v', function (v) {
-            view = v;
-            $('gsr-rel').hidden = v !== 'rel';
-            $('gsr-sat').hidden = v !== 'sat';
-            $('gsr-map').style.visibility = v === 'map' ? '' : 'hidden';
-            markSeriesImage(v === 'sat' && sat.idx != null && irMeta[sat.sid] ? frameMs(irMeta[sat.sid].frames[sat.idx]) : null);
-            if (v === 'rel') renderRel();
-            else if (v === 'sat') renderSat();
-            else setTimeout(function () { gmap.invalidateSize(); }, 30);
+            viewAuto = false;
+            try { localStorage.setItem(VIEW_KEY, v); } catch (e) { }
+            applyView(v);
         });
         wireSat();
         // series pills
@@ -1748,6 +1804,20 @@
             }, 30);
         });
         renderLegend();
+    }
+    /* Show one plan view (map, storm-relative, satellite) and mark its button. */
+    function applyView(v) {
+        Array.prototype.forEach.call(document.querySelectorAll('#gsr-view button'), function (x) {
+            x.classList.toggle('active', x.dataset.v === v);
+        });
+        view = v;
+        $('gsr-rel').hidden = v !== 'rel';
+        $('gsr-sat').hidden = v !== 'sat';
+        $('gsr-map').style.visibility = v === 'map' ? '' : 'hidden';
+        markSeriesImage(v === 'sat' && sat.idx != null && irMeta[sat.sid] ? frameMs(irMeta[sat.sid].frames[sat.idx]) : null);
+        if (v === 'rel') renderRel();
+        else if (v === 'sat') renderSat();
+        else setTimeout(function () { gmap.invalidateSize(); }, 30);
     }
     function segWire(id, attr, fn) {
         var btns = document.querySelectorAll('#' + id + ' button');
