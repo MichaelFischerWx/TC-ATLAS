@@ -2,8 +2,9 @@
 """Publish MLBT's historical SEAR record (experimental 10-m wind from flight-level recon) for the
 Global Archive recon section.
 
-Source: MLBT phase1/out/sear/ (Atlantic HDOB 2008-2025), phase1/out/sear_ep/ (E/C Pacific 2008-2024) and
-phase1/out/sear_hrd_all/ (HRD flight-level files 1998-2007, 10-m recomputed under ruling 53),
+Source: MLBT phase1/out/sear/ (Atlantic HDOB 2008-2025), phase1/out/sear_ep/ (E/C Pacific 2008-2024),
+phase1/out/sear_hrd_9807/ (every AOML HRD flight-level file 1998-2007, re-scored 2026-11-11) and
+phase1/out/sear_hrd_pre_v2/ (HRD files before 1998 and the western Pacific, re-scored 2026-11-11),
 written by phase1/sear_operator.py with the same Stage 1 v4 / Stage 2 v8 chain as the live product
 (re-scoring AL142024 on 2026-09-26 reproduced the record exactly).
 
@@ -34,14 +35,14 @@ import numpy as np
 import pandas as pd
 
 MLBT = Path.home() / "github" / "MLBT"
-# (dir, recompute_10m, thin_s): sear_hrd_all = HRD flight-level files 1998-2007 (NOAA 1-s/10-s, USAF 10-s;
-# ruling 45 addendum 3), scored before ruling 53 -> its 10-m values are recomputed from the stored WL150
-# with the current factor, and its 1-s rows thinned to the strongest per aircraft per 10 s.
+# (dir, recompute_10m, thin_s, hrd_legs). The HRD era (2026-11-11): phase1/sear_hrd_operator.py over EVERY AOML
+# flight-level file (USAF 10-s exports and NOAA files, read through TC-ATLAS; the old sear_hrd_all, from a
+# scratch script now lost, held 41 storms from mostly NOAA 1-s files), on 10-s means under ruling 53 (no
+# recompute, no thinning), with the HRD driver's local eye test and one center per eye visit. pre-1997 =
+# outside SEAR's training era (ruling 54).
 SRC = [(MLBT / "phase1" / "out" / "sear", False, 0, False), (MLBT / "phase1" / "out" / "sear_ep", False, 0, False),
-       (MLBT / "phase1" / "out" / "sear_hrd_all", True, 10, True),
-       # phase1/sear_hrd_operator.py: HRD files for storms before the record (1960s-1997), scored under ruling 53
-       # (no recompute) on TC-ATLAS-parsed 10-s obs; pre-1997 = outside SEAR's training era (ruling 54)
-       (MLBT / "phase1" / "out" / "sear_hrd_pre", False, 0, True)]   # (dir, recompute_10m, thin_s, hrd_legs)
+       (MLBT / "phase1" / "out" / "sear_hrd_9807", False, 0, True),
+       (MLBT / "phase1" / "out" / "sear_hrd_pre_v2", False, 0, True)]
 OUT = Path.home() / "Data" / "sear_hist"
 PREFIX = "sear-hist/v1"
 KT = 1.943844

@@ -6733,7 +6733,6 @@ _aoml_down_until = 0.0
 _AOML_WEB_PREFIX = "https://www.aoml.noaa.gov/ftp/pub/hrd/"
 _AOML_FTP_PREFIX = "ftp://ftp.aoml.noaa.gov/hrd/pub/"
 _AOML_FTP_TIMEOUT_S = 60
-_aoml_log = _logging.getLogger("tc-atlas.aoml")
 
 
 def _aoml_ftp_url(url: str) -> Optional[str]:
@@ -6781,13 +6780,15 @@ def _aoml_fetch(url: str, timeout: int = 60) -> tuple[bytes, str]:
     the web server fails or is cooling down. Other hosts: a plain GET. `text` decodes
     like requests does for text/plain without a charset (ISO-8859-1)."""
     ftp = _aoml_ftp_url(url)
+    t0 = time.time()
     try:
         return _aoml_web_bytes(url, timeout)
     except Exception as e:
         if not ftp:
             raise
-        _aoml_log.info(f"AOML web failed ({type(e).__name__}); reading {ftp}")
+        t1 = time.time()
         content = _aoml_ftp_bytes(ftp, max(timeout, _AOML_FTP_TIMEOUT_S))
+        print(f"[AOML] web {type(e).__name__} after {t1 - t0:.1f}s; FTP {len(content)} B in {time.time() - t1:.1f}s: {ftp}")
         return content, content.decode("latin-1")
 
 
@@ -6800,29 +6801,45 @@ def _aoml_web_bytes(url: str, timeout: int) -> tuple[bytes, str]:
     if aoml and time.time() < _aoml_down_until:
         raise ConnectionError(f"{_AOML_HOST} failed recently; skipping {url}")
     try:
-        resp = _req.get(url, timeout=timeout)
+        resp = _aoml_get(_req, url, timeout) if aoml else _req.get(url, timeout=timeout)
     except (_req.exceptions.Timeout, _req.exceptions.ConnectionError):
         if aoml:
             _aoml_down_until = time.time() + _AOML_COOLDOWN_S
         raise
-    if aoml and urlparse(resp.url).hostname != _AOML_HOST:
-        _aoml_down_until = time.time() + _AOML_COOLDOWN_S
-        raise ConnectionError(f"{url} redirected off {_AOML_HOST} to {resp.url}")
     resp.raise_for_status()
     return resp.content, resp.text
+
+
+def _aoml_get(_req, url: str, timeout: int):
+    """GET on www.aoml.noaa.gov without following an off-site redirect: in the 2026-11 outage every URL
+    302s to a temp.aoml.oarcloud.noaa.gov 403 page, and following it was where requests lost time.
+    A 5-s connect limit keeps a hung server from holding a request for the full read timeout."""
+    global _aoml_down_until
+    from urllib.parse import urlparse, urljoin
+    resp = _req.get(url, timeout=(5, timeout), allow_redirects=False)
+    if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
+        loc = urljoin(url, resp.headers.get("Location", ""))
+        if urlparse(loc).hostname != _AOML_HOST:
+            _aoml_down_until = time.time() + _AOML_COOLDOWN_S
+            raise _req.exceptions.ConnectionError(f"{url} redirected off {_AOML_HOST} to {loc}")
+        resp = _req.get(loc, timeout=(5, timeout))
+    return resp
 
 
 def _hrd_fetch_text(url: str, timeout: int = 30, ftp_fallback: bool = True) -> str:
     """Fetch text content from a URL (for HRD archive access). AOML archive URLs fall
     back to the FTP twin when the web server fails (see _aoml_ftp_url)."""
     ftp = _aoml_ftp_url(url) if ftp_fallback else None
+    t0 = time.time()
     try:
         return _hrd_fetch_text_web(url, timeout)
     except Exception as e:
         if not ftp:
             raise
-        _aoml_log.info(f"AOML web failed ({type(e).__name__}); reading {ftp}")
-        return _aoml_ftp_bytes(ftp, max(timeout, _AOML_FTP_TIMEOUT_S)).decode("latin-1")
+        t1 = time.time()
+        content = _aoml_ftp_bytes(ftp, max(timeout, _AOML_FTP_TIMEOUT_S))
+        print(f"[AOML] web {type(e).__name__} after {t1 - t0:.1f}s; FTP {len(content)} B in {time.time() - t1:.1f}s: {ftp}")
+        return content.decode("latin-1")
 
 
 def _hrd_fetch_text_web(url: str, timeout: int = 30) -> str:
@@ -6835,14 +6852,11 @@ def _hrd_fetch_text_web(url: str, timeout: int = 30) -> str:
     try:
         import requests as _req
         try:
-            resp = _req.get(url, timeout=timeout)
+            resp = _aoml_get(_req, url, timeout) if aoml else _req.get(url, timeout=timeout)
         except (_req.exceptions.Timeout, _req.exceptions.ConnectionError):
             if aoml:
                 _aoml_down_until = time.time() + _AOML_COOLDOWN_S
             raise
-        if aoml and urlparse(resp.url).hostname != _AOML_HOST:
-            _aoml_down_until = time.time() + _AOML_COOLDOWN_S
-            raise ConnectionError(f"{url} redirected off {_AOML_HOST} to {resp.url}")
         resp.raise_for_status()
         return resp.text
     except ImportError:
@@ -6876,8 +6890,9 @@ def _hrd_parse_directory(url: str, max_age: float = _HRD_DIR_CACHE_TTL) -> list[
         ftp = _aoml_ftp_url(url)        # AOML web down: list the same directory over FTP
         if not ftp:
             raise
-        _aoml_log.info(f"AOML web listing failed ({type(e).__name__}); listing {ftp}")
+        t1 = time.time()
         links = _aoml_ftp_listing(ftp if ftp.endswith("/") else ftp + "/")
+        print(f"[AOML] web listing {type(e).__name__}; FTP LIST {len(links)} names in {time.time() - t1:.1f}s: {ftp}")
     _hrd_dir_cache[url] = (links, now)
     if len(_hrd_dir_cache) > 100:
         _hrd_dir_cache.popitem(last=False)

@@ -9,9 +9,10 @@ a new prefix, a storm file with the flight list and the pass maxima, and one fil
 Sources (read only; MLBT has uncommitted work in progress -- never write there):
   MLBT phase1/out/sear/          Atlantic HDOB (30-s; 2007-2025)
   MLBT phase1/out/sear_ep/       E/C Pacific HDOB
-  MLBT phase1/out/sear_hrd_all/  HRD flight-level files 1998-2007 (NOAA 1-s, USAF 10-s); 10-m recomputed under
-                                 ruling 53, 1-s rows thinned to the strongest estimate per aircraft per 10 s
-  MLBT phase1/out/sear_hrd_pre/  HRD files before the record (1960s-1997): extrapolated era (ruling 54)
+  MLBT phase1/out/sear_hrd_9807/   every AOML HRD flight-level file 1998-2007 (USAF 10-s, NOAA), re-scored
+                                   2026-11-11 on 10-s means with the HRD driver's eye-visit gates
+  MLBT phase1/out/sear_hrd_pre_v2/ HRD files before 1998 and the western Pacific, re-scored the same day;
+                                   before 1997 = extrapolated era (ruling 54)
   MLBT phase1/out/sear/sear_fix.parquet  fix-operator passes (VDM max 10-s FL wind / F-deck)
 All are written by phase1/sear_operator.py (+ sear_hrd_operator / sear_fix_operator) with the record's chain,
 Stage 1 v4 / Stage 2 v8. The real-time job runs a different chain (Stage 1 v6.1 / Stage 2 v11, ruling 57):
@@ -60,11 +61,11 @@ import pandas as pd
 
 MLBT = Path.home() / "github" / "MLBT"
 REPO = Path(__file__).resolve().parent.parent
-# (name, dir, recompute_10m, thin_s, hrd) -- the same four sources and flags as build_sear_hist.py
+# (name, dir, recompute_10m, thin_s, hrd) -- the same four sources and flags as build_sear_hist.py (2026-11-11 HRD re-score)
 SRC = [("hdob_al", MLBT / "phase1" / "out" / "sear", False, 0, False),
        ("hdob_ep", MLBT / "phase1" / "out" / "sear_ep", False, 0, False),
-       ("hrd", MLBT / "phase1" / "out" / "sear_hrd_all", True, 10, True),
-       ("hrd_pre", MLBT / "phase1" / "out" / "sear_hrd_pre", False, 0, True)]
+       ("hrd", MLBT / "phase1" / "out" / "sear_hrd_9807", False, 0, True),
+       ("hrd_pre", MLBT / "phase1" / "out" / "sear_hrd_pre_v2", False, 0, True)]
 FIX = MLBT / "phase1" / "out" / "sear" / "sear_fix.parquet"
 OUT = Path.home() / "Data" / "sear_hist_v2"
 PREFIX = "sear-hist/v2"
@@ -122,11 +123,9 @@ def iso(t):
 def flight_kind(src, tail):
     if src.startswith("hdob"):
         return "HDOB 30-s (the reported peak 10-s wind)"
-    if src == "hrd_pre":
-        return "HRD flight-level file, 10-s means"
-    if str(tail).endswith("-1s"):
+    if str(tail).endswith("-1s"):          # the pre-2026-11-11 sear_hrd_all thinned 1-s rows
         return "HRD 1-s file, strongest estimate per 10 s"
-    return "HRD flight-level file, 10-s"
+    return "HRD flight-level file, 10-s means"
 
 
 def load_sources(atcfs):
