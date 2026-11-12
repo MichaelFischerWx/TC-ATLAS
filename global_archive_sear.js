@@ -1007,6 +1007,7 @@
                 var x = ev.points[0].x; x = typeof x === 'number' ? x : Date.parse(String(x).replace(' ', 'T') + 'Z');
                 sat.pass = null;                      // the chart is the flight's: leave the pass view
                 sat.focus = x; sat.what = 'the time you picked';
+                sat.autoTries = 0; sat.opening = false;
                 showSatFrame(nearestFrame(irMeta[sat.sid], x));
             });
         });
@@ -1179,7 +1180,7 @@
        a single 3-hourly snapshot would smear it along the storm's motion. */
     var API = 'https://api.tcatlas.org';
     var irMeta = {}, irMetaReq = {}, irFrames = {};
-    var sat = { sid: null, idx: null, focus: null, what: '', tb: null, off: null, R: null, hover: -1, key: '' };
+    var sat = { sid: null, idx: null, focus: null, what: '', tb: null, off: null, R: null, hover: -1, key: '', miss: null, autoTries: 0, opening: false };
     var IR_CMAPS = [['claude-ir', 'Claude IR'], ['enhanced', 'Enhanced IR'], ['dvorak', 'Dvorak BD'],
         ['grayscale', 'Greyscale'], ['funktop', 'Funktop'], ['avn', 'AVN'], ['nhc', 'NHC'], ['rammb', 'RAMMB'], ['irb', 'IR-B']];
     var satCmap = null;
@@ -1272,6 +1273,7 @@
                 return;
             }
             sat.sid = r.sid;
+            sat.miss = {}; sat.autoTries = 2; sat.opening = true;       // the opening image may be a gap in the archive: try its neighbours
             showSatFrame(nearestFrame(m, sat.focus));
         }).catch(function (e) {
             if (window.TCErrors) TCErrors.log(e, 'SEAR satellite frame list');
@@ -1364,12 +1366,27 @@
                 if (sat.idx === idx && sat.sid + '/' + idx === key) paintSat(j, key);
             }).catch(function (e) {
                 if (sat.idx !== idx) return;
+                /* The image the view opened on is missing (GridSat-B1 has sparse times, which
+                   the API answers with a 502): show the nearest one that exists instead. */
+                if (sat.autoTries > 0 && sat.miss) {
+                    sat.autoTries--;
+                    sat.miss[idx] = 1;
+                    var nb = -1, nd = Infinity;
+                    m.frames.forEach(function (fr, i) {
+                        var d = Math.abs(frameMs(fr) - sat.focus);
+                        if (!sat.miss[i] && d < nd) { nd = d; nb = i; }
+                    });
+                    if (nb >= 0) { showSatFrame(nb); return; }
+                }
+                if (sat.opening && viewAuto) { sat.opening = false; applyView('map'); return; }   // opened by default, no image near the flight
                 sat.tb = null; drawSat();
-                satMsg('No infrared image for ' + esc(utc(ms)) + ' (' + esc(e.message || e) + '). Step to another image.');
+                satMsg('No infrared image for ' + esc(utc(ms)) + (/HTTP 502/.test(String(e.message)) ? ': a gap in the satellite archive' : '') +
+                    '. Step to another image.');
             });
     }
     /* uint8 Tb: 0 = no data, 1..255 linear over [tb_vmin, tb_vmax] (global_archive.js decodeTbData). */
     function paintSat(j, key) {
+        sat.opening = false;
         var bin = atob(j.tb_data), raw = new Uint8Array(bin.length);
         for (var i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
         sat.tb = { raw: raw, rows: j.tb_rows, cols: j.tb_cols, vmin: j.tb_vmin, vmax: j.tb_vmax, b: j.bounds,
@@ -1651,8 +1668,8 @@
         try { Plotly.relayout(ts, { 'shapes[1].x0': D(ms || 0), 'shapes[1].x1': D(ms || 0), 'shapes[1].visible': show }); } catch (e) { }
     }
     function wireSat() {
-        $('gsr-sat-prev').onclick = function () { if (sat.idx > 0) showSatFrame(sat.idx - 1); };
-        $('gsr-sat-next').onclick = function () { var m = irMeta[sat.sid]; if (m && sat.idx < m.frames.length - 1) showSatFrame(sat.idx + 1); };
+        $('gsr-sat-prev').onclick = function () { sat.autoTries = 0; sat.opening = false; if (sat.idx > 0) showSatFrame(sat.idx - 1); };
+        $('gsr-sat-next').onclick = function () { sat.autoTries = 0; sat.opening = false; var m = irMeta[sat.sid]; if (m && sat.idx < m.frames.length - 1) showSatFrame(sat.idx + 1); };
         $('gsr-sat-zin').onclick = function () { if (sat.R) { sat.R = Math.max(30, sat.R / 1.4); drawSat(); } };
         $('gsr-sat-zout').onclick = function () { if (sat.R) { sat.R = Math.min(1100, sat.R * 1.4); drawSat(); } };
         $('gsr-sat-cmap').onchange = function () {
