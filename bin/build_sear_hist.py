@@ -52,6 +52,25 @@ COLS = ["atcf", "mission_id", "tail", "observation_time_utc", "aircraft_latitude
         "stage2_pred_wl150_ms", "wl150_peak_ms", "tdr_resolution_factor"]
 
 
+def pass_peak(p):
+    """MLBT's flight-level peak of the pass (fl_peak_pass_kt); its fl_peak_kt is the wind at SEAR's maximum."""
+    v = getattr(p, "fl_peak_pass_kt", None)
+    return v if v is not None and np.isfinite(v) else p.fl_peak_kt
+
+
+def drop_repeats(f):
+    """A vortex message carries its mission's maximum flight-level wind into later messages (Andrew 1992: 170 kt
+    at 15:27, 16:48 and 17:53 UTC on 23 Aug), so a repeat is not a new measurement. Keep the first of each run:
+    same source, same value, each message < 6 h after the previous one. Twin of build_sear_hist_v2.drop_repeats."""
+    f = f.sort_values("t")
+    keep, last = [], {}
+    for p in f.itertuples():
+        prev = last.get(p.src)
+        keep.append(not (prev is not None and prev[1] == p.v_peak_kt and p.t - prev[0] <= pd.Timedelta("6h")))
+        last[p.src] = (p.t, p.v_peak_kt)
+    return f[np.array(keep, dtype=bool)]
+
+
 def r2_client():
     def secret(n):
         return subprocess.run(["/opt/homebrew/bin/gcloud", "secrets", "versions", "access", "latest", f"--secret={n}",
@@ -161,13 +180,14 @@ def main() -> int:
                            "tail": None if row is None else str(row["tail"]),
                            "lat": None if row is None else fnum(row.aircraft_latitude, 3), "lon": None if row is None else fnum(row.aircraft_longitude, 3),
                            "y_kt": fnum(p.y_kt * sc), "y_corr_kt": fnum(p.y_corr_kt * sc), "y_30s_kt": fnum(p.y_30s_kt * sc),
-                           "fl_peak_kt": fnum(p.fl_peak_kt, 0), "rmw_km": fnum(p.rmw_km), "r_over_rmw": fnum(p.r_over_rmw, 2)})
+                           "fl_peak_kt": fnum(pass_peak(p), 0), "rmw_km": fnum(p.rmw_km), "r_over_rmw": fnum(p.r_over_rmw, 2)})
         if atcf in FX:
-            f = FX[atcf]
+            f = drop_repeats(FX[atcf])
             if len(L):
                 keep = np.ones(len(f), dtype=bool)
                 for mis, lg in L.groupby("mission"):
-                    t0, t1, fp, ex = lg.t.min(), lg.t.max(), lg.fl_peak_kt.max(), bool(lg.extra.any())
+                    # fp: the flight-level wind where SEAR peaks (MLBT fl_kt), as this rule has always read it
+                    t0, t1, fp, ex = lg.t.min(), lg.t.max(), lg.fl_kt.max(), bool(lg.extra.any())
                     cov = ((f.t >= t0 - pd.Timedelta("2h")) & (f.t <= t1 + pd.Timedelta("2h"))).to_numpy()
                     if ex:
                         cov &= (f.v_peak_kt.to_numpy() <= 1.1 * fp)

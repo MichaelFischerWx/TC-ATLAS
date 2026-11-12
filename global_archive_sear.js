@@ -91,6 +91,7 @@
         return utc(a, { zone: false }) + '–' + (sameDay ? utc(b, { date: false }) : utc(b));
     }
     function kindShort(f) {
+        if (f.interp) return 'HRD 1-min, filled to 10-s';
         if (/^hdob/.test(f.src)) return 'HDOB 30-s';
         if (/-1s$/.test(f.tail)) return 'HRD 1-s';
         return 'HRD 10-s';
@@ -468,7 +469,7 @@
         atcf = String(atcf).toUpperCase();
         var r = byAtcf[atcf]; if (!r) return;
         sel = atcf; storm = null; flight = null; fIdx = -1;
-        $('gsr-maxnote').hidden = true;
+        $('gsr-maxnote').hidden = true; $('gsr-fnote').hidden = true;
         var want = prefView();
         if (want === 'sat' && !(r.year >= 1980)) want = 'map';   // the IR archive starts in 1980 (GridSat-B1)
         viewAuto = true;
@@ -567,7 +568,7 @@
     }
     function closeStorm() {
         sel = null; storm = null; flight = null; fIdx = -1; stormReq++; flightReq++;
-        sat.pass = null; $('gsr-maxnote').hidden = true;
+        sat.pass = null; $('gsr-maxnote').hidden = true; $('gsr-fnote').hidden = true;
         $('gsr-pane-list').hidden = false;
         $('gsr-pane-storm').hidden = true;
         clearFlightLayers();
@@ -697,6 +698,11 @@
         if (!keepPass && sat.pass != null) { sat.pass = null; sat.R = null; sat.idx = null; }   // a picked flight leaves the pass view
         fIdx = k;
         var f = storm.flights[k], ck = storm.atcf + '/' + f.key, req = ++flightReq;
+        var fn = $('gsr-fnote');
+        fn.hidden = !f.interp;
+        fn.innerHTML = f.interp ? '<b>About 1-minute data.</b> This flight-level file holds roughly 1-minute values ' +
+            'filled in to 10 s, so its peaks read low and so do the SEAR estimates from them. Vortex-message peaks, ' +
+            'where shown, are likely closer.' : '';
         flight = null;
         fillFlightSelect();
         Array.prototype.forEach.call(document.querySelectorAll('#gsr-flights .gsr-fitem'), function (el) {
@@ -845,12 +851,23 @@
         if (o.sf[i] != null && seriesOn.sf) rows.push('<span class="gsr-tip-sub">SFMR ' + o.sf[i] + ' kt (reference only)</span>');
         return rows.join('<br>');
     }
+    /* What a pass maximum rests on. A flight pass: the pass's flight-level peak, and the flight-level
+       wind where SEAR peaks when that differs (SEAR often peaks just inside the flight-level maximum).
+       A vortex-message pass: the one wind the message reports, at the center-fix time. */
+    function passLines(p) {
+        var rm = p.rmw_km != null ? ' · RMW ' + Math.round(p.rmw_km) + ' km' : '';
+        if (isFix(p)) return ['Vortex message, center fix ' + utc(p.t, { date: false }),
+            'From its max flight-level wind ' + r0(p.fl_peak_kt) + ' kt' + rm,
+            'When and where that wind was measured is not in the message'];
+        var at = p.fl_at_kt != null && Math.round(p.fl_at_kt) !== Math.round(p.fl_peak_kt)
+            ? ', ' + r0(p.fl_at_kt) + ' kt where SEAR peaks' : '';
+        return ['Flight level: peak ' + r0(p.fl_peak_kt) + ' kt' + at + rm];
+    }
     function passTip(p) {
         if (!p) return '';
-        var v = passV(p), fix = isFix(p);
-        return '<b>Pass maximum ' + r0(v) + ' kt</b> <span class="gsr-tip-sub">' + esc(utc(p.t)) + '</span><br>' +
-            (fix ? 'From the vortex message’s max flight-level wind ' : 'Flight-level peak ') + r0(p.fl_peak_kt) + ' kt' +
-            (p.rmw_km != null ? ' · RMW ' + Math.round(p.rmw_km) + ' km' : '') +
+        var v = passV(p);
+        return '<b>' + (isFix(p) ? 'Vortex-message pass ' : 'Pass maximum ') + r0(v) + ' kt</b> <span class="gsr-tip-sub">' +
+            esc(utc(p.t)) + '</span><br>' + passLines(p).map(esc).join('<br>') +
             (p.tail ? '<br>' + esc(tailName(p.tail)) + (p.mission ? ' · mission ' + esc(p.mission) : '') : '');
     }
 
@@ -959,8 +976,10 @@
                 textposition: 'top center', textfont: { size: 10, color: B.text },
                 marker: { symbol: P.map(function (p) { return isFix(p) ? 'diamond-open' : 'star'; }), size: 11,
                     color: P.map(function (p) { return ktColor(passV(p)); }), line: { color: B.text, width: 0.8 } },
-                customdata: P.map(function (p) { return [p.fl_peak_kt, p.rmw_km == null ? '—' : Math.round(p.rmw_km)]; }),
-                hovertemplate: 'Pass maximum %{y:.0f} kt<br>FL peak %{customdata[0]} kt · RMW %{customdata[1]} km<extra></extra>' });
+                customdata: P.map(function (p) {
+                    return (isFix(p) ? 'Vortex-message pass ' : 'Pass maximum ') + r0(passV(p)) + ' kt<br>' + passLines(p).map(esc).join('<br>');
+                }),
+                hovertemplate: '%{customdata}<extra></extra>' });
         }
         var right = seriesOn.r ? 'r' : seriesOn.z ? 'z' : null;
         if (right === 'r') data.push({ x: o.ds, y: o.r, name: 'Radius', yaxis: 'y2', type: 'scattergl', mode: 'lines',

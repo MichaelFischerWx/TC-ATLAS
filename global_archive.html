@@ -1643,6 +1643,7 @@
                                 <svg class="gra-btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>PNG</button>
                         </div>
                         <div id="gsr-maxnote" class="gsr-maxnote" hidden></div>
+                        <div id="gsr-fnote" class="gsr-maxnote" hidden></div>
                         <div id="gsr-ts" class="gsr-ts"></div>
                         <div id="gsr-ts-empty" class="gsr-ts-empty">Pick a storm on the map or in the list, then a flight.</div>
                     </div>
@@ -1674,9 +1675,19 @@
                             aircraft&rsquo;s own wind, so a real-time value for the same flight can differ.</p>
                         <h4>Reading it</h4>
                         <ul>
-                            <li><b>Pass maxima</b> are the strongest estimate on each eyewall pass. A pass marked
-                                <em>VDM</em> comes from the vortex data message&rsquo;s maximum flight-level wind,
-                                where no flight-level file samples it.</li>
+                            <li><b>Pass maxima</b> are the strongest estimate on each eyewall pass. SEAR often peaks a
+                                little inside the flight-level wind maximum, where the eyewall&rsquo;s lower winds are
+                                strongest, so a pass can sit at a time when the flight-level wind is below its peak; the
+                                hover gives both.</li>
+                            <li><b>Vortex-message passes</b> (open diamonds) come from a vortex data message&rsquo;s
+                                maximum flight-level wind, where no flight-level file samples it well. They are drawn at
+                                the message&rsquo;s center-fix time; the message does not say when or where on the leg the
+                                wind was measured. A value repeated in a mission&rsquo;s later messages counts once. With
+                                only that one number to go on, these passes run a few knots above flight-file passes from
+                                the same hour.</li>
+                            <li><b>Andrew 1992&rsquo;s Air Force files</b> hold about 1-minute values filled in to 10&nbsp;s,
+                                which flattens the peaks; there the vortex messages&rsquo; peak winds are likely closer.
+                                Such flights are labelled in the list.</li>
                             <li><b>Flight-level maxima</b> in the list and tiles count only the storm&rsquo;s core:
                                 within 250&nbsp;km of the center, with the aircraft below 5&nbsp;km. The time series
                                 still draws every observation, including jet-stream winds far from the storm and the
@@ -1801,6 +1812,6 @@
     <script defer src="coast_tiles.js?v=20261111c1"></script>
     <script defer src="global_archive_ghostra.js?v=20261111c1"></script>
     <!-- SEAR tab: boots on switchTab('sear'), like the GHOST tab. -->
-    <script defer src="global_archive_sear.js?v=20261112d2"></script>
+    <script defer src="global_archive_sear.js?v=20261112f1"></script>
 </body>
 </html>

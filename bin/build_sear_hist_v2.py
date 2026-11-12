@@ -224,6 +224,36 @@ def core_mask(h):
         return np.isfinite(fl) & (r <= CORE_R_KM) & (z >= CORE_Z_M[0]) & (z <= CORE_Z_M[1])
 
 
+def interp_score(t, v):
+    """Share of fast-changing 10-s steps that continue the previous step exactly (|2nd difference| < 0.3 kt).
+    A true 10-s file scores 0.10-0.17; one built from ~1-minute values filled in to 10 s scores 0.7-0.95 (Andrew
+    1992's Air Force files, 12 of them, the only ones among 1,249 HRD files; next highest 0.33). None = fewer than
+    50 fast steps to tell from (50 still flags all 12 with no false alarm)."""
+    o = np.argsort(t, kind="stable")
+    t, v = np.asarray(t)[o], np.asarray(v, float)[o]
+    dt, d1 = np.diff(t), np.diff(v)
+    ok = (dt[:-1] == 10) & (dt[1:] == 10) & np.isfinite(d1[:-1]) & np.isfinite(d1[1:])
+    mv = ok & (np.abs(d1[:-1]) > 1) & (np.abs(d1[1:]) > 1)
+    n = int(mv.sum())
+    return None if n < 50 else float((mv & (np.abs(d1[1:] - d1[:-1]) < 0.3)).sum() / n)
+
+
+INTERP_MIN = 0.5
+
+
+def drop_repeats(f):
+    """A vortex message carries its mission's maximum flight-level wind into later messages (Andrew 1992: 170 kt
+    at 15:27, 16:48 and 17:53 UTC on 23 Aug), so a repeat is not a new measurement. Keep the first of each run:
+    same source, same value, each message < 6 h after the previous one. Twin of build_sear_hist.drop_repeats."""
+    f = f.sort_values("t")
+    keep, last = [], {}
+    for p in f.itertuples():
+        prev = last.get(p.src)
+        keep.append(not (prev is not None and prev[1] == p.v_peak_kt and p.t - prev[0] <= pd.Timedelta("6h")))
+        last[p.src] = (p.t, p.v_peak_kt)
+    return f[np.array(keep, dtype=bool)]
+
+
 def split_flights(g):
     """Flights = runs of one (mission, tail) with no gap > GAP_S. Returns a list of index arrays."""
     out = []
@@ -236,6 +266,12 @@ def split_flights(g):
             out.append((str(mis), str(tail), str(src), idx[part], int(t[part[0]]), int(t[part[-1]])))
     out.sort(key=lambda f: f[4])
     return out
+
+
+def pass_peak(p):
+    """MLBT's flight-level peak of the pass (fl_peak_pass_kt); its fl_peak_kt is the wind at SEAR's maximum."""
+    v = getattr(p, "fl_peak_pass_kt", None)
+    return v if v is not None and np.isfinite(v) else p.fl_peak_kt
 
 
 def safe_key(*parts):
@@ -270,14 +306,19 @@ def build(a):
             ffs = ff[core_mask(h)]
             key = safe_key(pd.Timestamp(t0, unit="s").strftime("%Y%m%dT%H%M"), tail, mis)
             z = h.aircraft_height_km.to_numpy(float) * 1000
-            flights.append({"key": key, "mission": mis, "tail": tail, "src": src, "kind": flight_kind(src, tail),
+            isc = interp_score(h.observation_time_utc.astype("int64").to_numpy() // 10**9, ff) if src.startswith("hrd") else None
+            interp = isc is not None and isc >= INTERP_MIN
+            kind = ("HRD flight-level file: about 1-minute values filled in to 10 s, so peaks are understated"
+                    if interp else flight_kind(src, tail))
+            flights.append({"key": key, "mission": mis, "tail": tail, "src": src, "kind": kind,
+                            **({"interp": True} if interp else {}),
                             "t0": t0, "t1": t1, "n": int(len(h)), "n_scored": int(np.isfinite(yy).sum()),
                             "fl_max_kt": int(round(ffs.max())) if len(ffs) else None,
                             "y_max_kt": int(round(np.nanmax(yy))) if np.isfinite(yy).any() else None,
                             "pass_max_kt": None, "n_passes": 0,
                             "z_med_m": int(round(np.nanmedian(z))) if np.isfinite(z).any() else None})
             fl_files.append((key, {"atcf": atcf, "key": key, "mission": mis, "tail": tail, "src": src,
-                                   "kind": flight_kind(src, tail),
+                                   "kind": kind, **({"interp": True} if interp else {}),
                                    "obs": {"t": (h.observation_time_utc.astype("int64") // 10**9).tolist(),
                                            "lat": arr(h.aircraft_latitude, 3), "lon": arr(h.aircraft_longitude, 3),
                                            "fl": arr(ff, 0), "z": arr(z, 0), "p": arr(h.fl_pres_mb, 1),
@@ -319,14 +360,19 @@ def build(a):
                            "r": None if row is None else fnum(row.radius_km, 1),
                            "az": None if row is None else fnum(row.azimuth_deg, 0),
                            "y_kt": fnum(p.y_kt * sc), "y_corr_kt": fnum(p.y_corr_kt * sc), "y_30s_kt": fnum(p.y_30s_kt * sc),
-                           "fl_peak_kt": fnum(p.fl_peak_kt, 0), "rmw_km": fnum(p.rmw_km), "r_over_rmw": fnum(p.r_over_rmw, 2),
+                           # the pass's flight-level peak, and the flight-level wind where SEAR peaks (inside the RMW
+                           # SEAR can peak where the flight-level wind is well below its peak: Katrina 2005 17:44 UTC)
+                           "fl_peak_kt": fnum(pass_peak(p), 0), "fl_at_kt": fnum(p.fl_kt, 0),
+                           "rmw_km": fnum(p.rmw_km), "r_over_rmw": fnum(p.r_over_rmw, 2),
                            "height_km": fnum(getattr(p, "height_km", None), 2)})
         if atcf in FX:
-            f = FX[atcf]
+            f = drop_repeats(FX[atcf])
             if len(L):
                 keep = np.ones(len(f), dtype=bool)
                 for mis, lg in L.groupby("mission"):
-                    t0, t1, fp, ex = lg.t.min(), lg.t.max(), lg.fl_peak_kt.max(), bool(lg.extra.any())
+                    # fp: the flight-level wind where SEAR peaks on each HRD leg (MLBT fl_kt), as this rule has
+                    # always read it -- not the leg's flight-level peak (fl_peak_pass_kt). Deliberately unchanged.
+                    t0, t1, fp, ex = lg.t.min(), lg.t.max(), lg.fl_kt.max(), bool(lg.extra.any())
                     cov = ((f.t >= t0 - pd.Timedelta("2h")) & (f.t <= t1 + pd.Timedelta("2h"))).to_numpy()
                     if ex:
                         cov &= (f.v_peak_kt.to_numpy() <= 1.1 * fp)
@@ -367,10 +413,10 @@ def build(a):
         # the vortex message's maximum flight-level wind, the only flight-level number when no file covers it
         core = fl_arr[core_mask(g)] if len(g) else np.array([])
         flmax, fl_src = (int(round(core.max())), "flight") if len(core) else (None, None)
-        for q in passes:
+        for q in passes:                       # flight passes are inside the core maximum already
             v = q["fl_peak_kt"]
-            if v is not None and (flmax is None or v > flmax):
-                flmax, fl_src = int(round(v)), ("vdm" if q["src"].startswith("fix") else "flight")
+            if q["src"].startswith("fix") and v is not None and (flmax is None or v > flmax):
+                flmax, fl_src = int(round(v)), "vdm"
         era = "extrapolated" if int(atcf[-4:]) < 1997 else "trained"   # SEAR training data start 1997 (ruling 54)
         nm = names.get(atcf, {})
         out = {"atcf": atcf, "name": nm.get("name"), "year": nm.get("year") or int(atcf[-4:]), "sid": nm.get("sid"),
