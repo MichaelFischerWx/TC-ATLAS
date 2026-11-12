@@ -99,7 +99,9 @@
     // above on DEFAULT_LOOKBACK_HOURS.
     if (_IS_TOUCH_INIT) DEFAULT_LOOKBACK_HOURS = 4;
     var FETCH_CONCURRENCY = 5;
-    // Vendored simplified coastline (~0.2 MB gzip). Was the full 9.3 MB 10m
+    // Vendored simplified coastline (~0.2 MB gzip): the track map, and the IR
+    // views' fallback -- they draw full-resolution 10 m tiles (coast_tiles.js,
+    // coastFor) wherever those serve. Was the full 9.3 MB 10m
     // file from raw.githubusercontent.com — rate-limited, silently dropped,
     // and fetched on EVERY page load even though this module only draws it
     // once the Satellite tab activates. ~2 px worst-case deviation on the
@@ -822,6 +824,13 @@
             });
     }
 
+    /* Lines for an IR view: the full-resolution 10 m tiles under it (coast_tiles.js),
+       else the simplified whole-world copy (while tiles load, or for wide views). */
+    function coastFor(vb) {
+        var hc = window.TCCoastTiles ? TCCoastTiles.get(vb.south - 0.3, vb.north + 0.3, vb.west - 0.3, vb.east + 0.3, renderBothPanels) : false;
+        return hc || coastlineData;      // the simplified copy loads when the tab opens
+    }
+
     function drawOverlay(overlayCanvas, overlayCtx, frame) {
         if (!overlayCanvas || !overlayCtx || !frame) return;
         var vb = getViewBounds(frame);
@@ -866,10 +875,11 @@
         }
 
         // ── Coastlines ──
-        if (coastlineData) {
+        var coastSrc = coastFor(vb);
+        if (coastSrc) {
             overlayCtx.strokeStyle = 'rgba(200, 180, 120, 0.6)';
             overlayCtx.lineWidth = 1.5;
-            var features = coastlineData.features || [];
+            var features = coastSrc.features || [];
             for (var f = 0; f < features.length; f++) {
                 var geom = features[f].geometry;
                 if (!geom) continue;

@@ -1616,7 +1616,7 @@
                 + 'time — not cloud-free sky. Step a frame for fuller coverage.';
         }
         if (cx === 0 && cy === 0) { cx = tb.cols / 2; cy = tb.rows / 2; }
-        wireCentres(); wireExpand(); syncCentreKey(); if (irCoast) loadCoast();
+        wireCentres(); wireExpand(); syncCentreKey();
         blit();
     }
 
@@ -1652,9 +1652,10 @@
        per blit — blit() runs on every zoom and pan step, and walking ~100k
        coastline vertices there would make panning stutter.
 
-       Vendored Natural Earth 10m simplified (~0.2 MB gzip), the same asset the
-       realtime viewer uses; the full 9.3 MB 10m file is not worth it at chip
-       scale. */
+       Full-resolution Natural Earth 10 m lines from the 10-degree static tiles
+       (coast_tiles.js: the 1-9 tiles under the chip, tens of KB). The vendored
+       simplified whole-world copy (~0.2 MB gzip) is only the fallback, for when
+       the tiles cannot load; the full 9.3 MB file never is. */
     var coastGeo = null, coastLoading = false, coastSegs = null, coastKey = '';
     var irCoast = true;
 
@@ -1676,14 +1677,26 @@
         return lon;
     }
 
+    /* The lines to draw for this chip: its 10 m tiles once loaded; the simplified
+       copy while they load (if already here) or when tiles cannot serve. */
+    function coastSource() {
+        var b = tb.b, pad = 0.5;
+        var hc = window.TCCoastTiles ? TCCoastTiles.get(b.south - pad, b.north + pad, b.west - pad, b.east + pad, onCoastTiles) : false;
+        if (hc) return { geo: hc, tag: hc.key };
+        if (hc === false && !coastGeo) loadCoast();
+        return coastGeo ? { geo: coastGeo, tag: 'lo' } : null;
+    }
+    function onCoastTiles() { coastSegs = null; coastKey = ''; blit(); }
+
     function buildCoast() {
-        if (!coastGeo || !tb || !tb.b) { coastSegs = []; return; }
-        var b = tb.b, key = [b.south, b.north, b.west, b.east].join(',');
+        var src = (tb && tb.b) ? coastSource() : null;
+        if (!src) { coastSegs = []; coastKey = ''; return; }
+        var b = tb.b, key = [b.south, b.north, b.west, b.east, src.tag].join(',');
         if (coastKey === key && coastSegs) return;
         coastKey = key; coastSegs = [];
         var midLon = (b.west + b.east) / 2, pad = 0.5;
         var sx = tb.cols / (b.east - b.west), sy = tb.rows / (b.north - b.south);
-        var feats = coastGeo.features || [];
+        var feats = src.geo.features || [];
         for (var i = 0; i < feats.length; i++) {
             var gm = feats[i].geometry; if (!gm) continue;
             var lines = gm.type === 'LineString' ? [gm.coordinates]
@@ -1709,7 +1722,6 @@
 
     function drawCoast(ctx, c, r) {
         if (!irCoast || !tb || !tb.b) return;
-        if (!coastGeo) { loadCoast(); return; }
         buildCoast();
         if (!coastSegs.length) return;
         var kx = c.width / r.sw, ky = c.height / r.sh;
@@ -1807,7 +1819,6 @@
             co._wired = true;
             co.addEventListener('change', function () {
                 irCoast = co.checked;
-                if (irCoast) loadCoast();
                 blit();
             });
         }
@@ -2667,8 +2678,8 @@
     function cardOverlay(ctx, X0, Y0, IS, r) {
         var k = IS / r.sw;
         var PX = function (sx) { return X0 + (sx - r.sx) * k; }, PY = function (sy) { return Y0 + (sy - r.sy) * k; };
-        if (irCoast && coastGeo && tb.b) {
-            buildCoast();
+        if (irCoast && tb.b) buildCoast();
+        if (irCoast && tb.b && coastSegs.length) {
             ctx.save();
             ctx.lineJoin = 'round'; ctx.lineCap = 'round';
             [['rgba(0,0,0,.55)', 3.4], ['rgba(255,255,255,.92)', 1.4]].forEach(function (pz) {

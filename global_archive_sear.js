@@ -1416,12 +1416,16 @@
         ctx.imageSmoothingEnabled = false;          // crisp pixels: the data's real resolution
         if (s1x > s0x && s1y > s0y) ctx.drawImage(sat.off, s0x, s0y, s1x - s0x, s1y - s0y, d0x, d0y, d1x - d0x, d1y - d0y);
         var px = g.dpr;
-        // coastlines
-        if (satCoast) {
+        // coastlines: full-resolution 10 m tiles for the window; the simplified copy while
+        // they load, or when the window is too wide for tiles
+        var hiCoast = window.TCCoastTiles ? TCCoastTiles.get(latB - 0.3, latT + 0.3, lonL - 0.3, lonR + 0.3, drawSat) : false;
+        if (hiCoast === false && !satCoast) loadCoast();
+        var coastGeo = hiCoast || satCoast;
+        if (coastGeo) {
             ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
             [['rgba(0,0,0,.55)', 3 * px], ['rgba(255,255,255,.9)', 1.2 * px]].forEach(function (pass) {
                 ctx.strokeStyle = pass[0]; ctx.lineWidth = pass[1]; ctx.beginPath();
-                eachCoastRun(c, halfX, halfY, cl, function (run) {
+                eachCoastRun(coastGeo, c, halfX, halfY, cl, function (run) {
                     for (var i = 0; i < run.length; i += 2) {
                         var X = toCx(run[i]), Y = toCy(run[i + 1]);
                         if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
@@ -1430,7 +1434,7 @@
                 ctx.stroke();
             });
             ctx.restore();
-        } else loadCoast();
+        }
         // range rings
         ctx.save();
         ctx.setLineDash([4 * px, 4 * px]); ctx.lineWidth = 1 * px; ctx.strokeStyle = 'rgba(255,255,255,.45)';
@@ -1525,8 +1529,9 @@
         ctx.strokeText(s, x, y); ctx.fillStyle = '#ffffff'; ctx.fillText(s, x, y);
         ctx.restore();
     }
-    /* Vendored Natural Earth 10m simplified coastline, the asset the GHOST chip and
-       the realtime viewer use. Runs are converted to km about the image center. */
+    /* Coastlines: full-resolution Natural Earth 10 m tiles (coast_tiles.js) under the
+       window; the vendored simplified whole-world copy is the fallback. Runs are
+       converted to km about the image center. */
     var satCoast = null, _coastLoading = false;
     function loadCoast() {
         if (satCoast || _coastLoading) return;
@@ -1535,8 +1540,8 @@
             .then(function (gj) { satCoast = gj; drawSat(); })
             .catch(function () { _coastLoading = false; });
     }
-    function eachCoastRun(c, halfX, halfY, cl, fn) {
-        var feats = satCoast.features || [], padX = halfX * 1.1, padY = halfY * 1.1;
+    function eachCoastRun(geo, c, halfX, halfY, cl, fn) {
+        var feats = geo.features || [], padX = halfX * 1.1, padY = halfY * 1.1;
         for (var i = 0; i < feats.length; i++) {
             var gm = feats[i].geometry; if (!gm) continue;
             var lines = gm.type === 'LineString' ? [gm.coordinates] : gm.type === 'MultiLineString' ? gm.coordinates : null;
@@ -1602,7 +1607,50 @@
         });
         cv.addEventListener('mousemove', satRead);
         cv.addEventListener('mouseleave', function () { $('gsr-sat-read').textContent = ''; });
+        wireSatTouch(cv);
         if (typeof ResizeObserver !== 'undefined') new ResizeObserver(function () { if (view === 'sat') drawSat(); }).observe($('gsr-sat'));
+    }
+
+    /* Touch: two-finger pinch sets the zoom (the window's radius scales with the
+       finger spread), one finger reads the brightness temperature under it, and a
+       double tap resets the zoom like a double click. Mouse input keeps the wheel. */
+    function wireSatTouch(cv) {
+        var pts = {}, pinch = null, lastTap = null, raf = 0;
+        function list() { return Object.keys(pts).map(function (k) { return pts[k]; }); }
+        function spread() { var a = list(); return Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
+        function redraw() { if (!raf) raf = requestAnimationFrame(function () { raf = 0; drawSat(); }); }
+        cv.addEventListener('pointerdown', function (e) {
+            if (e.pointerType === 'mouse') return;
+            pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+            try { cv.setPointerCapture(e.pointerId); } catch (err) { }
+            var n = list().length;
+            if (n === 2 && sat.R && sat.tb) { pinch = { d: Math.max(spread(), 1), R: sat.R }; lastTap = null; return; }
+            if (n !== 1) return;
+            var now = Date.now();
+            if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+                lastTap = null;
+                if (passMode()) sat.R = passR(passMode()); else if (flight) sat.R = satDefaultR(); else return;
+                drawSat(); return;
+            }
+            lastTap = { t: now, x: e.clientX, y: e.clientY };
+            satRead(e);
+        });
+        cv.addEventListener('pointermove', function (e) {
+            if (!(e.pointerId in pts)) return;
+            pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+            if (pinch && list().length >= 2) {
+                var d = spread(); if (d < 8) return;
+                sat.R = Math.max(30, Math.min(1100, pinch.R * pinch.d / d));
+                redraw();
+            } else if (!pinch) satRead(e);
+        });
+        function lift(e) {
+            if (!(e.pointerId in pts)) return;
+            delete pts[e.pointerId];
+            if (list().length < 2) pinch = null;
+        }
+        cv.addEventListener('pointerup', lift);
+        cv.addEventListener('pointercancel', lift);
     }
 
     // ══════════════════════════════════════════════════════════════

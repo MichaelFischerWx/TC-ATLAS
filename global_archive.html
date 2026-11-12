@@ -1685,7 +1685,8 @@
                                 Storm Detail) nearest a time: the flight&rsquo;s strongest pass, or any time you click
                                 on the chart. The flight is drawn by each observation&rsquo;s distance and bearing from
                                 the storm center, placed on the image&rsquo;s best-track center, so the pattern lines up
-                                with the storm rather than with the ground.</li>
+                                with the storm rather than with the ground. Scroll or pinch to zoom; double-click or
+                                double-tap to reset.</li>
                             <li><b>Best track</b> is drawn for comparison only. SEAR is not fitted to it.</li>
                             <li><b>SFMR</b>, where shown, is a shape and sanity reference only. It is not what
                                 SEAR is calibrated or verified against; dropsondes are.</li>
@@ -1795,8 +1796,10 @@
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
-    <script defer src="global_archive_ghostra.js?v=20261101n1"></script>
+    <!-- Full-resolution 10 m coastline tiles for the GHOST and SEAR satellite canvases. -->
+    <script defer src="coast_tiles.js?v=20261111c1"></script>
+    <script defer src="global_archive_ghostra.js?v=20261111c1"></script>
     <!-- SEAR tab: boots on switchTab('sear'), like the GHOST tab. -->
-    <script defer src="global_archive_sear.js?v=20261111s5"></script>
+    <script defer src="global_archive_sear.js?v=20261111c1"></script>
 </body>
 </html>
