@@ -2203,7 +2203,7 @@
             c = null;
         }
         if (c && c.s1 != null && c.s2 != null && c.f10 != null && p.fl_peak_kt != null) {
-            L.push('FL ' + Math.round(p.fl_peak_kt) + ' kt \u00d7 ' + c.s1.toFixed(2) + ' (to 500 m) \u00d7 ' + c.s2.toFixed(2) +
+            L.push('FL ' + Math.round(p.fl_peak_kt) + ' kt \u00d7 ' + c.s1.toFixed(2) + ' (to 500 m, radar scale) \u00d7 ' + c.s2.toFixed(2) +
                    ' (to 150 m) \u00d7 ' + c.f10.toFixed(3) + ' (to 10 m) = ' + Math.round(p.y_kt) + ' kt' +
                    (c.corr != null && p.y_corr_kt != null ? ' \u00d7 ' + c.corr.toFixed(3) + ' (TDR resolution, RMW ' + Math.round(p.rmw_km) + ' km) = ' + Math.round(p.y_corr_kt) + ' kt' : ''));
         }
