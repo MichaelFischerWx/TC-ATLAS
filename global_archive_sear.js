@@ -114,8 +114,13 @@
     function passV(p) { return p.y_corr_kt != null ? p.y_corr_kt : p.y_kt; }
 
     // ── data ─────────────────────────────────────────────────────
+    /* Record files (ROOT/...) are revalidated on every load: the CDN sends them with a
+       one-day max-age, and a republished record (the 2026-11-11 HRD re-score changed
+       Andrew 1992 from 24 flights to 18) must not sit behind a phone's cached copy. An
+       unchanged file costs a 304. API calls keep the browser's default. */
     function fetchJSON(url) {
-        return fetch(url).then(function (r) {
+        var rec = url.indexOf(ROOT + '/') === 0;
+        return fetch(url, rec ? { cache: 'no-cache' } : undefined).then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + url);
             return r.text().then(function (t) {
                 try { return JSON.parse(t); } catch (e) {

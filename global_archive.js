@@ -12889,13 +12889,14 @@ function _gaSearFetch() {
     _gaSear = null; _gaSearAtcf = atcf;
     if (!atcf) return;
     if (!_gaSearIndexReq) {
-        _gaSearIndexReq = fetch(_GA_SEAR_CDN + 'index.json').then(function (r) { return r.ok ? r.json() : null; })
+        _gaSearIndexReq = fetch(_GA_SEAR_CDN + 'index.json', { cache: 'no-cache' }).then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) { _gaSearIndex = (j && j.storms) || {}; return _gaSearIndex; })
             .catch(function () { _gaSearIndex = {}; return _gaSearIndex; });
     }
     _gaSearIndexReq.then(function (ix) {
         if (!ix[atcf] || _gaSearAtcf !== atcf) return null;   // no CDN probe for storms without a record
-        return fetch(_GA_SEAR_CDN + atcf + '.json').then(function (r) { return r.ok ? r.json() : null; });
+        // no-cache = revalidate (304 when unchanged): the files carry a one-day max-age and get republished
+        return fetch(_GA_SEAR_CDN + atcf + '.json', { cache: 'no-cache' }).then(function (r) { return r.ok ? r.json() : null; });
     }).then(function (j) {
         if (!j || _gaSearAtcf !== atcf) return;
         _gaSear = j;
