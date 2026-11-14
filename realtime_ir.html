@@ -402,7 +402,7 @@
                         <button id="ir-detail-layers-btn" class="ir-detail-layers-btn" type="button"
                                 onclick="window._irToggleDetailLayers()"
                                 aria-haspopup="true" aria-expanded="false"
-                                title="Overlay GFS environmental analyses on this view">
+                                title="Overlay storm-total rain and GFS environmental analyses on this view">
                             <svg viewBox="0 0 24 24" aria-hidden="true">
                                 <polygon points="12,3 21,8 12,13 3,8"/>
                                 <path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/>
@@ -411,6 +411,7 @@
                             <span id="ir-detail-layers-count" class="ir-detail-layers-count" style="display:none;">0</span>
                         </button>
                         <div id="ir-detail-layers-menu" class="ir-detail-layers-menu" role="menu" style="display:none;">
+                            <div id="ir-dl-rain" class="ir-dl-rain"></div>
                             <div class="ir-dl-head">Environmental analyses<span class="ir-dl-valid" id="ir-dl-valid"></span></div>
                             <div id="ir-dl-groups" class="ir-dl-groups"><div class="ir-dl-empty">Loading&hellip;</div></div>
                             <div class="ir-dl-opacity">

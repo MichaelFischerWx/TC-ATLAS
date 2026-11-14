@@ -1088,6 +1088,14 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-dl-row input { margin: 0; cursor: pointer; accent-color: var(--um-green); flex: 0 0 auto; }
 .ir-dl-empty { font-size: 0.75rem; color: #94a3b8; padding: 6px 4px; }
+/* Storm-total rain (PARDIG) section above the GFS analyses. */
+.ir-dl-rain { padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
+.ir-dl-rain .ir-dl-group { margin-top: 0; }
+.ir-dl-row.is-disabled { cursor: default; color: #7c8aa0; }
+.ir-dl-row.is-disabled:hover { background: none; }
+.ir-dl-sub { font-size: 0.625rem; color: #94a3b8; padding: 0 4px 0 28px; line-height: 1.35; }
+.ir-raint-meta { font-size: 0.5625rem; color: #c7d2e0; line-height: 1.35; margin-top: 3px; }
+.ir-raint-item .ir-rain-legend-src { pointer-events: auto; }
 .ir-dl-opacity {
     display: flex; align-items: center; gap: 8px;
     margin-top: 8px; padding-top: 8px;

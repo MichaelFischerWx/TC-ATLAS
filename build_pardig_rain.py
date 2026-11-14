@@ -19,7 +19,10 @@ Each run:
      (mosaic-v3 keeps 54 h), so the global map shows IR from the rain's time
      underneath instead of the live IR hours later;
   4. rewrites <prefix>/rain/frames.json when anything changed and prunes frames
-     older than ARCHIVE_HOURS.
+     older than ARCHIVE_HOURS;
+  5. updates the per-storm rain totals the storm cards draw
+     (pardig_storm_totals.py -> <prefix>/storms/<ATCF_ID>/) when frames landed,
+     and hourly for new track fixes.
 
 Index encoding (frames.json "encoding"):
   0 = no data, 1 = dry (< DRY mm/h), 255 = at the model's 75 mm/h cap,
@@ -32,6 +35,7 @@ Usage:
   python3 build_pardig_rain.py                 # publish to R2 (needs R2 env)
   python3 build_pardig_rain.py --out DIR       # write tiles locally, no R2
   python3 build_pardig_rain.py --frames 4 --out DIR
+  python3 build_pardig_rain.py --storm WP312026  # also (back)fill one storm's total
 """
 import argparse
 import concurrent.futures as _cf
@@ -108,10 +112,11 @@ def _get(url, timeout=120, tries=3):
 
 
 # ── Source listing ────────────────────────────────────────────────────────
-def list_source_frames(hours=48):
+def list_source_frames(hours=48, start=None):
     """{src_ts: posted_iso} for frames with a `success` marker in the last
-    `hours` (src_ts like 20261114T103000). Posted = the marker's timeCreated."""
-    start = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y%m%dT%H%M%S")
+    `hours`, or since `start` (a datetime) when given (src_ts like
+    20261114T103000). Posted = the marker's timeCreated."""
+    start = (start or (datetime.now(timezone.utc) - timedelta(hours=hours))).strftime("%Y%m%dT%H%M%S")
     q = {"prefix": SRC_PREFIX, "startOffset": SRC_PREFIX + start,
          "matchGlob": SRC_PREFIX + "*/success",
          "fields": "items(name,timeCreated),nextPageToken"}
@@ -366,6 +371,9 @@ def main():
     ap.add_argument("--frames", type=int, default=KEEP_FRAMES, help="newest N frames to keep/build")
     ap.add_argument("--out", help="write tiles + frames.json under this dir instead of R2")
     ap.add_argument("--workers", type=int, default=3)
+    ap.add_argument("--storms", action="store_true", help="update storm totals even with no new frames")
+    ap.add_argument("--no-storms", action="store_true", help="skip storm totals")
+    ap.add_argument("--storm", help="build this ATCF id's total regardless of recency (backfill/test)")
     args = ap.parse_args()
     t_start = time.time()
 
@@ -426,6 +434,19 @@ def main():
     else:
         log("frames.json unchanged")
 
+    # Per-storm rain totals for the storm cards (pardig_storm_totals.py). They
+    # change only when frames land or a new track fix extends a storm, so run
+    # on a build, and hourly to pick up fixes (the storm list comes from the
+    # API, uncached). A failure here never blocks the map frames above.
+    totals_failed = False
+    if (todo or datetime.now(timezone.utc).minute < 10 or args.storms or args.storm) and not args.no_storms:
+        try:
+            import pardig_storm_totals
+            pardig_storm_totals.run(out_dir=args.out, only=args.storm, days=30 if args.storm else 21)
+        except Exception as e:
+            totals_failed = True
+            log(f"storm totals FAILED: {e!r}")
+
     if not args.out:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=ARCHIVE_HOURS)).strftime("%Y%m%d%H%M")
         keep = set(frames)
@@ -434,7 +455,7 @@ def main():
                 n = r2_delete_prefix(f"{R2_PREFIX}/{PRODUCT}/{t}/")
                 log(f"  pruned {t} ({n} objects)")
     log(f"done in {time.time() - t_start:.1f}s")
-    return 1 if failed else 0
+    return 1 if (failed or totals_failed) else 0
 
 
 if __name__ == "__main__":

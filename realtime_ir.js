@@ -6532,8 +6532,9 @@
      *  The rain is a custom GL layer with no source of its own, so it rides
      *  on an empty GeoJSON source + invisible layer that carry `attribution`
      *  (MapLibre lists the attributions of sources in use). */
-    function _rainAttribution(on) {
-        var gl = map && map._gl;
+    function _rainAttribution(on, m) {
+        m = m || map;
+        var gl = m && m._gl;
         if (!gl || !gl.getSource) return;
         try {
             if (on && !gl.getSource('rain-credit')) {
@@ -27814,11 +27815,289 @@
             }
         });
         _detailEnvActive = {};
+        _rainTotalDrop();
         _updateDetailLayersCount();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  Storm-total rain on the storm card (Google DeepMind PARDIG, CC BY 4.0).
+    //  The PARDIG job (pardig_storm_totals.py) sums the 15-min rain rate
+    //  within 500 km of the storm center, center interpolated along the
+    //  track, into cdn.tcatlas.org/pardig-v1/storms/<ID>/: index.json (grid
+    //  edges, encoding, coverage, series, credit) and an 8-bit index PNG on
+    //  the 0.1° grid (north-up, equirectangular). Drawn from the card's
+    //  Layers menu as an image overlay re-projected to Mercator here (an
+    //  equirectangular image stretched over Mercator bounds lands degrees
+    //  off); hover reads the same grid. The rain is 2-8 h old when posted,
+    //  so the legend always states the period it covers.
+    var _RAINT_ROOT = 'https://cdn.tcatlas.org/pardig-v1/storms/';
+    // The rain-rate ramp (_RAIN_COLORS), re-binned for totals; white = >= 1500 mm.
+    var _RAINT_EDGES = [5, 10, 15, 20, 30, 40, 50, 65, 80, 100, 125, 150, 200, 250, 300, 400, 500, 600, 750, 1000, 1250, 1500];
+    var _RAINT_TICKS = [[5, 0], [20, 3], [50, 6], [100, 9], [250, 13], [1000, 19]];   // clear at the 150-px phone legend
+    var _RAINT_CREDIT_HTML = '<a href="https://developers.google.com/weathernext/guides/pardig" target="_blank" rel="noopener">PARDIG</a>'
+        + ' &copy; Google DeepMind, experimental &middot; <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>'
+        + ' &middot; summed by <span style="white-space:nowrap">TC-ATLAS</span>'
+        + ' &middot; <a href="about.html#deepmind-credits" target="_blank" rel="noopener">credits</a>';
+    var _RAINT_EXPORT_CREDIT = 'Rain total: PARDIG © Google DeepMind, CC BY 4.0, summed by TC-ATLAS';
+    // status: null (not asked) | 'loading' | 'ok' | 'none' (no total yet) | 'error'
+    var _detailRainT = { sid: null, status: null, meta: null, idx: null, overlays: [], on: false, fitted: false, req: 0 };
+
+    function _rainTotalIdxToMm(i, enc) {
+        enc = enc || {};
+        var lo = enc.min_mm || 1, hi = enc.max_mm || 3000, n = enc.bins || 253;
+        if (i <= 0) return null;          // outside the swath
+        if (i === 1) return 0;            // inside, below min_mm
+        if (i >= 255) return hi;
+        return lo * Math.pow(hi / lo, (i - 2 + 0.5) / n);
+    }
+    function _rainTotalLut(enc) {
+        var lut = new Uint8ClampedArray(256 * 4);
+        for (var i = 2; i < 256; i++) {
+            var mm = _rainTotalIdxToMm(i, enc), k = -1;
+            for (var j = 0; j < _RAINT_EDGES.length; j++) if (mm >= _RAINT_EDGES[j]) k = j;
+            if (k >= 0) lut.set(_RAIN_COLORS[k], i * 4);
+        }
+        return lut;
+    }
+    /** Mercator-warped canvas for the total: each output row samples the
+     *  source row under its latitude (nearest). */
+    function _rainTotalPieces(meta, idx) {
+        var g = meta.grid, nx = g.nx, ny = g.ny, res = g.res_deg || 0.1;
+        var lut = _rainTotalLut(meta.encoding), M = 85.05;
+        var latN = Math.min(g.lat_n, M), latS = Math.max(g.lat_s, -M);
+        function my(lat) { return Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)); }
+        var yN = my(latN), yS = my(latS);
+        var absMin = (latS <= 0 && latN >= 0) ? 0 : Math.min(Math.abs(latS), Math.abs(latN));
+        var dyMin = (res * Math.PI / 180) / Math.cos(absMin * Math.PI / 180);
+        var H = Math.max(1, Math.min(4096, Math.ceil((yN - yS) / dyMin)));
+        var rowOf = new Int32Array(H);
+        for (var r = 0; r < H; r++) {
+            var y = yN - (r + 0.5) / H * (yN - yS);
+            var lat = (2 * Math.atan(Math.exp(y)) - Math.PI / 2) * 180 / Math.PI;
+            rowOf[r] = Math.max(0, Math.min(ny - 1, Math.floor((g.lat_n - lat) / res)));
+        }
+        var cv = document.createElement('canvas'); cv.width = nx; cv.height = H;
+        var cx = cv.getContext('2d'), im = cx.createImageData(nx, H), d = im.data;
+        for (var r = 0; r < H; r++) {
+            var so = rowOf[r] * nx, o = r * nx * 4;
+            for (var c = 0; c < nx; c++, o += 4) {
+                var q = idx[so + c] * 4;
+                d[o] = lut[q]; d[o + 1] = lut[q + 1]; d[o + 2] = lut[q + 2]; d[o + 3] = lut[q + 3];
+            }
+        }
+        cx.putImageData(im, 0, 0);
+        // A swath over the antimeridian stays ONE image: its longitudes are
+        // shifted so the center lies inside ±180 (MapLibre picks the image's
+        // tile from the center) and the edge may run past ±180. Two halves
+        // can't meet: the facade insets image edges to ±179.99, and that
+        // strip of IR read as a dark seam through the rain.
+        var w = g.lon_w, e = g.lon_e, mid = (w + e) / 2;
+        if (mid >= 180) { w -= 360; e -= 360; } else if (mid < -180) { w += 360; e += 360; }
+        return [{ url: cv.toDataURL('image/png'), bounds: [[latS, w], [latN, e]], wraps: w < -180 || e > 180 }];
+    }
+    /** Fetch index.json + the index PNG for a storm (once per storm). */
+    function _rainTotalLoad(sid) {
+        var R = _detailRainT;
+        if (R.sid === sid && R.promise && R.status !== 'error') return R.promise;
+        var req = ++R.req;
+        R.sid = sid; R.status = 'loading'; R.meta = null; R.idx = null; R.fitted = false;
+        var base = _RAINT_ROOT + encodeURIComponent(sid) + '/', meta = null;
+        R.promise = _rtFetch(base + 'index.json', { cache: 'no-store' }, 15000)
+            .then(function (r) {
+                if (r.status === 404 || r.status === 403) return null;
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (m) {
+                meta = m;
+                if (!m || !m.png || !m.grid) return null;
+                return fetch(base + m.png, { mode: 'cors' }).then(function (r) {
+                    if (!r.ok) throw new Error('png HTTP ' + r.status);
+                    return r.blob();
+                }).then(function (b) {
+                    return createImageBitmap(b, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+                }).then(function (bmp) {
+                    var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+                    var cx = c.getContext('2d', { willReadFrequently: true });
+                    cx.drawImage(bmp, 0, 0);
+                    var px = cx.getImageData(0, 0, bmp.width, bmp.height).data;
+                    var idx = new Uint8Array(bmp.width * bmp.height);
+                    for (var i = 0, j = 0; i < idx.length; i++, j += 4) idx[i] = px[j];
+                    if (bmp.width !== m.grid.nx || bmp.height !== m.grid.ny) throw new Error('grid size mismatch');
+                    return idx;
+                });
+            })
+            .then(function (idx) {
+                if (req !== _detailRainT.req) return;
+                R.meta = meta; R.idx = idx || null;
+                R.status = idx ? 'ok' : 'none';
+            })
+            .catch(function (e) {
+                if (req !== _detailRainT.req) return;
+                R.status = 'error';
+                console.warn('[RT Monitor] storm rain total:', e);
+            })
+            .then(function () { if (req === _detailRainT.req) _renderDetailRainRow(); });
+        return R.promise;
+    }
+    function _rainTotalProbe() {
+        if (!currentStormId) return;
+        if (_detailRainT.sid !== currentStormId) {
+            _rainTotalDrop();
+            _rainTotalLoad(currentStormId);
+        }
+        _renderDetailRainRow();
+    }
+    function _rainTotalShow() {
+        var R = _detailRainT;
+        if (!detailMap || R.status !== 'ok' || R.on) return;
+        var pieces = _rainTotalPieces(R.meta, R.idx);
+        R.overlays = pieces.map(function (p) {
+            var ov = L.imageOverlay(p.url, p.bounds, { opacity: _detailEnvOpacity, crisp: true, interactive: false });
+            if (p.wraps && window.LFLET_GL && ov._coords) {
+                // Past ±180 on purpose (see _rainTotalPieces): skip the facade's clamp.
+                var b = p.bounds;
+                ov._coords = function () { return [[b[0][1], b[1][0]], [b[1][1], b[1][0]], [b[1][1], b[0][0]], [b[0][1], b[0][0]]]; };
+            }
+            return ov.addTo(detailMap);
+        });
+        R.on = true;
+        _rainAttribution(true, detailMap);
+        // Grayscale IR under the rain colors (Claude IR shares their hues),
+        // as the global map's Rain mode does; restored when the total goes off.
+        if (_irColormap !== 'graylinear') { R.prevCmap = _irColormap; _rtSetIRColormap('graylinear'); }
+        if (!R.fitted) {
+            R.fitted = true;
+            var g = R.meta.grid;
+            try { detailMap.fitBounds([[g.lat_s, g.lon_w], [g.lat_n, g.lon_e]], { padding: [28, 28] }); } catch (e) {}
+        }
+        _ga('rt_detail_rain_total', { on: true, storm: R.sid, frames: R.meta.n_frames });
+    }
+    /** Take the overlay off (data stays cached for the storm). */
+    function _rainTotalDrop() {
+        var R = _detailRainT;
+        if (detailMap) R.overlays.forEach(function (o) { try { detailMap.removeLayer(o); } catch (x) {} });
+        R.overlays = [];
+        if (R.on) { R.on = false; _rainAttribution(false, detailMap); }
+        // Put the IR colormap back unless it was changed while the total was on.
+        if (R.prevCmap && _irColormap === 'graylinear') _rtSetIRColormap(R.prevCmap);
+        R.prevCmap = null;
+    }
+    /** Keep the card's colorbar stack above the map attribution (which now
+     *  carries the rain credit) instead of over it. */
+    var _detailCbarObs = null;
+    function _detailPlaceCbars() {
+        var box = document.getElementById('ir-detail-env-cbars');
+        var gl = detailMap && detailMap._gl;
+        if (!box || !gl || box.style.display === 'none') return;
+        var a = gl.getContainer().querySelector('.maplibregl-ctrl-attrib');
+        if (a && !a._cbarWatched && typeof ResizeObserver !== 'undefined') {
+            a._cbarWatched = true;
+            if (!_detailCbarObs) _detailCbarObs = new ResizeObserver(function () { setTimeout(_detailPlaceCbars, 30); });
+            _detailCbarObs.observe(a);
+        }
+        var ar = _rtShownRect(a), p = box.offsetParent;
+        box.style.bottom = '';
+        var br = box.getBoundingClientRect();
+        if (!ar || !p || ar.left > br.right || ar.right < br.left) return;
+        box.style.bottom = Math.max(10, Math.round(p.getBoundingClientRect().bottom - ar.top + 6)) + 'px';
+    }
+    window._irDetailToggleRainTotal = function () {
+        var R = _detailRainT;
+        if (R.on) {
+            _rainTotalDrop();
+            _ga('rt_detail_rain_total', { on: false, storm: R.sid });
+        } else if (R.sid === currentStormId && R.status === 'ok') {
+            _rainTotalShow();
+        } else {
+            _rainTotalLoad(currentStormId).then(function () {
+                if (_detailRainT.status === 'ok' && !_detailRainT.on) _rainTotalShow();
+                _updateDetailLayersCount(); _renderDetailRainRow();
+            });
+        }
+        _updateDetailLayersCount();
+        _renderDetailRainRow();
+    };
+    window._rainTotalStats = function () {
+        var R = _detailRainT;
+        return { sid: R.sid, status: R.status, on: R.on, overlays: R.overlays.length, fitted: R.fitted,
+                 frames: R.meta && R.meta.n_frames, grid: R.meta && R.meta.grid };
+    };
+    /** "6 Nov 06Z – 11 Nov 15Z" for the frames summed. */
+    function _rainTotalPeriod(m) {
+        return '<span style="white-space:nowrap">' + fmtCycle(m.first_frame) + '</span> – '
+            + '<span style="white-space:nowrap">' + fmtCycle(m.last_frame) + '</span>';
+    }
+    function _rainTotalRamp() {
+        var n = _RAIN_COLORS.length;
+        return 'linear-gradient(to right,' + _RAIN_COLORS.map(function (c, i) {
+            return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (c[3] / 255).toFixed(2) + ') ' + Math.round(i / (n - 1) * 100) + '%';
+        }).join(',') + ')';
+    }
+    function _renderDetailRainRow() {
+        var box = document.getElementById('ir-dl-rain');
+        if (!box) return;
+        var R = _detailRainT, mine = R.sid === currentStormId, sub, dis = false;
+        if (mine && R.status === 'ok') {
+            sub = _rainTotalPeriod(R.meta) + ' · peak ' + Math.round(R.meta.max_mm) + ' mm';
+        } else if (mine && R.status === 'none') {
+            sub = 'Not available for this storm yet'; dis = true;
+        } else if (mine && R.status === 'error') {
+            sub = 'Couldn’t load the rain total';
+        } else {
+            sub = 'Checking…'; dis = true;
+        }
+        box.innerHTML = '<div class="ir-dl-group">Rain · Google DeepMind PARDIG</div>'
+            + '<label class="ir-dl-row' + (dis ? ' is-disabled' : '') + '">'
+            + '<input type="checkbox"' + (R.on && mine ? ' checked' : '') + (dis ? ' disabled' : '')
+            + ' onchange="window._irDetailToggleRainTotal()"><span>Storm-total rain</span>'
+            + '<span class="ir-menu-ramp" aria-hidden="true" style="background:' + _rainTotalRamp() + '"></span></label>'
+            + '<div class="ir-dl-sub">' + sub + '</div>';
+    }
+    /** Legend item for the card's colorbar stack. */
+    function _rainTotalLegendHtml() {
+        var R = _detailRainT;
+        if (!R.on || !R.meta) return '';
+        var m = R.meta, n = _RAIN_COLORS.length, sw = '', ticks = '';
+        for (var i = 0; i < n; i++) {
+            var c = _RAIN_COLORS[i];
+            sw += '<span style="background:rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (c[3] / 255).toFixed(2) + ')"></span>';
+        }
+        _RAINT_TICKS.forEach(function (t, k) {
+            ticks += '<span style="left:' + (t[1] / n * 100).toFixed(1) + '%">' + t[0] + '</span>';
+        });
+        var age = m.final ? 'complete' : 'newest rain ' + _rainAge(m.last_frame) + ' ago';
+        var xBtn = '<button class="env-cbar-x" onclick="window._irDetailToggleRainTotal()" '
+            + 'title="Remove storm-total rain" aria-label="Remove storm-total rain">&times;</button>';
+        return '<div class="ir-detail-cbar-item ir-raint-item" title="Rain within ' + Math.round(m.radius_km || 500)
+            + ' km of the center, summed over every 15-min PARDIG frame. PARDIG caps rain rate at '
+            + (m.rate_cap_mm_h || 75) + ' mm/h, so totals under the most intense eyewall rain run low.">'
+            + '<div class="ir-detail-cbar-head"><span>Storm-total rain</span><span class="ir-detail-cbar-units">mm' + xBtn + '</span></div>'
+            + '<div class="ir-rain-legend-bar">' + sw + '</div>'
+            + '<div class="ir-rain-legend-ticks">' + ticks + '</div>'
+            + '<div class="ir-raint-meta">Within ' + Math.round(m.radius_km || 500) + ' km of the center · '
+            + _rainTotalPeriod(m) + ' · ' + age + '</div>'
+            + '<div class="ir-rain-legend-src">' + _RAINT_CREDIT_HTML + '</div></div>';
+    }
+    /** Hover text for the total at (lat, lon), or null. */
+    function _rainTotalAt(lat, lon) {
+        var R = _detailRainT;
+        if (!R.on || !R.meta || !R.idx) return null;
+        var g = R.meta.grid, res = g.res_deg || 0.1;
+        var x = ((lon - g.lon_w) % 360 + 360) % 360;
+        var col = Math.floor(x / res), row = Math.floor((g.lat_n - lat) / res);
+        if (col < 0 || col >= g.nx || row < 0 || row >= g.ny) return null;
+        var i = R.idx[row * g.nx + col];
+        if (!i) return null;
+        if (i === 1) return '&lt; 1 mm';
+        if (i === 255) return '&ge; ' + Math.round(_rainTotalIdxToMm(255, R.meta.encoding)) + ' mm';
+        var mm = _rainTotalIdxToMm(i, R.meta.encoding);
+        return '≈ ' + (mm < 10 ? mm.toFixed(1) : Math.round(mm)) + ' mm';
     }
 
     function _detailSetEnvOpacity(v) {
         _detailEnvOpacity = Math.max(0, Math.min(1, v));
+        _detailRainT.overlays.forEach(function (o) { if (o.setOpacity) o.setOpacity(_detailEnvOpacity); });
         Object.keys(_detailEnvActive).forEach(function (n) {
             var e = _detailEnvActive[n];
             if (!e || !e.overlays) return;
@@ -27933,7 +28212,7 @@
 
     function _updateDetailLayersCount() {
         var names = Object.keys(_detailEnvActive);
-        var n = names.length;
+        var n = names.length + (_detailRainT.on ? 1 : 0);
         var badge = document.getElementById('ir-detail-layers-count');
         if (badge) {
             badge.textContent = n;
@@ -27973,9 +28252,11 @@
         var active = Object.keys(_detailEnvActive)
             .map(function (k) { return _detailEnvActive[k]; })
             .filter(function (e) { return e && e.overlayKind !== 'wind'; });
-        if (!active.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+        var rainHtml = _rainTotalLegendHtml();
+        if (!active.length && !rainHtml) { box.style.display = 'none'; box.innerHTML = ''; return; }
+        setTimeout(_detailPlaceCbars, 0);
         box.style.display = '';
-        var html = '';
+        var html = rainHtml;
         for (var i = 0; i < active.length; i++) {
             var L_ = active[i].layer;
             var lvls = L_.levels, lvlColors = L_.level_colors;
@@ -28063,6 +28344,8 @@
             var nd = span >= 50 ? 0 : (span >= 10 ? 1 : 2);
             envLines.push('<b>' + L_.title + ':</b> ' + v.toFixed(nd) + ' ' + L_.units);
         }
+        var rainT = _rainTotalAt(lat, lon);
+        if (rainT) envLines.unshift('<b>Storm-total rain:</b> ' + rainT);
         var pt = e.originalEvent;
         var wantTb = (typeof productMode === 'undefined' || productMode === 'eir');
         var seq = ++_envHoverSeq;
@@ -28077,9 +28360,10 @@
             lines = lines.concat(envLines);
             var tip = _envHoverTipEl();
             if (!lines.length) { tip.style.display = 'none'; return; }
+            var lonW = ((lon + 180) % 360 + 360) % 360 - 180;   // the map wraps past the dateline
             lines.push('<span style="color:#94a3b8;font-size:0.62rem;">'
                 + lat.toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S')
-                + ' ' + Math.abs(lon).toFixed(1) + '°' + (lon >= 0 ? 'E' : 'W') + '</span>');
+                + ' ' + Math.abs(lonW).toFixed(1) + '°' + (lonW >= 0 ? 'E' : 'W') + '</span>');
             tip.innerHTML = lines.join('<br>');
             if (pt) {
                 tip.style.left = (pt.clientX + 14) + 'px';
@@ -28103,6 +28387,7 @@
     window._irDetailSetOpacity = function (v) { _detailSetEnvOpacity(parseFloat(v)); };
 
     function _renderDetailLayersMenu() {
+        _rainTotalProbe();
         var box = document.getElementById('ir-dl-groups');
         if (!box) return;
         var all = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
@@ -35785,6 +36070,8 @@
         if (eyeEl && eyeEl.style.display !== 'none' && eyeEl.textContent) {
             lines.push(eyeEl.textContent.trim());
         }
+        // CC BY: a saved card with the PARDIG total on carries its credit.
+        if (_detailRainT.on) lines.push(_RAINT_EXPORT_CREDIT);
         return lines;
     }
 

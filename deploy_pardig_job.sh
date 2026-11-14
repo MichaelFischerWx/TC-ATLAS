@@ -6,7 +6,8 @@
 # 15 min, the newest ~2 h old on arrival). The job polls every 10 min, builds
 # only frames R2 does not have, pairs each with the archived IR mosaic frame
 # nearest in time, rewrites pardig-v1/rain/frames.json and prunes frames older
-# than 72 h. Cost: ~144 short runs/day (~5-10 s each) + 4 batch builds/day
+# than 72 h, then updates the per-storm rain totals (pardig-v1/storms/<ID>/)
+# that the storm cards draw. Cost: ~144 short runs/day (~5-10 s each) + 4 batch builds/day
 # (~1-2 min each) at 1 vCPU / 2 GiB, roughly $1-2/mo; R2 upload ~40 MB/batch.
 #
 # Usage:  ./deploy_pardig_job.sh            # build + deploy + schedule
@@ -26,11 +27,11 @@ SCHEDULE="3-59/10 * * * *"
 IMAGE="gcr.io/${PROJECT}/${JOB_NAME}:latest"
 
 if [[ "${1:-}" != "--no-build" ]]; then
-    # Stage a two-file build context (the repo root is far too big to upload).
+    # Stage a three-file build context (the repo root is far too big to upload).
     CTX="$(mktemp -d -t tc-atlas-pardig-ctx.XXXXXX)"
     trap 'rm -rf "${CTX}"' EXIT
     cp "${SCRIPT_DIR}/Dockerfile.pardig" "${CTX}/Dockerfile"
-    cp "${SCRIPT_DIR}/build_pardig_rain.py" "${CTX}/"
+    cp "${SCRIPT_DIR}/build_pardig_rain.py" "${SCRIPT_DIR}/pardig_storm_totals.py" "${CTX}/"
     echo "Building ${IMAGE}..."
     gcloud builds submit --tag "${IMAGE}" "${CTX}"
 fi
