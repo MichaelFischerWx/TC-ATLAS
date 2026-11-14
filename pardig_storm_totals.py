@@ -336,12 +336,12 @@ class Store:
         if self.out:
             d = self._path(base)
             for f in os.listdir(d):
-                if f.startswith("total-") and f.endswith(".png") and f not in keep:
+                if f.endswith(".png") and f not in keep:
                     os.remove(os.path.join(d, f))
             return
-        resp = pr.r2().list_objects_v2(Bucket=pr.bucket(), Prefix=base + "/total-", MaxKeys=1000)
+        resp = pr.r2().list_objects_v2(Bucket=pr.bucket(), Prefix=base + "/", MaxKeys=1000)
         old = [{"Key": o["Key"]} for o in resp.get("Contents", [])
-               if o["Key"].rsplit("/", 1)[-1] not in keep]
+               if o["Key"].endswith(".png") and o["Key"].rsplit("/", 1)[-1] not in keep]
         if old:
             pr.r2().delete_objects(Bucket=pr.bucket(), Delete={"Objects": old, "Quiet": True})
 

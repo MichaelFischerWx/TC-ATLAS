@@ -20,6 +20,7 @@ expected_frames).
 
 R2, under pardig-v1/archive/:
   <SID>/index.json, <SID>/total-<sha10>.png   (same format as pardig-v1/storms/)
+  <SID>/rate-<sha10>.png                       hourly rain-rate snapshots (atlas; index.json "rate")
   parts/<year>.json                           per-task summary, merged by --merge
   manifest.json                               {sid: [max_mm, n_frames, expected_frames]}
 
@@ -56,6 +57,11 @@ SITE = os.environ.get("PARDIG_SITE", "https://tcatlas.org")
 KEY_BASE = f"{pr.R2_PREFIX}/archive"
 STEP = timedelta(minutes=15)
 FIRST_YEAR = 2016
+# Hourly rain-rate snapshots: a storm-centered window of SNAP_HALF cells either
+# side of the center (0.1 deg -> 91 x 91, ~1000 km), rate-encoded like the RT
+# monitor's Rain mode tiles (pr.encode), packed into one PNG atlas per storm.
+SNAP_HALF = 45
+SNAP_N = 2 * SNAP_HALF + 1
 
 ATTRIBUTION = dict(pr.ATTRIBUTION)
 ATTRIBUTION["modifications"] = (
@@ -152,6 +158,43 @@ def bounded_map(fn, items, workers=6, ahead=8):
             yield x, res
 
 
+def snapshot(rate, lat_c, lon_c):
+    """(row0, col0 continuous, north-up uint8 tile) of the window around the center."""
+    ic = int(round((lat_c + 90.0) / T.RES))
+    jc = int(round(lon_c / T.RES))
+    rows = np.clip(np.arange(ic - SNAP_HALF, ic + SNAP_HALF + 1), 0, pr.NY - 1)
+    cols = np.arange(jc - SNAP_HALF, jc + SNAP_HALF + 1) % pr.NX
+    tile = pr.encode(rate[rows[:, None], cols[None, :]])[::-1]
+    return ic - SNAP_HALF, jc - SNAP_HALF, np.ascontiguousarray(tile)
+
+
+def rate_atlas(snaps):
+    """PNG atlas + index metadata for [(ts, row0, col0, tile)] (time order)."""
+    from PIL import Image
+    import hashlib
+    import io as _io
+    n = len(snaps)
+    cols = int(math.ceil(math.sqrt(n)))
+    rows = int(math.ceil(n / cols))
+    atlas = np.zeros((rows * SNAP_N, cols * SNAP_N), np.uint8)
+    t, lat_s, lon_w = [], [], []
+    for k, (ts, r0, c0, tile) in enumerate(snaps):
+        y, x = divmod(k, cols)
+        atlas[y * SNAP_N:(y + 1) * SNAP_N, x * SNAP_N:(x + 1) * SNAP_N] = tile
+        t.append(ts)
+        lat_s.append(round(r0 * T.RES - 90.0 - T.RES / 2, 3))
+        lon_w.append(round(((c0 * T.RES - T.RES / 2 + 180.0) % 360.0) - 180.0, 3))
+    bio = _io.BytesIO()
+    Image.fromarray(atlas, mode="L").save(bio, format="PNG", optimize=True)
+    png = bio.getvalue()
+    name = f"rate-{hashlib.sha1(png).hexdigest()[:10]}.png"
+    meta = {"png": name, "tile": SNAP_N, "cols": cols, "res_deg": T.RES, "cadence_min": 60,
+            "encoding": {"kind": "log", "dry_mm_h": pr.DRY, "cap_mm_h": pr.CAP, "bins": pr.NBINS,
+                         "idx_nodata": 0, "idx_dry": 1, "idx_first": 2, "idx_cap": 255},
+            "t": t, "lat_s": lat_s, "lon_w": lon_w}
+    return png, name, meta
+
+
 # ── Outputs ───────────────────────────────────────────────────────────────
 def finish(store, sid, s, pts, tr, st):
     if not st["done"] or st["accum"] is None:
@@ -181,13 +224,20 @@ def finish(store, sid, s, pts, tr, st):
         "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     })
     base = f"{KEY_BASE}/{sid}"
+    keep = {name}
+    snaps = st.get("snaps") or []
+    if snaps:
+        rpng, rname, rmeta = rate_atlas(snaps)
+        store.put(f"{base}/{rname}", rpng, "image/png", pr.TILE_CACHE)
+        meta["rate"] = rmeta
+        keep.add(rname)
     store.put(f"{base}/{name}", png, "image/png", pr.TILE_CACHE)
     store.put(f"{base}/index.json", json.dumps(meta, separators=(",", ":")).encode(),
               "application/json", "public, max-age=86400")
-    store.prune_pngs(base, {name})
+    store.prune_pngs(base, keep)
     log(f"  {sid} {s.get('name')} {s.get('year')}: {meta['n_frames']}/{meta['expected_frames']} frames, "
         f"max {meta['max_mm']:.0f} mm at {meta['max_at']}, grid {meta['grid']['nx']}x{meta['grid']['ny']}, "
-        f"png {len(png) / 1e3:.0f} kB")
+        f"png {len(png) / 1e3:.0f} kB" + (f", {len(snaps)} hourly snapshots {len(rpng) / 1e3:.0f} kB" if snaps else ""))
     return [meta["max_mm"], meta["n_frames"], meta["expected_frames"]]
 
 
@@ -305,10 +355,13 @@ def run(store, sids=None, year=None, force=False, workers=6, part=None, missing=
                 rate = data[arch_index(t) % ARCH_CHUNK] if u[0] == "a" else data
                 ts = t.strftime("%Y%m%d%H%M")
                 te = t.timestamp()
+                hourly = t.minute == 0
                 for n in need[t]:
                     c = T.center_at(sel[n][3], te, 0)
                     if c is not None:
                         T.add_frame(states[n], rate, ts, c[0], c[1])
+                        if hourly:
+                            states[n].setdefault("snaps", []).append((ts,) + snapshot(rate, c[0], c[1]))
             done_frames += 1
             # storms whose span is over: write them out and free their grids
             for n in [n for n in pending if last_t[n] <= t]:
