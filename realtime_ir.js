@@ -6514,6 +6514,33 @@
         [250, 170, 34, 244], [250, 143, 31, 246], [246, 113, 32, 248], [238, 82, 38, 250],
         [232, 56, 42, 251], [224, 44, 66, 252], [209, 41, 124, 254], [188, 46, 175, 255],
         [163, 61, 210, 255], [255, 255, 255, 255]];
+    // PARDIG is CC BY 4.0 (developers.google.com/weathernext/guides/pardig):
+    // credit, license link, and say what we changed. Full citation + the
+    // third-party attributions live at about.html#deepmind-credits.
+    var _RAIN_CREDIT_HTML = '<a href="https://developers.google.com/weathernext/guides/pardig" target="_blank" rel="noopener">PARDIG</a>'
+        + ' &copy; Google DeepMind, experimental &middot; <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>'
+        + ' &middot; resampled and binned by <span style="white-space:nowrap">TC-ATLAS</span>'
+        + ' &middot; <a href="about.html#deepmind-credits" target="_blank" rel="noopener">credits</a>';
+    var _RAIN_ATTRIB_HTML = 'Rain: <a href="https://developers.google.com/weathernext/guides/pardig" target="_blank" rel="noopener">PARDIG</a>'
+        + ' &copy; Google DeepMind (<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>, modified)';
+    /** Put the rain credit in the map's attribution line while rain is on.
+     *  The rain is a custom GL layer with no source of its own, so it rides
+     *  on an empty GeoJSON source + invisible layer that carry `attribution`
+     *  (MapLibre lists the attributions of sources in use). */
+    function _rainAttribution(on) {
+        var gl = map && map._gl;
+        if (!gl || !gl.getSource) return;
+        try {
+            if (on && !gl.getSource('rain-credit')) {
+                gl.addSource('rain-credit', { type: 'geojson', attribution: _RAIN_ATTRIB_HTML,
+                    data: { type: 'FeatureCollection', features: [] } });
+                gl.addLayer({ id: 'rain-credit', type: 'circle', source: 'rain-credit', paint: { 'circle-radius': 0 } });
+            } else if (!on && gl.getSource('rain-credit')) {
+                if (gl.getLayer('rain-credit')) gl.removeLayer('rain-credit');
+                gl.removeSource('rain-credit');
+            }
+        } catch (e) { console.warn('[rain] attribution', e); }
+    }
     var _RAIN_DROP_SVG = '<svg class="icon-inline" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"'
         + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
         + '<path d="M12 2.7s-6 6.6-6 11.3a6 6 0 0 0 12 0c0-4.7-6-11.3-6-11.3z"/></svg>';
@@ -6664,6 +6691,7 @@
     function _rainLegend(show) {
         var el = document.getElementById('ir-rain-global-legend');
         if (_rainAgeTimer) { clearInterval(_rainAgeTimer); _rainAgeTimer = null; }
+        _rainAttribution(!!show);
         if (!show) { if (el) el.style.display = 'none'; return; }
         if (!el) {
             var host = document.getElementById('ir-map');
@@ -6682,13 +6710,15 @@
                 + '<div class="ir-rain-legend-ticks">' + tick('0.2', 0) + tick('1', 4) + tick('5', 9)
                 + tick('20', 14) + tick('50', 19) + tick('75', n - 1) + '</div>'
                 + '<div class="ir-rain-legend-age" id="ir-rain-legend-age"></div>'
-                + '<div class="ir-rain-legend-src">Google DeepMind PARDIG · experimental</div>';
-            el.title = 'AI rain-rate estimate from geostationary satellite imagery, 0.1° every 15 min (CC BY 4.0). '
+                + '<div class="ir-rain-legend-src">' + _RAIN_CREDIT_HTML + '</div>';
+            el.title = 'AI rain-rate estimate from geostationary satellite imagery, 0.1° every 15 min. '
                 + 'Posted in batches 2–8 h after valid time. White = the model’s 75 mm/h cap. '
                 + 'Each rain frame shows the IR frame within 5 min of it.';
             host.appendChild(el);
         }
         el.style.display = '';
+        _rainPlaceLegend();
+        setTimeout(_rainPlaceLegend, 400);    // after MapLibre re-renders the attribution line
         function age() {
             var a = document.getElementById('ir-rain-legend-age'), f = _rainManifest && _rainManifest.frames;
             if (!a || !f || !f.length) return;
@@ -6698,6 +6728,20 @@
         age();
         _rainAgeTimer = setInterval(age, 60000);
     }
+
+    /** Desktop: sit just above the attribution line, however many lines the
+     *  attribution wraps to (it grows with the rain + forecast credits).
+     *  Phones keep the CSS slot above the loop dock (attribution is collapsed). */
+    function _rainPlaceLegend() {
+        var el = document.getElementById('ir-rain-global-legend'), host = document.getElementById('ir-map');
+        if (!el || !host || el.style.display === 'none') return;
+        if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) { el.style.bottom = ''; return; }
+        var a = host.querySelector('.maplibregl-ctrl-attrib');
+        if (!a) { el.style.bottom = ''; return; }
+        var gap = host.getBoundingClientRect().bottom - a.getBoundingClientRect().top;
+        el.style.bottom = Math.max(64, Math.round(gap + 6)) + 'px';
+    }
+    window.addEventListener('resize', function () { if (_gRainOn) _rainPlaceLegend(); });
 
     /** Swap the satellite to grayscale IR under the rain colors (IR covers
      *  day and night alike); remember the prior band + colormap. */
@@ -7294,6 +7338,8 @@
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>'
                 + ' | Satellite: NOAA GOES-19/18, JMA Himawari-9 via <a href="https://registry.opendata.aws/noaa-goes/" target="_blank" rel="noopener">NOAA Open Data</a>'
                 + '; Meteosat-9 &copy; <a href="https://www.eumetsat.int/" target="_blank" rel="noopener">EUMETSAT</a>'
+                + ' | Forecasts: Google DeepMind <a href="https://deepmind.google.com/science/weatherlab" target="_blank" rel="noopener">Weather Lab</a>'
+                + ', &copy; 2024-6 Google LLC (<a href="https://storage.googleapis.com/weathernext-public/terms-of-use.pdf" target="_blank" rel="noopener">terms</a>; experimental, not for real-world use)'
         }).addTo(map);
         _globalBasemap = basemap;   // exposed so 3D mode can mute it (see _rt3DToggle)
 
@@ -16450,7 +16496,8 @@
             ssScale: function () { return _GENESIS_SS_SCALE; },
             intensityMetric: function () { return _rtIntensityMetric; },
             panelExportURL: function (el, scale, W, h, ss, o) { return _panelExportURL(el, scale, W, h, ss, o); },
-            stampExport: function (url, w, h, cb, caption) { return _tcStampExport(url, w, h, cb, caption); },
+            stampExport: function (url, w, h, cb, caption, credit) { return _tcStampExport(url, w, h, cb, caption, credit); },
+            gdmCredit: _GDM_RT_CREDIT,
             // a-deck for any storm id (the modal may show a storm other than
             // the open card); shares the card's panel cache.
             fetchAdeck: function (atcfId) {
@@ -19250,6 +19297,7 @@
                 '<b>Not an official forecast.</b> Experimental research output from Google DeepMind ensembles, processed by TC-ATLAS. ' +
                 'Swaths and contours here are ensemble statistics, <b>not the NHC forecast cone</b>. For forecasts, watches and warnings use ' +
                 '<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">NHC</a>, CPHC, JTWC or your national meteorological service.' +
+                '<div class="rt-dm-credit">' + _gdmCreditHtml() + '</div>' +
               '</div>' +
               '<div class="rt-genesis-modal-body">' +
                 // Loading overlay — covers the panel area while the member
@@ -25195,6 +25243,57 @@
      *  literally (e.g. "…00:52Z<br>Tangential Wind"). Convert <br> to " · ",
      *  drop other tags, decode the few entities that appear, and collapse any
      *  resulting separator/space runs. */
+    // ── Google DeepMind credit ─────────────────────────────────────────────
+    // Weather Lab cyclone / cyclogenesis forecasts are "Real-Time Experimental
+    // Data" under the GDM Real-Time Weather Forecasting Experimental Data
+    // Terms of Use. Its §4(b) asks anyone sharing graphics or findings from it
+    // to name the Google service the data came from AND to carry this notice
+    // word for word. (The PARDIG rain layer is CC BY 4.0 instead — see the
+    // rain legend and about.html#deepmind-credits.)
+    var _GDM_TERMS_URL = 'https://storage.googleapis.com/weathernext-public/terms-of-use.pdf';
+    var _GDM_RT_NOTICE = '\u00a9 2024-6 Google LLC, whose machine learning models were used to create the experimental data made available under the following licence terms '
+        + _GDM_TERMS_URL + '. This data is intended for experimental modelling only and is not intended, validated, or approved for real world use.';
+    var _GDM_RT_CREDIT = 'Forecast data: Google DeepMind Weather Lab. ' + _GDM_RT_NOTICE;
+
+    function _gdmCreditHtml() {
+        return 'Forecast data: Google DeepMind <a href="https://deepmind.google.com/science/weatherlab" target="_blank" rel="noopener">Weather Lab</a>. '
+            + '&copy; 2024-6 Google LLC, whose machine learning models were used to create the experimental data made available under the following licence terms '
+            + '<a href="' + _GDM_TERMS_URL + '" target="_blank" rel="noopener">' + _GDM_TERMS_URL + '</a>. '
+            + 'This data is intended for experimental modelling only and is not intended, validated, or approved for real world use.';
+    }
+    /** Greedy word wrap of `text` to `maxW` px in `font` → array of lines. */
+    function _exportWrap(text, maxW, font) {
+        var c = _exportWrap._c || (_exportWrap._c = document.createElement('canvas').getContext('2d'));
+        c.font = font;
+        var words = String(text).split(/\s+/), lines = [], cur = '';
+        for (var i = 0; i < words.length; i++) {
+            var t = cur ? cur + ' ' + words[i] : words[i];
+            if (cur && c.measureText(t).width > maxW) { lines.push(cur); cur = words[i]; }
+            else cur = t;
+        }
+        if (cur) lines.push(cur);
+        return lines;
+    }
+    /** Plotly exports: put a wrapped credit in a strip added under the plot
+     *  (the plot area keeps its size). Call after margin/height are final. */
+    function _plotlyAddCredit(layout, credit, color) {
+        if (!credit) return;
+        var w = layout.width || 800;
+        var lines = _exportWrap(credit, w - 24, '400 10px "DM Sans", sans-serif');
+        var add = lines.length * 13 + 12;
+        var m = layout.margin || (layout.margin = {});
+        var oldB = (m.b != null) ? m.b : 80;
+        m.b = oldB + add;
+        layout.height = (layout.height || 450) + add;
+        layout.annotations = layout.annotations || [];
+        layout.annotations.push({
+            text: lines.join('<br>'), xref: 'paper', yref: 'paper', x: 0, y: 0,
+            xanchor: 'left', yanchor: 'top', align: 'left', yshift: -(oldB + 4),
+            xshift: -((m.l != null) ? m.l : 60) + 12, showarrow: false,
+            font: { size: 10, color: color, family: 'DM Sans, sans-serif' }
+        });
+    }
+
     function _tcPlainCaption(text) {
         if (!text) return '';
         return String(text)
@@ -25230,7 +25329,7 @@
         ctx.restore();
     }
 
-    function _tcStampExport(srcDataUrl, outW, outH, cb, caption) {
+    function _tcStampExport(srcDataUrl, outW, outH, cb, caption, credit) {
         var base = new Image();
         base.onload = function () {
             var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -25240,13 +25339,27 @@
             // "+0h … +360h" ticks reach the plot's bottom edge). Sized off the
             // same width scale _drawTcWatermark uses (logo ≈ 28·s + padding).
             var s = Math.max(1, outW / 900);
-            var footerH = Math.round(56 * s);
+            // Optional data credit (e.g. Google DeepMind's required notice):
+            // wrapped lines between the chart and the caption/watermark row.
+            var cFont = '400 ' + Math.round(10.5 * s) + 'px "DM Sans", system-ui, sans-serif';
+            var cLines = credit ? _exportWrap(credit, outW - Math.round(24 * s), cFont) : [];
+            var cLineH = Math.round(14 * s), cH = cLines.length ? cLines.length * cLineH + Math.round(8 * s) : 0;
+            var footerH = Math.round(56 * s) + cH;
             var cv = document.createElement('canvas');
             cv.width = outW; cv.height = outH + footerH;
             var ctx = cv.getContext('2d');
             ctx.fillStyle = bg;
             ctx.fillRect(0, 0, cv.width, cv.height);
             ctx.drawImage(base, 0, 0, outW, outH);
+            if (cLines.length) {
+                ctx.save();
+                ctx.font = cFont; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+                ctx.fillStyle = isDark ? 'rgba(203,213,225,0.85)' : 'rgba(51,65,85,0.85)';
+                for (var li = 0; li < cLines.length; li++) {
+                    ctx.fillText(cLines[li], Math.round(12 * s), outH + Math.round(8 * s) + li * cLineH);
+                }
+                ctx.restore();
+            }
             // Anchor stamps to the full canvas height → they land in the footer.
             _drawTcWatermark(ctx, outW, cv.height);
             _drawExportCaption(ctx, outW, cv.height, caption);
@@ -25320,7 +25433,7 @@
                     _saveImageBlob(blob || _dataURLToBlob(url),
                         'tc-atlas-genesis-' + slug + (fnTag ? '-' + fnTag : '')
                         + '-' + dateISO + '.png');
-                }, caption);
+                }, caption, _GDM_RT_CREDIT);
             }).catch(function () { /* silent */ });
         _ga('rt_genesis_save_png', { chart: slug });
     }
@@ -30191,6 +30304,7 @@
             font: { size: 9, color: isDark ? '#475569' : '#94a3b8' },
             xanchor: 'right', yanchor: 'top'
         });
+        _plotlyAddCredit(layout, _GDM_RT_CREDIT, axisColor);   // Google DeepMind's required notice
 
         // Render to temporary div and export
         var tmpDiv = document.createElement('div');
@@ -30198,7 +30312,7 @@
         document.body.appendChild(tmpDiv);
 
         Plotly.newPlot(tmpDiv, data, layout, { displayModeBar: false }).then(function () {
-            return Plotly.toImage(tmpDiv, { format: 'png', width: 768, height: 576, scale: 2 });
+            return Plotly.toImage(tmpDiv, { format: 'png', width: layout.width, height: layout.height, scale: 2 });
         }).then(function (dataUrl) {
             // Trigger download
             var filename = 'GDMI_' + stormId + '_' + chartType;
@@ -30305,6 +30419,8 @@
             x: 1, y: -0.18, showarrow: false, xanchor: 'right', yanchor: 'top',
             font: { size: 11, color: wmColor, family: 'DM Sans, sans-serif' }
         });
+        // DeepMind ensemble bands on the chart → Google DeepMind's required notice.
+        if (_rtDmEnsData && source && source !== 'Best track') _plotlyAddCredit(layout, _GDM_RT_CREDIT, axisColor);
 
         var tmpDiv = document.createElement('div');
         tmpDiv.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
@@ -34791,8 +34907,8 @@
         // handing back a Blob. Same helper the Global-Map figure exports use, so
         // every saved chart on the site is branded identically. outW/outH are the
         // FINAL pixel dimensions (logical size × scale). cb(blob|null).
-        stampExport: function (srcDataUrl, outW, outH, cb, caption) {
-            try { _tcStampExport(srcDataUrl, outW, outH, cb, caption); }
+        stampExport: function (srcDataUrl, outW, outH, cb, caption, credit) {
+            try { _tcStampExport(srcDataUrl, outW, outH, cb, caption, credit); }
             catch (e) { cb(null); }
         },
         // Resolves once the brand logo bitmap has decoded, so an export doesn't

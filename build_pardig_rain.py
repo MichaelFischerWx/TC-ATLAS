@@ -72,6 +72,23 @@ TILE_CACHE = "public, max-age=604800, immutable"
 MANIFEST_CACHE = "public, max-age=60"
 UA = "tc-atlas-pardig/1.0"
 
+# Credit as Google DeepMind asks (developers.google.com/weathernext/guides/pardig
+# and .../guides/disclaimers): CC BY 4.0, cite the paper, point to the
+# third-party attributions, and state what we changed. Stamped into every
+# frames.json because the tiles themselves are public on the CDN.
+ATTRIBUTION = {
+    "source": "PARDIG near-real-time rain rate, Google DeepMind (experimental)",
+    "source_url": "https://developers.google.com/weathernext/guides/pardig",
+    "license": "CC BY 4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "citation": ("Shalev, G., S. Rasp, B. Babenko, and Coauthors, 2026: PARDIG: Global precipitation "
+                 "estimates learned from sparse satellite observations. arXiv:2611.13941."),
+    "third_party_attributions": "https://storage.googleapis.com/weathernext-public/pardig-attributions-acknowledgements.pdf",
+    "modifications": ("Resampled by TC-ATLAS from the 0.1 deg grid to Web-Mercator 512-px tiles (nearest "
+                      "neighbor at z3-z4, area means at z0-z2) and binned into 253 log-spaced levels."),
+    "disclaimer": "Experimental; not an official forecast or observation.",
+}
+
 
 def log(msg):
     print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -387,7 +404,7 @@ def main():
         "zmax": ZMAX, "tile_size": TILE,
         "encoding": {"kind": "log", "dry_mm_h": DRY, "cap_mm_h": CAP, "bins": NBINS,
                      "idx_nodata": 0, "idx_dry": 1, "idx_first": 2, "idx_cap": 255},
-        "source": "Google DeepMind PARDIG near-real-time rain rate (CC BY 4.0, experimental)",
+        **ATTRIBUTION,
     }
     key = f"{R2_PREFIX}/{PRODUCT}/frames.json"
     cur = (json.load(open(os.path.join(args.out, PRODUCT, "frames.json")))

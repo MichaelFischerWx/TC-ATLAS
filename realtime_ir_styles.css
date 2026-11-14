@@ -1250,7 +1250,17 @@ html, body { margin: 0; padding: 0; }
 .ir-rain-legend-ticks span:first-child { transform: none; }
 .ir-rain-legend-ticks span:last-child { transform: translateX(-30%); }
 .ir-rain-legend-age { margin-top: 3px; font-variant-numeric: tabular-nums; }
-.ir-rain-legend-src { font-size: 9px; color: var(--map-ink-dim); }
+.ir-rain-legend-src { font-size: 9px; line-height: 1.35; color: var(--map-ink-dim); margin-top: 2px; }
+.ir-rain-global-legend { pointer-events: auto; }   /* the credit line carries links */
+.ir-rain-legend-src a { color: var(--map-ink); text-decoration: underline; text-decoration-color: rgba(255, 255, 255, 0.35); }
+/* Google DeepMind's required notice under the DeepMind panel / modal disclaimers */
+.rt-dm-credit {
+    margin-top: 6px;
+    font-size: 0.625rem;
+    line-height: 1.4;
+    opacity: 0.8;
+    overflow-wrap: anywhere;
+}
 .ir-rain-mode-btn .ir-radar-mode-glyph svg { display: block; }
 @media (max-width: 768px) {
     .ir-rain-global-legend { bottom: 128px; }   /* above the full-width loop dock, like radar's */

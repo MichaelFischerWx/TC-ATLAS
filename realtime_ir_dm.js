@@ -102,7 +102,10 @@
     function modelTag() { return B ? B.modelTag() : 'DeepMind'; }
     // On-map liability badge: shown on any map while an ensemble overlay is
     // drawn, so a screenshot of the map alone still says what it is.
-    var BADGE_TEXT = 'DeepMind ensemble \u00b7 experimental research guidance \u00b7 NOT an official forecast or NHC cone';
+    // Carries Google's copyright line too: the badge is what a screenshot or a
+    // saved map keeps (the full Weather Lab notice is in the panel + exports).
+    var BADGE_TEXT = 'DeepMind ensemble \u00b7 experimental research guidance \u00b7 NOT an official forecast or NHC cone'
+        + ' \u00b7 Google DeepMind Weather Lab, \u00a9 2024-6 Google LLC';
     function showBadge(map, key, text) {
         if (!map || !map.getContainer) return;
         var host = map.getContainer(); if (!host) return;
@@ -754,7 +757,7 @@
         Plotly.newPlot(tmp, data, layout, { displayModeBar: false })
             .then(function () { return Plotly.toImage(tmp, { format: 'png', width: 900, height: 500, scale: 2 }); })
             .then(function (url) {
-                B.stampExport(url, 1800, 1000, function (blob) { B.saveImageBlob(blob || B.dataURLToBlob(url), fn); }, caption);
+                B.stampExport(url, 1800, 1000, function (blob) { B.saveImageBlob(blob || B.dataURLToBlob(url), fn); }, caption, B.gdmCredit);
             })
             .catch(function (e) { console.warn('[RTDM] export failed', e); })
             .then(function () { try { Plotly.purge(tmp); } catch (e) {} if (tmp.parentNode) tmp.parentNode.removeChild(tmp); });
@@ -1382,7 +1385,7 @@
         // onto the larger canvas sharpens coastlines and text for free.
         var SS = 2;
         B.panelExportURL(shim, 2.2, W, H, 1, { margin: { l: PAD, r: PAD, t: PAD, b: PAD } }).then(function (url) {
-            B.stampExport(url, W * SS, H * SS, function (blob) { if (blob) B.saveImageBlob(blob, fn); }, caption);
+            B.stampExport(url, W * SS, H * SS, function (blob) { if (blob) B.saveImageBlob(blob, fn); }, caption, B.gdmCredit);
         }).catch(function (e) { console.warn('[RTDM] ' + kind + ' map export failed', e); });
         B.ga('rt_dm_modal_' + (kind === 'landfall' ? 'landfall' : 'risk') + '_export', { thresh: r.thresh });
     }
