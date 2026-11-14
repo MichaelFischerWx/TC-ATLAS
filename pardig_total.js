@@ -29,6 +29,9 @@
         [163, 61, 210, 255], [255, 255, 255, 255]];
     var EDGES = [5, 10, 15, 20, 30, 40, 50, 65, 80, 100, 125, 150, 200, 250, 300, 400, 500, 600, 750, 1000, 1250, 1500];
     var TICKS = [[5, 0], [20, 3], [50, 6], [100, 9], [250, 13], [1000, 19]];   // clear at a 150-px legend
+    // Rain RATE (mm/h): the RT monitor's Rain-mode bins; white = the 75 mm/h cap.
+    var RATE_EDGES = [0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7, 10, 13, 16, 20, 25, 30, 35, 40, 50, 60, 74.9];
+    var RATE_TICKS = [['0.2', 0], ['1', 4], ['5', 9], ['20', 14], ['50', 19], ['75', 21]];
 
     function idxToMm(i, enc) {
         enc = enc || {};
@@ -39,11 +42,23 @@
         return lo * Math.pow(hi / lo, (i - 2 + 0.5) / n);
     }
 
-    function lut(enc) {
-        var out = new Uint8ClampedArray(256 * 4);
+    /** Rate index (frames.json-style: 0 nodata, 1 dry, 2..254 log over
+     *  [dry, cap), 255 at the cap) -> mm/h (bin geometric center). */
+    function idxToRate(i, enc) {
+        enc = enc || {};
+        var dry = enc.dry_mm_h || 0.1, cap = enc.cap_mm_h || 75, n = enc.bins || 253;
+        if (i <= 0) return null;
+        if (i === 1) return 0;
+        if (i >= 255) return cap;
+        return dry * Math.pow(cap / dry, (i - 2 + 0.5) / n);
+    }
+
+    function lut(enc, kind) {
+        var out = new Uint8ClampedArray(256 * 4), rate = kind === 'rate';
+        var edges = rate ? RATE_EDGES : EDGES;
         for (var i = 2; i < 256; i++) {
-            var mm = idxToMm(i, enc), k = -1;
-            for (var j = 0; j < EDGES.length; j++) if (mm >= EDGES[j]) k = j;
+            var v = rate ? idxToRate(i, enc) : idxToMm(i, enc), k = -1;
+            for (var j = 0; j < edges.length; j++) if (v >= edges[j]) k = j;
             if (k >= 0) out.set(COLORS[k], i * 4);
         }
         return out;
@@ -83,9 +98,11 @@
 
     /** Mercator-warped canvas (data URL) + bounds; each output row samples
      *  the source row under its latitude (nearest). */
-    function piece(meta, idx) {
+    var _lutCache = {};
+    function piece(meta, idx, kind) {
         var g = meta.grid, nx = g.nx, ny = g.ny, res = g.res_deg || 0.1;
-        var L = lut(meta.encoding), M = 85.05;
+        var lk = (kind || 'total') + JSON.stringify(meta.encoding || {});
+        var L = _lutCache[lk] || (_lutCache[lk] = lut(meta.encoding, kind)), M = 85.05;
         var latN = Math.min(g.lat_n, M), latS = Math.max(g.lat_s, -M);
         function my(lat) { return Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)); }
         var yN = my(latN), yS = my(latS);
@@ -112,8 +129,8 @@
 
     /** Add the total to a facade map; returns the overlay (remove with
      *  map.removeLayer). `pane` (optional) sets its stacking slot. */
-    function addTo(map, meta, idx, opacity, pane) {
-        var p = piece(meta, idx);
+    function addTo(map, meta, idx, opacity, pane, kind) {
+        var p = piece(meta, idx, kind);
         var opts = { opacity: opacity == null ? 0.85 : opacity, crisp: true, interactive: false };
         if (pane) opts.pane = pane;
         var ov = L.imageOverlay(p.url, p.bounds, opts);
@@ -125,8 +142,60 @@
         return ov.addTo(map);
     }
 
+    /** Move an overlay made by addTo to another frame (same kind). */
+    function update(ov, meta, idx, kind) {
+        var p = piece(meta, idx, kind), b = p.bounds;
+        if (p.wraps && window.LFLET_GL) {
+            ov._coords = function () { return [[b[0][1], b[1][0]], [b[1][1], b[1][0]], [b[1][1], b[0][0]], [b[0][1], b[0][0]]]; };
+        } else if (ov.hasOwnProperty('_coords')) {
+            delete ov._coords;
+        }
+        ov.setBounds(b);
+        ov.setUrl(p.url);
+        return ov;
+    }
+
+    /** Hourly rate snapshots: fetch <base><rate.png> (an atlas of rate.tile^2
+     *  cells per hour, rate.cols across) -> {w, h, px} (index per pixel). */
+    function loadAtlas(base, rate) {
+        return fetch(base + rate.png, { mode: 'cors' }).then(function (r) {
+            if (!r.ok) throw new Error('rate png HTTP ' + r.status);
+            return r.blob();
+        }).then(function (b) {
+            return createImageBitmap(b, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+        }).then(function (bmp) {
+            var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+            var cx = c.getContext('2d', { willReadFrequently: true });
+            cx.drawImage(bmp, 0, 0);
+            var d = cx.getImageData(0, 0, bmp.width, bmp.height).data, px = new Uint8Array(bmp.width * bmp.height);
+            for (var i = 0, j = 0; i < px.length; i++, j += 4) px[i] = d[j];
+            return { w: bmp.width, h: bmp.height, px: px };
+        });
+    }
+    /** Frame k of the atlas as a {meta, idx} pair piece()/addTo() can draw. */
+    function rateFrame(rate, atlas, k) {
+        var n = rate.tile, cols = rate.cols, y0 = Math.floor(k / cols) * n, x0 = (k % cols) * n;
+        var idx = new Uint8Array(n * n);
+        for (var r = 0; r < n; r++) idx.set(atlas.px.subarray((y0 + r) * atlas.w + x0, (y0 + r) * atlas.w + x0 + n), r * n);
+        var res = rate.res_deg || 0.1, s = rate.lat_s[k], w = rate.lon_w[k];
+        return { meta: { encoding: rate.encoding,
+                         grid: { nx: n, ny: n, res_deg: res, lat_s: s, lat_n: s + n * res, lon_w: w, lon_e: w + n * res } },
+                 idx: idx };
+    }
+    /** Index of the snapshot nearest `ms` (epoch ms) within maxMin minutes, or -1. */
+    function nearestFrame(rate, ms, maxMin) {
+        var best = -1, bd = Infinity;
+        for (var k = 0; k < rate.t.length; k++) {
+            var s = rate.t[k];
+            var tk = Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12));
+            var d = Math.abs(tk - ms);
+            if (d < bd) { bd = d; best = k; }
+        }
+        return (best >= 0 && bd <= (maxMin || 45) * 60000) ? best : -1;
+    }
+
     /** Hover text for (lat, lon), or null outside the swath. */
-    function valueText(meta, idx, lat, lon) {
+    function valueText(meta, idx, lat, lon, kind) {
         if (!meta || !idx) return null;
         var g = meta.grid, res = g.res_deg || 0.1;
         var x = ((lon - g.lon_w) % 360 + 360) % 360;
@@ -134,6 +203,12 @@
         if (col < 0 || col >= g.nx || row < 0 || row >= g.ny) return null;
         var i = idx[row * g.nx + col];
         if (!i) return null;
+        if (kind === 'rate') {
+            if (i === 1) return '&lt; 0.1 mm/h';
+            if (i === 255) return '&ge; 75 mm/h (cap)';
+            var rr = idxToRate(i, meta.encoding);
+            return '\u2248 ' + (rr < 10 ? rr.toFixed(1) : Math.round(rr)) + ' mm/h';
+        }
         if (i === 1) return '&lt; 1 mm';
         if (i === 255) return '&ge; ' + Math.round(idxToMm(255, meta.encoding)) + ' mm';
         var mm = idxToMm(i, meta.encoding);
@@ -149,13 +224,13 @@
 
     /** Discrete bar + ticks (uses the RT monitor's .ir-rain-legend-* classes,
      *  or any page CSS that styles them). */
-    function barHtml(barClass, tickClass) {
-        var n = COLORS.length, sw = '', ticks = '';
+    function barHtml(barClass, tickClass, kind) {
+        var n = COLORS.length, sw = '', ticks = '', tk = kind === 'rate' ? RATE_TICKS : TICKS;
         for (var i = 0; i < n; i++) {
             var c = COLORS[i];
             sw += '<span style="background:rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (c[3] / 255).toFixed(2) + ')"></span>';
         }
-        TICKS.forEach(function (t) {
+        tk.forEach(function (t) {
             ticks += '<span style="left:' + (t[1] / n * 100).toFixed(1) + '%">' + t[0] + '</span>';
         });
         return '<div class="' + (barClass || 'ir-rain-legend-bar') + '">' + sw + '</div>'
@@ -165,6 +240,11 @@
     var CREDIT_HTML = '<a href="https://developers.google.com/weathernext/guides/pardig" target="_blank" rel="noopener">PARDIG</a>'
         + ' &copy; Google DeepMind, experimental &middot; <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>'
         + ' &middot; summed by <span style="white-space:nowrap">TC-ATLAS</span>'
+        + ' &middot; <a href="about.html#deepmind-credits" target="_blank" rel="noopener">credits</a>';
+    // Hourly rain-rate snapshots are binned, not summed.
+    var RATE_CREDIT_HTML = '<a href="https://developers.google.com/weathernext/guides/pardig" target="_blank" rel="noopener">PARDIG</a>'
+        + ' &copy; Google DeepMind, experimental &middot; <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>'
+        + ' &middot; binned by <span style="white-space:nowrap">TC-ATLAS</span>'
         + ' &middot; <a href="about.html#deepmind-credits" target="_blank" rel="noopener">credits</a>';
     var ATTRIB_HTML = 'Rain: <a href="https://developers.google.com/weathernext/guides/pardig" target="_blank" rel="noopener">PARDIG</a>'
         + ' &copy; Google DeepMind (<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>, modified)';
@@ -190,8 +270,9 @@
 
     window.PardigTotal = {
         COLORS: COLORS, EDGES: EDGES, TICKS: TICKS,
-        idxToMm: idxToMm, load: load, piece: piece, addTo: addTo, valueText: valueText,
+        idxToMm: idxToMm, idxToRate: idxToRate, load: load, piece: piece, addTo: addTo, update: update,
+        loadAtlas: loadAtlas, rateFrame: rateFrame, nearestFrame: nearestFrame, valueText: valueText,
         rampCss: rampCss, barHtml: barHtml, attribution: attribution,
-        CREDIT_HTML: CREDIT_HTML, ATTRIB_HTML: ATTRIB_HTML, EXPORT_CREDIT: EXPORT_CREDIT
+        CREDIT_HTML: CREDIT_HTML, RATE_CREDIT_HTML: RATE_CREDIT_HTML, ATTRIB_HTML: ATTRIB_HTML, EXPORT_CREDIT: EXPORT_CREDIT
     };
 })();

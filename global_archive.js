@@ -5802,7 +5802,7 @@ function displayIROnMap(data) {
     // Pan/zoom map based on follow mode. With the storm-total rain on, hold
     // the swath view until the loop plays (a late first frame zoomed the
     // map back onto the storm the moment the overview was set).
-    if (_raVisible && !irPlaying) {
+    if (_raVisible && _raMode === 'total' && !irPlaying) {
         // keep the camera
     } else if (irFollowStorm) {
         if (!irFollowZoomSet) {
@@ -5860,7 +5860,7 @@ function _handleIRMouseMove(e) {
     var hasIR = irOverlayVisible && irCurrentTbData && irCurrentBounds;
     var hasNexrad = _gaNexradVisible && _gaNexradData && _gaNexradBounds;
     var raTxt = _raValueAt(e.latlng.lat, e.latlng.lng);   // storm-total rain, when on
-    var raLine = raTxt ? '<br><span class="ir-tb-val">Rain total ' + raTxt + '</span>' : '';
+    var raLine = raTxt ? '<br><span class="ir-tb-val">' + raTxt + '</span>' : '';
     if (!hasIR && !hasNexrad) {
         if (raTxt) { _raTipOnly(e, raTxt); return; }
         if (irTbTooltip && detailMap && detailMap.hasLayer(irTbTooltip)) {
@@ -6596,6 +6596,7 @@ function updateIRMeta(idx) {
     updateHovmollerMarker(rawDt);
     updateHovCenterMarker(rawDt);
     updateWindFieldForTime(rawDt);
+    _raSyncToTime(rawDt);
 
     // Sync model forecast overlay to current IR frame time
     if (_modelVisible && _modelAutoSync && _modelData) {
@@ -16600,6 +16601,14 @@ var _raOverlay = null;
 var _raReq = 0;
 var _raFitted = false;       // fit to the swath once per storm
 var _raPrevCmap = null;      // IR colormap to restore when Rain goes off
+var _raMode = 'total';       // 'total' | 'rate' (hourly snapshot nearest the IR frame)
+var _raAtlas = null;         // decoded rate atlas for _raSid
+var _raAtlasReq = null;
+var _raRateK = -1;           // snapshot on the map
+var _raRateFrame = null;     // {meta, idx} of that snapshot
+var _raIrMs = null;          // latest IR frame time (epoch ms)
+var _raChartShapes = null;   // chart's base shapes (stage shading)
+var _raMarkTimer = null;
 
 function _raManifest() {
     if (!_raManifestReq) {
@@ -16618,6 +16627,7 @@ function _raReset(storm) {
     _raData = null;
     _raReq++;
     _raFitted = false;
+    _raMode = 'total'; _raAtlas = null; _raAtlasReq = null; _raRateK = -1; _raRateFrame = null; _raIrMs = null;
     _raSid = storm ? storm.sid : null;
     var wrap = document.getElementById('ga-rain-toggle-wrap');
     if (wrap) wrap.style.display = 'none';
@@ -16684,7 +16694,10 @@ function _raShow() {
         detailMap.getPane('rainTotal').style.zIndex = 380;
         detailMap.getPane('rainTotal').style.pointerEvents = 'none';
     }
-    _raOverlay = PT.addTo(detailMap, _raData.meta, _raData.idx, 0.85, 'rainTotal');
+    _raOverlay = null;
+    _raRateK = -1;
+    if (_raMode === 'rate' && _raAtlas) _raShowRate();
+    else _raOverlay = PT.addTo(detailMap, _raData.meta, _raData.idx, 0.85, 'rainTotal');
     PT.attribution(detailMap, true);
     // Grayscale IR under the rain colors (the color IR ramps share their
     // hues), as the RT monitor's Rain mode does.
@@ -16694,13 +16707,124 @@ function _raShow() {
     _raRenderCard();
     // After the side panel opens for the card (its MutationObserver runs
     // after this task, the map resizes 60 ms later), so the fit sees it.
-    if (!_raFitted) { _raFitted = true; setTimeout(_raFit, 160); }
+    if (!_raFitted && _raMode === 'total') { _raFitted = true; setTimeout(_raFit, 160); }
+    _raSyncModeButtons();
+}
+
+/** Storm total <-> hourly rain rate. The rate atlas loads on first use. */
+window.setArchiveRainMode = function (mode) {
+    var PT = window.PardigTotal;
+    if (!_raData || !PT || mode === _raMode) return;
+    if (mode === 'rate') {
+        var rate = _raData.meta.rate;
+        if (!rate) return;
+        if (!_raAtlas) {
+            var st = document.getElementById('ga-rain-rate-time');
+            if (st) st.textContent = 'Loading...';
+            var sid = _raSid;
+            _raAtlasReq = _raAtlasReq || PT.loadAtlas(_RA_ROOT + encodeURIComponent(sid) + '/', rate);
+            _raAtlasReq.then(function (a) {
+                if (_raSid !== sid) return;
+                _raAtlas = a;
+                _raMode = 'rate';
+                if (_raVisible) {
+                    _raShow();
+                    setTimeout(function () { if (_raRateFrame) _raFit(_raRateFrame.meta.grid); }, 60);
+                }
+            }).catch(function (e) {
+                console.warn('[GA] rain rate atlas', e);
+                _raAtlasReq = null;
+                if (st) st.textContent = 'Unavailable';
+            });
+            return;
+        }
+    }
+    _raMode = mode;
+    _ga('ga_rain_mode', { mode: mode, sid: _raSid });
+    if (_raVisible) {
+        _raShow();
+        // Rate: zoom to the storm-centered window (the IR follow takes it
+        // from there); total: back to the whole swath.
+        setTimeout(function () {
+            if (_raMode === 'rate') { if (_raRateFrame) _raFit(_raRateFrame.meta.grid); }
+            else _raFit();
+        }, 60);
+    }
+};
+
+function _raSyncModeButtons() {
+    var t = document.getElementById('ga-rain-mode-total'), r = document.getElementById('ga-rain-mode-rate');
+    var hasRate = !!(_raData && _raData.meta.rate && _raData.meta.rate.t && _raData.meta.rate.t.length);
+    var row = document.getElementById('ga-rain-mode-row');
+    if (row) row.style.display = hasRate ? '' : 'none';
+    if (t) t.classList.toggle('active', _raMode === 'total');
+    if (r) r.classList.toggle('active', _raMode === 'rate');
+    var st = document.getElementById('ga-rain-rate-time');
+    if (st && _raMode === 'total') st.textContent = '';
+}
+
+/** Draw (or move to) the snapshot nearest the IR frame - or, before any IR
+ *  frame has shown, the hour of heaviest rain near the center. */
+function _raShowRate() {
+    var PT = window.PardigTotal, rate = _raData && _raData.meta.rate;
+    if (!PT || !rate || !_raAtlas || !detailMap) return;
+    var k;
+    if (_raIrMs != null) {
+        k = PT.nearestFrame(rate, _raIrMs, 45);
+    } else {
+        var s = _raData.meta.series || {}, best = -1, bi = 0;
+        (s.r100 || []).forEach(function (v, i) { if (v > best) { best = v; bi = i; } });
+        var ts = s.t && s.t[bi];
+        k = ts ? PT.nearestFrame(rate, Date.UTC(+ts.slice(0, 4), +ts.slice(4, 6) - 1, +ts.slice(6, 8),
+                                                 +ts.slice(8, 10), +ts.slice(10, 12)), 60) : 0;
+    }
+    var st = document.getElementById('ga-rain-rate-time');
+    if (k < 0) {
+        if (_raOverlay) { try { detailMap.removeLayer(_raOverlay); } catch (e) {} _raOverlay = null; }
+        _raRateK = -1; _raRateFrame = null;
+        if (st) st.textContent = 'no PARDIG hour near this IR frame';
+        _raRenderLegend();
+        return;
+    }
+    if (k === _raRateK && _raOverlay) return;
+    var f = PT.rateFrame(rate, _raAtlas, k);
+    if (_raOverlay && _raRateK >= 0) PT.update(_raOverlay, f.meta, f.idx, 'rate');
+    else {
+        if (_raOverlay) { try { detailMap.removeLayer(_raOverlay); } catch (e) {} }
+        _raOverlay = PT.addTo(detailMap, f.meta, f.idx, 0.85, 'rainTotal', 'rate');
+    }
+    _raRateK = k; _raRateFrame = f;
+    if (st) st.textContent = 'PARDIG ' + TCTime.utc(rate.t[k], { date: true });
+    _raRenderLegend();
+}
+
+/** IR frame changed (rawDt = frame datetime): move the rate snapshot and the
+ *  chart's time marker. */
+function _raSyncToTime(rawDt) {
+    if (!rawDt) return;
+    var d = new Date(String(rawDt).replace(' UTC', '').replace(' ', 'T') + (/[Zz]$/.test(rawDt) ? '' : 'Z'));
+    if (isNaN(d.getTime())) return;
+    _raIrMs = d.getTime();
+    if (!_raVisible || !_raData) return;
+    if (_raMode === 'rate') _raShowRate();
+    if (_raMarkTimer) clearTimeout(_raMarkTimer);
+    _raMarkTimer = setTimeout(_raMarkChart, irPlaying ? 250 : 0);
+}
+
+function _raMarkChart() {
+    var el = document.getElementById('ga-rain-chart');
+    if (!el || !el.layout || !window.Plotly || _raIrMs == null) return;
+    var x = new Date(_raIrMs).toISOString().slice(0, 16);
+    var line = { type: 'line', xref: 'x', yref: 'paper', x0: x, x1: x, y0: 0, y1: 1,
+                 line: { color: '#f59e0b', width: 1.4 } };
+    try { Plotly.relayout(el, { shapes: (_raChartShapes || []).concat([line]) }); } catch (e) {}
 }
 
 /** Fit the map to the swath, clear of the title bar + rail, the IR loop
  *  bar and the side panel (all float over the full-bleed map). */
-function _raFit() {
-    var g = _raData && _raData.meta.grid, el = document.getElementById('detail-map');
+function _raFit(g) {
+    g = g || (_raData && _raData.meta.grid);
+    var el = document.getElementById('detail-map');
     if (!g || !el || !detailMap) return;
     var mr = el.getBoundingClientRect();
     function shown(sel) {
@@ -16738,6 +16862,17 @@ function _raRenderLegend() {
     var lg = document.getElementById('ga-rain-legend'), PT = window.PardigTotal;
     if (!lg || !_raData || !PT) return;
     var m = _raData.meta;
+    if (_raMode === 'rate') {
+        var rt = m.rate, k = _raRateK;
+        lg.innerHTML = '<div class="ga-rain-legend-title"><span>Rain rate</span><span>mm/h</span></div>'
+            + PT.barHtml('ga-rain-bar', 'ga-rain-ticks', 'rate')
+            + '<div class="ga-rain-legend-meta">' + (k >= 0 ? 'PARDIG ' + TCTime.utc(rt.t[k], { date: true }) + ' · hourly, nearest the IR frame'
+                                                              : 'No PARDIG hour within 45 min of this IR frame') + '</div>'
+            + '<div class="ga-rain-legend-src">' + PT.RATE_CREDIT_HTML + '</div>';
+        lg.style.display = '';
+        _raPlaceLegend();
+        return;
+    }
     lg.innerHTML = '<div class="ga-rain-legend-title"><span>Storm-total rain</span><span>mm</span></div>'
         + PT.barHtml('ga-rain-bar', 'ga-rain-ticks')
         + '<div class="ga-rain-legend-meta">Within ' + Math.round(m.radius_km || 500) + ' km of the center · '
@@ -16863,13 +16998,21 @@ function _raRenderChart(m, s) {
         hovermode: 'x unified'
     });
     // No modebar: on a 170-px card it sat on top of the legend.
-    gaNewPlot(el, traces, layout, Object.assign({}, PLOTLY_CONFIG, { displayModeBar: false }));
+    _raChartShapes = shapes.slice();
+    gaNewPlot(el, traces, layout, Object.assign({}, PLOTLY_CONFIG, { displayModeBar: false })).then(function () {
+        if (_raIrMs != null) _raMarkChart();
+    });
 }
 
 /** Hover text for the total under the cursor, or null. */
 function _raValueAt(lat, lng) {
     if (!_raVisible || !_raData || !window.PardigTotal) return null;
-    return window.PardigTotal.valueText(_raData.meta, _raData.idx, lat, lng);
+    if (_raMode === 'rate') {
+        var v = _raRateFrame ? window.PardigTotal.valueText(_raRateFrame.meta, _raRateFrame.idx, lat, lng, 'rate') : null;
+        return v ? 'Rain rate ' + v : null;
+    }
+    var t = window.PardigTotal.valueText(_raData.meta, _raData.idx, lat, lng);
+    return t ? 'Rain total ' + t : null;
 }
 
 /** The detail map's hover tooltip is wired when IR first draws; the rain
@@ -16892,7 +17035,7 @@ function _raTipOnly(e, raTxt) {
     if (!irTbTooltip || !detailMap) return;
     var lat = e.latlng.lat, lng = ((e.latlng.lng + 180) % 360 + 360) % 360 - 180;
     irTbTooltip.setLatLng(e.latlng).setContent(
-        '<span class="ir-tb-val">Rain total ' + raTxt + '</span>'
+        '<span class="ir-tb-val">' + raTxt + '</span>'
         + '<span class="ir-tb-sep"> &nbsp; </span>'
         + '<span class="ir-tb-coord">' + Math.abs(lat).toFixed(2) + (lat >= 0 ? '°N' : '°S') + ', '
         + Math.abs(lng).toFixed(2) + (lng >= 0 ? '°E' : '°W') + '</span>');

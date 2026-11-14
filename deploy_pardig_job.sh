@@ -69,7 +69,7 @@ fi
 ARCH_JOB="tc-atlas-pardig-archive-job"
 ARCH_SCHED="tc-atlas-pardig-archive-monthly"
 ARCH_ARGS=(--region "${REGION}" --image "${IMAGE}" --command python
-           --args "build_pardig_archive.py,--missing,--workers,8" --tasks 1 --parallelism 1
+           --args "build_pardig_archive.py,--missing,--workers,8" --tasks 1 --parallelism 11
            --memory 8Gi --cpu 2 --max-retries 1 --task-timeout 3600
            --set-env-vars "R2_ENDPOINT_URL=https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com,R2_BUCKET=tc-atlas-rt"
            --set-secrets "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest")
