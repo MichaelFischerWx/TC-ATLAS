@@ -6612,6 +6612,22 @@
                 return j;
             });
     }
+    /** Newest-frame age for the Layers row without turning Rain on: a
+     *  read-only frames.json fetch (no frame registration), at most every
+     *  10 min, re-rendering the panel if it's still open. */
+    var _rainPeek = null, _rainPeekAt = 0;
+    function _rainPeekNewest() {
+        if (_rainManifest || Date.now() - _rainPeekAt < 600000) return;
+        _rainPeekAt = Date.now();
+        _rtFetch(_RAIN_ROOT + '/frames.json', { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+                if (!j || !j.frames || !j.frames.length) return;
+                _rainPeek = j;
+                if (_rtLayersPanelOpen) _renderLayersPanel();
+            })
+            .catch(function () {});
+    }
     function _rainEnsureLayer(times) {
         if (_rainLayer) { _rainLayer.setFrames(times); return; }
         var zmax = (_rainManifest && _rainManifest.zmax) || 4;
@@ -6876,6 +6892,7 @@
         _rainLoadSeq++;                         // void an in-flight manifest load
         var btn = document.getElementById('ir-rain-mode-btn');
         if (btn) btn.classList.remove('active');
+        _refreshLayersCount();
         _rainPoll(false);
         _rainLegend(false);
         var wasPlaying = globalAnimPlaying;
@@ -6899,6 +6916,7 @@
         _gRainOn = true;
         var btn = document.getElementById('ir-rain-mode-btn');
         if (btn) btn.classList.add('active');
+        _refreshLayersCount();
         _ga('rt_global_rain_toggle', { on: true });
         _rainApplyBase();
         var seq = ++_rainLoadSeq;
@@ -28028,7 +28046,7 @@
         return '<span style="white-space:nowrap">' + fmtCycle(m.first_frame) + '</span> – '
             + '<span style="white-space:nowrap">' + fmtCycle(m.last_frame) + '</span>';
     }
-    function _rainTotalRamp() {
+    function _rainRampCss() {
         var n = _RAIN_COLORS.length;
         return 'linear-gradient(to right,' + _RAIN_COLORS.map(function (c, i) {
             return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (c[3] / 255).toFixed(2) + ') ' + Math.round(i / (n - 1) * 100) + '%';
@@ -28051,7 +28069,7 @@
             + '<label class="ir-dl-row' + (dis ? ' is-disabled' : '') + '">'
             + '<input type="checkbox"' + (R.on && mine ? ' checked' : '') + (dis ? ' disabled' : '')
             + ' onchange="window._irDetailToggleRainTotal()"><span>Storm-total rain</span>'
-            + '<span class="ir-menu-ramp" aria-hidden="true" style="background:' + _rainTotalRamp() + '"></span></label>'
+            + '<span class="ir-menu-ramp" aria-hidden="true" style="background:' + _rainRampCss() + '"></span></label>'
             + '<div class="ir-dl-sub">' + sub + '</div>';
     }
     /** Legend item for the card's colorbar stack. */
@@ -28573,6 +28591,7 @@
         if (_rtGenesisRawVisible) n++;
         n += Object.keys(_rtEnvActive || {}).length;
         if (_rtMwLayer && _rtMwLayer.isEnabled()) n++;
+        if (_gRainOn) n++;
         var el = document.getElementById('ir-layers-count');
         if (el) {
             el.textContent = n > 0 ? n : '';
@@ -28907,6 +28926,32 @@
                        : '<span class="ir-lp-group-n">' + n + '</span>')
                 + '</summary>';
         }
+        // ── RAIN ────────────────────────────────────────────────────
+        // The same Rain mode as the toolbar pill (phones: the ⋯ menu). It
+        // re-times the loop to the rain frames, so it's a mode rather than an
+        // overlay, but this is where people look for a layer.
+        var rainSub = 'Google DeepMind PARDIG';
+        var _rfs = (_rainManifest || _rainPeek || {}).frames;
+        if (!_rfs) _rainPeekNewest();
+        if (_rfs && _rfs.length) {
+            var _rf = _rfs[_rfs.length - 1];
+            rainSub += ' · newest ' + fmtUTC(_rf, { date: false }) + ', ' + _rainAge(_rf) + ' ago';
+        } else {
+            rainSub += ' · posted 2–8 h after valid time';
+        }
+        html += '<div class="ir-global-menu-section with-divider">Rain</div>';
+        html += row({
+            action: 'rain',
+            label: '<b>Rain rate</b>',
+            substatus: rainSub,
+            ramp: '<span class="ir-menu-ramp" aria-hidden="true" style="background:' + _rainRampCss() + '"></span>',
+            units: 'mm/h',
+            tooltip: 'AI rain-rate estimate from geostationary satellite imagery (Google DeepMind PARDIG, '
+                + 'experimental), 0.1° every 15 min. Turning it on loops the newest 6 h of rain over '
+                + 'grayscale IR from the same times, 2–8 h behind real time.',
+            checked: !!_gRainOn
+        });
+
         var envOn = envLayers.filter(function (L_) { return !!_rtEnvActive[L_.name]; }).length;
         if (envLayers.length) {
             html += '<div class="ir-global-menu-section with-divider">Analysis'
@@ -29224,6 +29269,8 @@
         } else if (action === 'genesis-prob') {
             if (on) _activateGenesisProbLayer(name);
             else _deactivateEnvLayer(name);
+        } else if (action === 'rain') {
+            if (on !== _gRainOn) window._gToggleRain();
         } else if (action === 'env') {
             var layer = (_rtEnvMetadata && _rtEnvMetadata.layers || [])
                 .filter(function (L_) { return L_.name === name; })[0];
