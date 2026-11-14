@@ -323,6 +323,11 @@ var IR_COLORMAPS = {};
     //   -69 to -75°C (204–198K): flat WHITE (255)
     //   -75 to -80°C (198–193K): flat gray 135
     //   below -80°C  (< 193K):   flat gray 85
+    // Plain linear grayscale (warm dark -> cold white): the backdrop under the
+    // storm-total rain colors. Not on the colormap bar; the Dvorak BW ramp's
+    // black/white steps at the coldest tops read as features through the rain.
+    IR_COLORMAPS['graylinear'] = buildLUT([{ f: 0, r: 18, g: 18, b: 18 }, { f: 1, r: 245, g: 245, b: 245 }]);
+
     IR_COLORMAPS['grayscale'] = (function () {
         var vmin = 170.0, vmax = 310.0;
         var lut = new Uint8Array(256 * 4);
@@ -3425,6 +3430,8 @@ function renderStormDetail(storm) {
     // Wind-field (wind radii) overlay — toggle shown only for storms with
     // IBTrACS quadrant radii (storm.radii flag, ~2001+ US-agency storms)
     _wfReset(storm);
+    // Storm-total rain (DeepMind PARDIG) — toggle shown for storms with a total (2016 on)
+    _raReset(storm);
 
     // IR overlay — show toggle for storms with IR data (HURSAT 1978-2015, MergIR 1998+)
     var irToggleWrap = document.getElementById('ir-toggle-wrap');
@@ -5792,8 +5799,12 @@ function displayIROnMap(data) {
         detailMap._irHoverAttached = true;
     }
 
-    // Pan/zoom map based on follow mode
-    if (irFollowStorm) {
+    // Pan/zoom map based on follow mode. With the storm-total rain on, hold
+    // the swath view until the loop plays (a late first frame zoomed the
+    // map back onto the storm the moment the overview was set).
+    if (_raVisible && !irPlaying) {
+        // keep the camera
+    } else if (irFollowStorm) {
         if (!irFollowZoomSet) {
             // First frame: center on storm at a fixed zoom so the storm
             // fills most of the map panel (fitBounds on a 20° IR frame
@@ -5848,7 +5859,10 @@ function _handleIRMouseMove(e) {
 
     var hasIR = irOverlayVisible && irCurrentTbData && irCurrentBounds;
     var hasNexrad = _gaNexradVisible && _gaNexradData && _gaNexradBounds;
+    var raTxt = _raValueAt(e.latlng.lat, e.latlng.lng);   // storm-total rain, when on
+    var raLine = raTxt ? '<br><span class="ir-tb-val">Rain total ' + raTxt + '</span>' : '';
     if (!hasIR && !hasNexrad) {
+        if (raTxt) { _raTipOnly(e, raTxt); return; }
         if (irTbTooltip && detailMap && detailMap.hasLayer(irTbTooltip)) {
             detailMap.closePopup(irTbTooltip);
         }
@@ -5861,7 +5875,8 @@ function _handleIRMouseMove(e) {
         var nxOnly = _handleNexradMouseMove(e);
         if (nxOnly && irTbTooltip) {
             var latStr2 = Math.abs(e.latlng.lat).toFixed(2) + (e.latlng.lat >= 0 ? '°N' : '°S');
-            var lngStr2 = Math.abs(e.latlng.lng).toFixed(2) + (e.latlng.lng >= 0 ? '°E' : '°W');
+            var lngW2 = ((e.latlng.lng + 180) % 360 + 360) % 360 - 180;   // map runs past ±180
+            var lngStr2 = Math.abs(lngW2).toFixed(2) + (lngW2 >= 0 ? '°E' : '°W');
             var beamStr2 = (nxOnly.beamKm != null)
                 ? '<span class="ir-tb-nexrad-sep"> @ ' + nxOnly.beamKm.toFixed(1) + ' km ARL</span>'
                 : '';
@@ -5874,9 +5889,11 @@ function _handleIRMouseMove(e) {
                          beamStr2 +
                          gateStr2 +
                          '<span class="ir-tb-sep"> &nbsp; </span>' +
-                         '<span class="ir-tb-coord">' + latStr2 + ', ' + lngStr2 + '</span>';
+                         '<span class="ir-tb-coord">' + latStr2 + ', ' + lngStr2 + '</span>' + raLine;
             irTbTooltip.setLatLng(e.latlng).setContent(nxHtml);
             if (!detailMap.hasLayer(irTbTooltip)) irTbTooltip.openOn(detailMap);
+        } else if (raTxt) {
+            _raTipOnly(e, raTxt);
         } else if (irTbTooltip && detailMap.hasLayer(irTbTooltip)) {
             detailMap.closePopup(irTbTooltip);
         }
@@ -5890,6 +5907,7 @@ function _handleIRMouseMove(e) {
     // Check if cursor is within IR image bounds
     if (lat < b.getSouth() || lat > b.getNorth() ||
         lng < b.getWest() || lng > b.getEast()) {
+        if (raTxt) { _raTipOnly(e, raTxt); return; }
         if (irTbTooltip && detailMap.hasLayer(irTbTooltip)) {
             detailMap.closePopup(irTbTooltip);
         }
@@ -5912,6 +5930,7 @@ function _handleIRMouseMove(e) {
     var rawVal = irCurrentTbData[row * nCols + col];
     if (rawVal === 0) {
         // Invalid pixel
+        if (raTxt) { _raTipOnly(e, raTxt); return; }
         if (irTbTooltip && detailMap.hasLayer(irTbTooltip)) {
             detailMap.closePopup(irTbTooltip);
         }
@@ -5923,7 +5942,8 @@ function _handleIRMouseMove(e) {
     var tbKStr = tbK.toFixed(1);
     var tbC = (tbK - 273.15).toFixed(1);
     var latStr = Math.abs(lat).toFixed(2) + (lat >= 0 ? '°N' : '°S');
-    var lngStr = Math.abs(lng).toFixed(2) + (lng >= 0 ? '°E' : '°W');
+    var lngW = ((lng + 180) % 360 + 360) % 360 - 180;   // map runs past ±180
+    var lngStr = Math.abs(lngW).toFixed(2) + (lngW >= 0 ? '°E' : '°W');
     var html = '<span class="ir-tb-val">' + tbC + ' °C</span>' +
                '<span class="ir-tb-sep"> / </span>' +
                '<span class="ir-tb-val">' + tbKStr + ' K</span>' +
@@ -5944,6 +5964,7 @@ function _handleIRMouseMove(e) {
             html += '<span class="ir-tb-nexrad-sep"> · n=' + nxHover.gateCount + '</span>';
         }
     }
+    html += raLine;
 
     irTbTooltip.setLatLng(e.latlng).setContent(html);
     if (!detailMap.hasLayer(irTbTooltip)) {
@@ -16559,5 +16580,323 @@ window.GAArchive = {
     irColormaps: function () { return IR_COLORMAPS; },
     irColormapName: function () { return irSelectedColormap; }
 };
+
+
+// ═══════════════════════════════════════════════════════════════
+// ── STORM-TOTAL RAIN (Google DeepMind PARDIG, CC BY 4.0) ──────
+//    Rain within 500 km of the center, summed over every 15-min PARDIG
+//    frame along the IBTrACS track (build_pardig_archive.py ->
+//    cdn.tcatlas.org/pardig-v1/archive/<SID>/), storms from 2016 on.
+//    The Rain rail button draws the total (PardigTotal, shared with the
+//    RT monitor storm card) and opens a card charting rain near the
+//    center through the storm's life.
+// ═══════════════════════════════════════════════════════════════
+var _RA_ROOT = 'https://cdn.tcatlas.org/pardig-v1/archive/';
+var _raManifestReq = null;   // Promise<manifest|null>, once per session
+var _raVisible = false;
+var _raSid = null;
+var _raData = null;          // {meta, idx} for _raSid
+var _raOverlay = null;
+var _raReq = 0;
+var _raFitted = false;       // fit to the swath once per storm
+var _raPrevCmap = null;      // IR colormap to restore when Rain goes off
+
+function _raManifest() {
+    if (!_raManifestReq) {
+        _raManifestReq = fetch(_RA_ROOT + 'manifest.json', { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .catch(function () { return null; });
+    }
+    return _raManifestReq;
+}
+
+/** Reset on storm change (renderStormDetail). The Rain button shows only
+ *  for storms the manifest lists. */
+function _raReset(storm) {
+    _raVisible = false;
+    _raHide();
+    _raData = null;
+    _raReq++;
+    _raFitted = false;
+    _raSid = storm ? storm.sid : null;
+    var wrap = document.getElementById('ga-rain-toggle-wrap');
+    if (wrap) wrap.style.display = 'none';
+    var st = document.getElementById('ga-rain-status');
+    if (st) st.textContent = '';
+    if (!storm || !window.PardigTotal || (storm.year && storm.year < 2016)) return;
+    var sid = storm.sid;
+    _raManifest().then(function (m) {
+        if (_raSid !== sid || !m || !m.storms || !m.storms[sid]) return;
+        if (wrap) wrap.style.display = '';
+    });
+}
+
+function _raHide() {
+    if (_raOverlay && detailMap) { try { detailMap.removeLayer(_raOverlay); } catch (e) {} }
+    _raOverlay = null;
+    if (detailMap && window.PardigTotal) window.PardigTotal.attribution(detailMap, false);
+    var lg = document.getElementById('ga-rain-legend');
+    if (lg) lg.style.display = 'none';
+    var card = document.getElementById('ga-rain-controls');
+    if (card) card.style.display = 'none';
+    var btn = document.getElementById('ga-rain-toggle-btn');
+    if (btn) btn.classList.remove('active');
+    // Put the IR colormap back unless it was changed while Rain was on.
+    if (_raPrevCmap && irSelectedColormap === 'graylinear') switchColormap(_raPrevCmap);
+    _raPrevCmap = null;
+}
+
+window.toggleArchiveRain = function () {
+    var PT = window.PardigTotal, storm = selectedStorm;
+    if (_raVisible) { _raVisible = false; _raHide(); return; }
+    if (!storm || !PT) return;
+    _raVisible = true;
+    var btn = document.getElementById('ga-rain-toggle-btn');
+    if (btn) btn.classList.add('active');
+    _ga('ga_toggle_rain', { sid: storm.sid, storm_name: storm.name });
+    if (_raData && _raSid === storm.sid) { _raShow(); return; }
+    var st = document.getElementById('ga-rain-status');
+    if (st) st.textContent = 'Loading...';
+    var req = ++_raReq, sid = storm.sid;
+    PT.load(_RA_ROOT + encodeURIComponent(sid) + '/').then(function (res) {
+        if (req !== _raReq || !_raVisible) return;
+        if (st) st.textContent = res ? '' : 'No rain total';
+        if (!res) { _raVisible = false; _raHide(); return; }
+        _raData = res;
+        _raShow();
+    }).catch(function (e) {
+        if (req !== _raReq) return;
+        console.warn('[GA] rain total', e);
+        if (st) st.textContent = 'Unavailable';
+        _raVisible = false;
+        _raHide();
+    });
+};
+
+function _raShow() {
+    var PT = window.PardigTotal;
+    if (!detailMap || !_raData || !PT) return;
+    if (_raOverlay) { try { detailMap.removeLayer(_raOverlay); } catch (e) {} }
+    // Own pane: above the IR / microwave / radar images (z 350, re-added as
+    // the loop plays) and under the track (overlayPane 400) and coastlines.
+    if (!detailMap.getPane('rainTotal')) {
+        detailMap.createPane('rainTotal');
+        detailMap.getPane('rainTotal').style.zIndex = 380;
+        detailMap.getPane('rainTotal').style.pointerEvents = 'none';
+    }
+    _raOverlay = PT.addTo(detailMap, _raData.meta, _raData.idx, 0.85, 'rainTotal');
+    PT.attribution(detailMap, true);
+    // Grayscale IR under the rain colors (the color IR ramps share their
+    // hues), as the RT monitor's Rain mode does.
+    if (irSelectedColormap !== 'graylinear') { _raPrevCmap = irSelectedColormap; switchColormap('graylinear'); }
+    _raEnsureHover();
+    _raRenderLegend();
+    _raRenderCard();
+    // After the side panel opens for the card (its MutationObserver runs
+    // after this task, the map resizes 60 ms later), so the fit sees it.
+    if (!_raFitted) { _raFitted = true; setTimeout(_raFit, 160); }
+}
+
+/** Fit the map to the swath, clear of the title bar + rail, the IR loop
+ *  bar and the side panel (all float over the full-bleed map). */
+function _raFit() {
+    var g = _raData && _raData.meta.grid, el = document.getElementById('detail-map');
+    if (!g || !el || !detailMap) return;
+    var mr = el.getBoundingClientRect();
+    function shown(sel) {
+        var e = document.querySelector(sel);
+        if (!e || e.offsetParent === null) return null;
+        var r = e.getBoundingClientRect();
+        return (r.width && r.height) ? r : null;
+    }
+    var pad = { top: 30, bottom: 30, left: 30, right: 30 };
+    var tl = shown('.detail-float-tl'); if (tl) pad.top = Math.max(pad.top, tl.bottom - mr.top + 16);
+    var bar = shown('.ir-bar'); if (bar) pad.bottom = Math.max(pad.bottom, mr.bottom - bar.top + 16);
+    var side = shown('#detail-side');
+    if (side && side.top < mr.bottom - 40) {
+        if (side.width > mr.width * 0.6) pad.bottom = Math.max(pad.bottom, mr.bottom - side.top + 12);   // phone sheet
+        else if (side.left > mr.left + mr.width * 0.4) pad.right = Math.max(pad.right, mr.right - side.left + 20);
+    }
+    var rail = shown('.ga-layerbar');
+    if (rail) {
+        if (rail.width < mr.width * 0.3) pad.left = Math.max(pad.left, rail.right - mr.left + 16);   // desktop rail
+        else pad.top = Math.max(pad.top, rail.bottom - mr.top + 12);                                 // phone strip
+    }
+    // Never squeeze the swath into a sliver: fall back to the whole map.
+    if (mr.height - pad.top - pad.bottom < 100) { pad.top = 10; pad.bottom = Math.max(10, Math.min(pad.bottom, mr.height - 120)); }
+    if (mr.width - pad.left - pad.right < 120) { pad.left = 10; pad.right = Math.max(10, Math.min(pad.right, mr.width - 130)); }
+    try { detailMap.fitBounds([[g.lat_s, g.lon_w], [g.lat_n, g.lon_e]], { padding: pad, maxZoom: 7 }); } catch (e) {}
+}
+
+/** "16 Aug 18Z – 2 Sep 12Z 2017" for the frames summed. */
+function _raPeriod(m) {
+    var y = m.last_frame ? m.last_frame.slice(0, 4) : '';
+    return TCTime.cycle(m.first_frame) + ' – ' + TCTime.cycle(m.last_frame) + (y ? ' ' + y : '');
+}
+
+function _raRenderLegend() {
+    var lg = document.getElementById('ga-rain-legend'), PT = window.PardigTotal;
+    if (!lg || !_raData || !PT) return;
+    var m = _raData.meta;
+    lg.innerHTML = '<div class="ga-rain-legend-title"><span>Storm-total rain</span><span>mm</span></div>'
+        + PT.barHtml('ga-rain-bar', 'ga-rain-ticks')
+        + '<div class="ga-rain-legend-meta">Within ' + Math.round(m.radius_km || 500) + ' km of the center · '
+        + '<span style="white-space:nowrap">' + TCTime.span(m.first_frame, m.last_frame, { year: true }) + '</span></div>'
+        + '<div class="ga-rain-legend-src">' + PT.CREDIT_HTML + '</div>';
+    lg.title = 'PARDIG caps rain rate at ' + (m.rate_cap_mm_h || 75)
+        + ' mm/h, so totals under the most intense eyewall rain run low.';
+    lg.style.display = '';
+    _raPlaceLegend();
+    setTimeout(_raPlaceLegend, 400);     // after MapLibre re-renders the attribution line
+}
+
+/** Legend slot: bottom-left of the full-bleed map, right of the zoom
+ *  buttons, above the IR loop bar and the wind-field legend (the side
+ *  panel covers the right edge, the attribution under it). */
+var _raLegendObs = null;
+function _raPlaceLegend() {
+    var lg = document.getElementById('ga-rain-legend'), el = document.getElementById('detail-map');
+    if (!lg || !el || lg.style.display === 'none') return;
+    var p = lg.offsetParent;
+    if (!p) return;
+    var pr = p.getBoundingClientRect(), mr = el.getBoundingClientRect();
+    function shown(e) {
+        if (!e || e.offsetParent === null || e.style.display === 'none') return null;
+        var r = e.getBoundingClientRect();
+        return (r.width && r.height) ? r : null;
+    }
+    var floor = mr.bottom - 10, left = mr.left + 10;
+    var bar = shown(document.querySelector('.ir-bar')); if (bar && bar.top < floor) floor = bar.top - 8;
+    var wf = shown(document.getElementById('ga-wf-legend')); if (wf && wf.top < floor) floor = wf.top - 8;
+    // Phone: the side panel is a full-width bottom sheet over the map.
+    var side = shown(document.getElementById('detail-side'));
+    if (side && side.width > mr.width * 0.6 && side.top < floor && side.top > mr.top + 60) floor = side.top - 8;
+    var zm = document.querySelector('#detail-map .maplibregl-ctrl-zoom-in');
+    var zg = shown(zm && zm.parentNode);
+    if (zg && zg.bottom > floor - lg.offsetHeight) left = Math.max(left, zg.right + 10);
+    lg.style.left = Math.round(left - pr.left) + 'px';
+    lg.style.right = 'auto';
+    lg.style.bottom = Math.round(pr.bottom - floor) + 'px';
+    if (!_raLegendObs && typeof ResizeObserver !== 'undefined') {
+        _raLegendObs = new ResizeObserver(function () { if (_raVisible) setTimeout(_raPlaceLegend, 30); });
+        [document.querySelector('.ir-bar'), document.getElementById('ga-wf-legend')].forEach(function (e) {
+            if (e) _raLegendObs.observe(e);
+        });
+    }
+}
+window.addEventListener('resize', function () { if (_raVisible) _raPlaceLegend(); });
+
+function _raRenderCard() {
+    var card = document.getElementById('ga-rain-controls');
+    if (!card || !_raData) return;
+    var m = _raData.meta, s = m.series || {};
+    card.style.display = '';
+    var sum = document.getElementById('ga-rain-summary');
+    if (sum) sum.textContent = 'peak total ' + Math.round(m.max_mm).toLocaleString() + ' mm';
+    var lat = m.max_at && m.max_at[0], lon = m.max_at && m.max_at[1];
+    var where = (lat != null)
+        ? ' at ' + Math.abs(lat).toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S') + ' '
+          + Math.abs(lon).toFixed(1) + '°' + (lon >= 0 ? 'E' : 'W') : '';
+    var cover = '';
+    if (m.expected_frames && m.n_frames < m.expected_frames) {
+        cover = ' PARDIG starts ' + TCTime.utc(m.record_start, { year: true, time: false })
+            + ', so this covers ' + m.n_frames.toLocaleString() + ' of the track’s '
+            + m.expected_frames.toLocaleString() + ' 15-min steps.';
+    }
+    var rd = document.getElementById('ga-rain-readout');
+    if (rd) rd.innerHTML = 'Mean rain rate within ' + Math.round(m.inner_km || 100) + ' and '
+        + Math.round(m.radius_km || 500) + ' km of the IBTrACS center, every 15 min, '
+        + _raPeriod(m) + '. Storm total peaks at ' + Math.round(m.max_mm).toLocaleString() + ' mm' + where + '.' + cover;
+    var note = document.getElementById('ga-rain-note');
+    if (note) note.innerHTML = 'Rain: ' + window.PardigTotal.CREDIT_HTML + '. '
+        + '<span class="ga-obs-dim">Satellite-based AI estimate on a 0.1° grid; PARDIG caps rain rate at '
+        + (m.rate_cap_mm_h || 75) + ' mm/h, so the heaviest eyewall rain and totals under it run low. '
+        + 'Shaded: extratropical or disturbance stages.</span>';
+    _raRenderChart(m, s);
+}
+
+function _raRenderChart(m, s) {
+    var el = document.getElementById('ga-rain-chart');
+    if (!el || !s.t || !s.t.length) return;
+    var iso = s.t.map(function (t) {
+        return t.slice(0, 4) + '-' + t.slice(4, 6) + '-' + t.slice(6, 8) + 'T' + t.slice(8, 10) + ':' + t.slice(10, 12);
+    });
+    var cap = (s.cap100 || []).map(function (c) { return Math.round(c * 100); });
+    var nat = s.nature || [];
+    var shapes = [], i0 = null;
+    for (var i = 0; i <= iso.length; i++) {
+        var non = i < iso.length && (nat[i] === 'ET' || nat[i] === 'DS');
+        if (non && i0 === null) i0 = i;
+        if (!non && i0 !== null) {
+            shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: iso[i0], x1: iso[i - 1], y0: 0, y1: 1,
+                          fillcolor: 'rgba(148,163,184,0.16)', line: { width: 0 }, layer: 'below' });
+            i0 = null;
+        }
+    }
+    var base = (typeof _tcaPlotlyBase === 'function') ? _tcaPlotlyBase() : {};
+    var rd = (window.TCATheme && window.TCATheme.readVar) ? window.TCATheme.readVar : function () { return ''; };
+    var axis = rd('--plot-axis') || '#5b6573', grid = rd('--plot-grid') || 'rgba(15,22,35,0.22)';
+    var bg = rd('--surface-raised') || '#ffffff';
+    var inner = Math.round(m.inner_km || 100), outer = Math.round(m.radius_km || 500);
+    var traces = [{
+        x: iso, y: s.r100, type: 'scatter', mode: 'lines', name: 'Within ' + inner + ' km',
+        line: { color: '#0891b2', width: 1.6 }, fill: 'tozeroy', fillcolor: 'rgba(6,182,212,0.22)',
+        customdata: cap.map(function (c, k) { return [c, nat[k] || '']; }),
+        hovertemplate: '<b>%{x|' + TCTime.plotly.utc + '}</b><br>Within ' + inner + ' km: %{y:.1f} mm/h'
+            + '<br>At the 75 mm/h cap: %{customdata[0]}%<extra>%{customdata[1]}</extra>'
+    }, {
+        x: iso, y: s.r500, type: 'scatter', mode: 'lines', name: 'Within ' + outer + ' km',
+        line: { color: '#64748b', width: 1.4, dash: 'dot' },
+        hovertemplate: 'Within ' + outer + ' km: %{y:.1f} mm/h<extra></extra>'
+    }];
+    var layout = Object.assign({}, base, {
+        paper_bgcolor: bg, plot_bgcolor: bg, height: 170,
+        margin: { l: 40, r: 10, t: 22, b: 26 },
+        xaxis: { type: 'date', tickformat: TCTime.plotly.day, tickfont: { size: 10, color: axis },
+                 gridcolor: grid, linecolor: grid },
+        yaxis: { title: { text: 'mm/h', font: { size: 10, color: axis } }, tickfont: { size: 10, color: axis },
+                 gridcolor: grid, rangemode: 'tozero', fixedrange: true },
+        shapes: shapes, showlegend: true,
+        // Above the plot, transparent: clear of the data and of theme swaps.
+        legend: { orientation: 'h', x: 1, xanchor: 'right', y: 1.02, yanchor: 'bottom', bgcolor: 'rgba(0,0,0,0)',
+                  font: { size: 10, color: axis } },
+        hovermode: 'x unified'
+    });
+    // No modebar: on a 170-px card it sat on top of the legend.
+    gaNewPlot(el, traces, layout, Object.assign({}, PLOTLY_CONFIG, { displayModeBar: false }));
+}
+
+/** Hover text for the total under the cursor, or null. */
+function _raValueAt(lat, lng) {
+    if (!_raVisible || !_raData || !window.PardigTotal) return null;
+    return window.PardigTotal.valueText(_raData.meta, _raData.idx, lat, lng);
+}
+
+/** The detail map's hover tooltip is wired when IR first draws; the rain
+ *  total needs it even with IR off. */
+function _raEnsureHover() {
+    if (!detailMap || detailMap._irHoverAttached) return;
+    irTbTooltip = L.popup({
+        closeButton: false, autoPan: false, autoClose: false,
+        className: 'ir-tb-tooltip', offset: [12, -12]
+    });
+    detailMap.on('mousemove', _handleIRMouseMove);
+    detailMap.on('mouseout', function () {
+        if (irTbTooltip && detailMap.hasLayer(irTbTooltip)) detailMap.closePopup(irTbTooltip);
+    });
+    detailMap._irHoverAttached = true;
+}
+
+/** Rain-only tooltip (no IR / radar value under the cursor). */
+function _raTipOnly(e, raTxt) {
+    if (!irTbTooltip || !detailMap) return;
+    var lat = e.latlng.lat, lng = ((e.latlng.lng + 180) % 360 + 360) % 360 - 180;
+    irTbTooltip.setLatLng(e.latlng).setContent(
+        '<span class="ir-tb-val">Rain total ' + raTxt + '</span>'
+        + '<span class="ir-tb-sep"> &nbsp; </span>'
+        + '<span class="ir-tb-coord">' + Math.abs(lat).toFixed(2) + (lat >= 0 ? '°N' : '°S') + ', '
+        + Math.abs(lng).toFixed(2) + (lng >= 0 ? '°E' : '°W') + '</span>');
+    if (!detailMap.hasLayer(irTbTooltip)) irTbTooltip.openOn(detailMap);
+}
 
 })();

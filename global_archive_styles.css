@@ -3994,16 +3994,19 @@ input[type="range"].ga-range::-moz-range-thumb {
     --obs-fl: #3b82f6;     --obs-fl-ink: #1d4ed8;
     --obs-sonde: #f59e0b;  --obs-sonde-ink: #b45309;
     --obs-model: #6366f1;  --obs-model-ink: #4338ca;
+    --obs-rain: #06b6d4;   --obs-rain-ink: #0e7490;
 }
 :root[data-theme="dark"] {
     --obs-mw-ink: #fdba74; --obs-nexrad-ink: #86efac; --obs-wf-ink: #7dd3fc;
     --obs-fl-ink: #93c5fd; --obs-sonde-ink: #fcd34d; --obs-model-ink: #a5b4fc;
+    --obs-rain-ink: #67e8f9;
 }
 .ga-obs[data-role="mw"]     { --obs-c: var(--obs-mw);     --obs-ink: var(--obs-mw-ink); }
 .ga-obs[data-role="nexrad"] { --obs-c: var(--obs-nexrad); --obs-ink: var(--obs-nexrad-ink); }
 .ga-obs[data-role="wf"]     { --obs-c: var(--obs-wf);     --obs-ink: var(--obs-wf-ink); }
 .ga-obs[data-role="fl"]     { --obs-c: var(--obs-fl);     --obs-ink: var(--obs-fl-ink); }
 .ga-obs[data-role="model"]  { --obs-c: var(--obs-model);  --obs-ink: var(--obs-model-ink); }
+.ga-obs[data-role="rain"]   { --obs-c: var(--obs-rain);   --obs-ink: var(--obs-rain-ink); }
 .ga-obs-sub[data-role="sonde"] { --obs-c: var(--obs-sonde); --obs-ink: var(--obs-sonde-ink); }
 
 .ga-obs {
@@ -4463,4 +4466,51 @@ input[type="range"].ga-range::-moz-range-thumb {
     .gsr-sat-bar { top: 92px; right: 8px; width: 170px; }
     .gsr-sat-read { right: auto; left: 50%; transform: translateX(-50%); bottom: 8px; white-space: nowrap; }
     .gsr-life { height: 150px; }
+}
+
+/* ── Storm-total rain (Google DeepMind PARDIG) ─────────────────────────
+   On-map legend bottom-right (the wind-field legend owns bottom-left),
+   lifted above the map attribution by _raPlaceLegend; the card holds the
+   rain-near-the-center chart. Bar/ticks come from PardigTotal.barHtml. */
+.ga-rain-legend {
+    position: absolute;
+    right: 10px;
+    bottom: 34px;
+    z-index: 900;
+    width: 212px;
+    box-sizing: border-box;
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    backdrop-filter: blur(4px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 7px 10px;
+    font-size: 10px;
+    line-height: 1.35;
+    color: var(--text);
+}
+.ga-rain-legend-title { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 4px; }
+.ga-rain-legend-title span:last-child { color: var(--slate); font-weight: 500; }
+.ga-rain-bar {
+    display: flex;
+    height: 9px;
+    border-radius: var(--radius-xs);
+    overflow: hidden;
+    background: #0b1220;
+    border: 1px solid var(--border);
+}
+.ga-rain-bar span { flex: 1 1 0; }
+.ga-rain-ticks { position: relative; height: 12px; margin-top: 2px; font-size: 9px; color: var(--slate); }
+.ga-rain-ticks span { position: absolute; top: 0; transform: translateX(-50%); }
+.ga-rain-ticks span:first-child { transform: none; }
+.ga-rain-legend-meta { margin-top: 3px; }
+.ga-rain-legend-src { margin-top: 2px; font-size: 9px; color: var(--slate); }
+.ga-rain-legend-src a { color: var(--text); }
+.ga-rain-chart { width: 100%; height: 170px; }
+@media (max-width: 768px) {
+    .ga-rain-legend { width: 168px; padding: 6px 8px; }
+    /* The map is a strip between the tool bar and the bottom sheet here; the
+       sheet's Rain card carries the period + full credit (and the map
+       attribution the PARDIG line), so the legend keeps just the scale. */
+    .ga-rain-legend .ga-rain-legend-meta,
+    .ga-rain-legend .ga-rain-legend-src { display: none; }
 }

@@ -27,11 +27,12 @@ SCHEDULE="3-59/10 * * * *"
 IMAGE="gcr.io/${PROJECT}/${JOB_NAME}:latest"
 
 if [[ "${1:-}" != "--no-build" ]]; then
-    # Stage a three-file build context (the repo root is far too big to upload).
+    # Stage a small build context (the repo root is far too big to upload).
     CTX="$(mktemp -d -t tc-atlas-pardig-ctx.XXXXXX)"
     trap 'rm -rf "${CTX}"' EXIT
     cp "${SCRIPT_DIR}/Dockerfile.pardig" "${CTX}/Dockerfile"
-    cp "${SCRIPT_DIR}/build_pardig_rain.py" "${SCRIPT_DIR}/pardig_storm_totals.py" "${CTX}/"
+    cp "${SCRIPT_DIR}/build_pardig_rain.py" "${SCRIPT_DIR}/pardig_storm_totals.py" \
+       "${SCRIPT_DIR}/build_pardig_archive.py" "${CTX}/"
     echo "Building ${IMAGE}..."
     gcloud builds submit --tag "${IMAGE}" "${CTX}"
 fi

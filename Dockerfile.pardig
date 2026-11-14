@@ -7,14 +7,15 @@
 # totals for the storm cards (pardig_storm_totals.py -> pardig-v1/storms/).
 # Most runs find nothing new and exit in a few seconds; a fresh 6-hourly batch
 # (24 frames) takes ~1-2 min. Build context is staged by deploy_pardig_job.sh
-# (this file + the two scripts).
+# (this file + the scripts). build_pardig_archive.py (the Global Archive
+# backfill) rides in the same image and runs as its own one-off job.
 # --------------------------------------------------------------------------
 FROM python:3.12-slim
 
 RUN pip install --no-cache-dir "numpy>=2,<3" pillow zstandard boto3
 
 WORKDIR /app
-COPY build_pardig_rain.py pardig_storm_totals.py /app/
+COPY build_pardig_rain.py pardig_storm_totals.py build_pardig_archive.py /app/
 
 ENV PYTHONUNBUFFERED=1
 ENTRYPOINT ["python", "build_pardig_rain.py"]
