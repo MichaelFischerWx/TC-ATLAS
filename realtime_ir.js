@@ -136,14 +136,18 @@
     function _rtToast(msg) {
         TCToast.show(msg);
     }
-    // Every toast on this page (Recon's too) clears the animation dock while
-    // it's open; same measurement as the genesis card's lift.
+    // Every toast on this page (Recon's too) clears the animation dock and the
+    // zero-storm notice while they're open (the genesis toast used to land on
+    // top of the notice); same measurement as the genesis card's lift.
     window.tcToastBottom = function () {
-        var dock = document.getElementById('ir-global-anim-panel');
-        if (!dock || dock.offsetParent === null) return 0;
-        var r = dock.getBoundingClientRect();
-        var lift = Math.round(window.innerHeight - r.top) + 12;
-        return (r.height && lift > 40 && lift < window.innerHeight * 0.6) ? lift : 0;
+        var top = Infinity;
+        ['ir-global-anim-panel', 'ir-no-storms'].forEach(function (id) {
+            var r = _rtShownRect(document.getElementById(id));
+            if (r) top = Math.min(top, r.top);
+        });
+        if (top === Infinity) return 0;
+        var lift = Math.round(window.innerHeight - top) + 12;
+        return (lift > 40 && lift < window.innerHeight * 0.6) ? lift : 0;
     };
 
     // ── IR Colormap LUTs (for client-side raw Tb rendering) ────
@@ -6421,6 +6425,7 @@
             host.appendChild(el);
         }
         el.style.display = '';
+        _rtPlaceBottomStack();
     }
 
     /** When radar turns on, swap the satellite base to a non-clashing scheme:
@@ -6729,19 +6734,99 @@
         _rainAgeTimer = setInterval(age, 60000);
     }
 
-    /** Desktop: sit just above the attribution line, however many lines the
-     *  attribution wraps to (it grows with the rain + forecast credits).
-     *  Phones keep the CSS slot above the loop dock (attribution is collapsed). */
-    function _rainPlaceLegend() {
-        var el = document.getElementById('ir-rain-global-legend'), host = document.getElementById('ir-map');
-        if (!el || !host || el.style.display === 'none') return;
-        if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) { el.style.bottom = ''; return; }
-        var a = host.querySelector('.maplibregl-ctrl-attrib');
-        if (!a) { el.style.bottom = ''; return; }
-        var gap = host.getBoundingClientRect().bottom - a.getBoundingClientRect().top;
-        el.style.bottom = Math.max(64, Math.round(gap + 6)) + 'px';
+    function _rainPlaceLegend() { _rtPlaceBottomStack(); }
+
+    /** Bottom-of-map stack. The loop dock (bottom-left; full width on a
+     *  phone), the zero-storm notice, the radar / rain legend and the map
+     *  attribution each had a fixed offset, so they piled up: the notice ran
+     *  off a phone screen over the dock handle and the rain legend, and the
+     *  two-line credit line wrapped under the dock on desktop. Placed from
+     *  measured rects instead, bottom up:
+     *    desktop  attribution kept right of the dock; legend just above the
+     *             attribution; notice above whatever it overlaps
+     *    phone    dock, then notice, then legend
+     *  (tcToastBottom lifts toasts above the dock and the notice). */
+    function _rtShownRect(el) {
+        if (!el || !el.isConnected || el.style.display === 'none') return null;
+        var r = el.getBoundingClientRect();
+        return (r.width && r.height) ? r : null;
     }
-    window.addEventListener('resize', function () { if (_gRainOn) _rainPlaceLegend(); });
+    var _rtStackObs = null, _rtStackTimer = null;
+    function _rtStackWatch(el) {
+        if (!el || el._rtStackWatched || typeof ResizeObserver === 'undefined') return;
+        if (!_rtStackObs) {
+            // Debounced so moving things inside the callback can't feed back
+            // into a ResizeObserver loop warning.
+            _rtStackObs = new ResizeObserver(function () {
+                clearTimeout(_rtStackTimer);
+                _rtStackTimer = setTimeout(_rtPlaceBottomStack, 30);
+            });
+        }
+        el._rtStackWatched = true;
+        _rtStackObs.observe(el);
+    }
+    function _rtPlaceBottomStack() {
+        var host = document.getElementById('ir-map');
+        if (!host) return;
+        var phone = !!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches);
+        var dockEl = document.getElementById('ir-global-anim-panel');
+        var attrib = host.querySelector('.maplibregl-ctrl-attrib');
+        var notice = document.getElementById('ir-no-storms');
+        var legend = _rtShownRect(document.getElementById('ir-rain-global-legend'))
+            ? document.getElementById('ir-rain-global-legend')
+            : (_rtShownRect(document.getElementById('ir-radar-global-legend'))
+                ? document.getElementById('ir-radar-global-legend') : null);
+        _rtStackWatch(dockEl); _rtStackWatch(attrib); _rtStackWatch(notice);
+        var dock = _rtShownRect(dockEl);
+        // Bottom edge of el sits `gap` px above viewport y `topY`.
+        function above(el, topY, gap) {
+            var p = el.offsetParent || el.parentNode;
+            el.style.bottom = Math.round(p.getBoundingClientRect().bottom - topY + gap) + 'px';
+        }
+        function hOverlap(a, b) { return a.left < b.right && b.left < a.right; }
+
+        // Desktop attribution (it carries the DeepMind notices): wrap to the
+        // right of the dock rather than running underneath it.
+        if (attrib) {
+            if (!phone && dock) {
+                // max-width is content-box: take MapLibre's side padding off.
+                var ar = attrib.getBoundingClientRect(), cs = getComputedStyle(attrib);
+                var pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+                attrib.style.maxWidth = Math.max(200, Math.round(ar.right - dock.right - 12 - pad)) + 'px';
+            } else {
+                attrib.style.maxWidth = '';
+            }
+        }
+        var attribR = _rtShownRect(attrib);
+
+        // Desktop legend: just above the attribution, however many lines it wraps to.
+        if (legend) {
+            if (!phone && attribR) {
+                var gap = host.getBoundingClientRect().bottom - attribR.top;
+                legend.style.bottom = Math.max(64, Math.round(gap + 6)) + 'px';
+            } else {
+                legend.style.bottom = '';
+            }
+        }
+
+        // Notice: above everything below it that it overlaps.
+        var noticeR = null;
+        if (notice && notice.isConnected) {
+            var nr = notice.getBoundingClientRect(), floor = Infinity;
+            [dock, attribR, phone ? null : _rtShownRect(legend)].forEach(function (r) {
+                if (r && hOverlap(r, nr)) floor = Math.min(floor, r.top);
+            });
+            if (floor < Infinity) above(notice, floor, 8); else notice.style.bottom = '';
+            noticeR = _rtShownRect(notice);
+        }
+
+        // Phone legend: above the notice, else above the dock.
+        if (legend && phone) {
+            var base = noticeR || dock;
+            if (base) above(legend, base.top, 8);
+        }
+    }
+    window.addEventListener('resize', function () { _rtPlaceBottomStack(); });
 
     /** Swap the satellite to grayscale IR under the rain colors (IR covers
      *  day and night alike); remember the prior band + colormap. */
@@ -8198,6 +8283,9 @@
             }
         });
         map.addControl(new AnimPanel());
+        // Start watching the dock + attribution sizes (keeps the attribution
+        // right of the dock on desktop from first paint).
+        setTimeout(_rtPlaceBottomStack, 0);
 
         // ── Keyboard shortcuts for the global IR animation ──────
         // ←/→  step prev/next frame   Space  play/pause
@@ -8875,7 +8963,7 @@
         if (!host) return;
         var el = document.getElementById('ir-no-storms');
         if (storms && storms.length > 0) {
-            if (el && el.parentNode) el.parentNode.removeChild(el);
+            if (el && el.parentNode) { el.parentNode.removeChild(el); _rtPlaceBottomStack(); }
             return;
         }
         var KEY = 'tc-atlas-no-storms-dismissed';
@@ -8886,14 +8974,16 @@
         el.className = 'ir-no-storms';
         el.innerHTML =
             '<span class="ir-no-storms-icon" aria-hidden="true"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><path d="M12 9.5C12 5 15 3 19 3"/><path d="M12 14.5C12 19 9 21 5 21"/></svg></span>' +
-            '<span class="ir-no-storms-title">No active tropical cyclones right now</span>' +
+            '<span class="ir-no-storms-title">No active tropical cyclones<span class="ir-no-storms-now"> right now</span></span>' +
             '<a class="ir-no-storms-link" href="global_archive.html">Explore past storms →</a>' +
             '<button class="ir-no-storms-close" type="button" aria-label="Dismiss">×</button>';
         el.querySelector('.ir-no-storms-close').addEventListener('click', function () {
             try { sessionStorage.setItem(KEY, '1'); } catch (e) {}
             if (el.parentNode) el.parentNode.removeChild(el);
+            _rtPlaceBottomStack();
         });
         host.appendChild(el);
+        _rtPlaceBottomStack();
     }
 
     /** Poll /ir-monitor/active-storms */

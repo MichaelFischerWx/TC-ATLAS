@@ -163,6 +163,28 @@ html, body { margin: 0; padding: 0; }
 .ir-no-storms-close:hover {
     color: var(--text);
 }
+/* Narrow desktop: the short form (no icon, no "right now") keeps the pill
+   clear of the bottom-right legend. */
+@media (max-width: 1100px) {
+    .ir-no-storms-icon,
+    .ir-no-storms-now { display: none; }
+}
+/* Phone: the one-line pill measured ~490px and ran off both edges. Span the
+   map with gutters, short form, and let the link wrap under the title on the
+   narrowest screens. (Vertical slot is set in JS, above the loop dock:
+   _rtPlaceBottomStack.) */
+@media (max-width: 768px) {
+    .ir-no-storms {
+        left: 12px;
+        right: 12px;
+        transform: none;
+        box-sizing: border-box;
+        padding: 8px 12px;
+        gap: 4px 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+}
 
 /* The map section needs explicit viewport dimensions so the
    absolutely-positioned .ir-map child has a real height. Previously
