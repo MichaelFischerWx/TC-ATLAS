@@ -24,6 +24,8 @@ R2, under pardig-v1/archive/:
   manifest.json                               {sid: [max_mm, n_frames, expected_frames]}
 
 Usage:
+  python3 build_pardig_archive.py --missing              # monthly: new storms + storms whose
+                                                          # track grew since, then merge
   python3 build_pardig_archive.py --sids 2017228N14314,2025294N14290 --out DIR
   python3 build_pardig_archive.py --year 2017            # one start-year to R2
   (Cloud Run: one task per start year; CLOUD_RUN_TASK_INDEX -> 2016 + index)
@@ -210,7 +212,7 @@ def existing_sids(store):
 
 
 # ── Run ───────────────────────────────────────────────────────────────────
-def run(store, sids=None, year=None, force=False, workers=6, part=None):
+def run(store, sids=None, year=None, force=False, workers=6, part=None, missing=False):
     t_start = time.time()
     all_storms = load_storms()
     sel = []
@@ -233,6 +235,25 @@ def run(store, sids=None, year=None, force=False, workers=6, part=None):
         have = existing_sids(store)
         skipped = [x for x in sel if x[0] in have]
         sel = [x for x in sel if x[0] not in have]
+        if missing:
+            # A storm still active at an IBTrACS refresh got a partial track;
+            # rebuild it once a later refresh extends the track.
+            grown = []
+            recent = time.time() - 400 * 86400
+            for x in skipped:
+                if x[3][0][-1] < recent:
+                    continue
+                b = store.get(f"{KEY_BASE}/{x[0]}/index.json")
+                m = json.loads(b) if b else {}
+                last = datetime.fromtimestamp(x[3][0][-1], timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                if (m.get("track_last") or "") < last:
+                    grown.append(x)
+            if grown:
+                log(f"rebuilding {len(grown)} storm(s) whose track grew: "
+                    + ", ".join(f"{x[0]} {x[1].get('name')}" for x in grown))
+            gs = {x[0] for x in grown}
+            skipped = [x for x in skipped if x[0] not in gs]
+            sel += grown
         if skipped:
             log(f"skipping {len(skipped)} storm(s) already built")
     if not sel:
@@ -356,10 +377,17 @@ def main():
     ap.add_argument("--out", help="write under this dir instead of R2")
     ap.add_argument("--force", action="store_true", help="rebuild storms that already have a total")
     ap.add_argument("--merge", action="store_true", help="merge parts/*.json into manifest.json")
+    ap.add_argument("--missing", action="store_true",
+                    help="build storms without a total (and ones whose track grew), then merge")
     ap.add_argument("--workers", type=int, default=6)
     args = ap.parse_args()
     store = T.Store(args.out)
     if args.merge:
+        merge(store)
+        return 0
+    if args.missing:
+        summary = run(store, force=False, workers=args.workers, part="updates", missing=True)
+        write_part(store, "updates", summary)
         merge(store)
         return 0
     year = args.year

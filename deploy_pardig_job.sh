@@ -60,6 +60,35 @@ else
     gcloud scheduler jobs create http "${SCHEDULER_NAME}" "${SCHED[@]}"
 fi
 
+# Global Archive storm-total rain (build_pardig_archive.py, same image): a
+# monthly run builds storms an IBTrACS refresh added and rebuilds ones whose
+# track grew, then re-merges the manifest. The one-time 2016+ backfill ran as
+# 11 tasks (one per start year): re-run with
+#   gcloud run jobs execute tc-atlas-pardig-archive-job --region us-east1 --tasks 11 \
+#       --args build_pardig_archive.py,--workers,8   (then --args build_pardig_archive.py,--merge)
+ARCH_JOB="tc-atlas-pardig-archive-job"
+ARCH_SCHED="tc-atlas-pardig-archive-monthly"
+ARCH_ARGS=(--region "${REGION}" --image "${IMAGE}" --command python
+           --args "build_pardig_archive.py,--missing,--workers,8" --tasks 1 --parallelism 1
+           --memory 8Gi --cpu 2 --max-retries 1 --task-timeout 3600
+           --set-env-vars "R2_ENDPOINT_URL=https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com,R2_BUCKET=tc-atlas-rt"
+           --set-secrets "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest")
+if gcloud run jobs describe "${ARCH_JOB}" --region "${REGION}" >/dev/null 2>&1; then
+    gcloud run jobs update "${ARCH_JOB}" "${ARCH_ARGS[@]}"
+else
+    gcloud run jobs create "${ARCH_JOB}" "${ARCH_ARGS[@]}"
+fi
+gcloud run jobs add-iam-policy-binding "${ARCH_JOB}" --region "${REGION}" \
+    --member "serviceAccount:${SA_EMAIL}" --role roles/run.invoker --quiet >/dev/null || true
+ASCHED=(--location "${REGION}" --schedule "0 6 3 * *" --time-zone UTC
+        --uri "https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${ARCH_JOB}:run"
+        --http-method POST --oauth-service-account-email "${SA_EMAIL}" --attempt-deadline 60s)
+if gcloud scheduler jobs describe "${ARCH_SCHED}" --location "${REGION}" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "${ARCH_SCHED}" "${ASCHED[@]}"
+else
+    gcloud scheduler jobs create http "${ARCH_SCHED}" "${ASCHED[@]}"
+fi
+
 echo
 echo "Done. Run once now:  gcloud run jobs execute ${JOB_NAME} --region ${REGION} --wait"
 echo "Executions:          gcloud run jobs executions list --job ${JOB_NAME} --region ${REGION} --limit 8"
