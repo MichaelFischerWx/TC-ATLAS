@@ -210,7 +210,7 @@ def existing_sids(store):
 
 
 # ── Run ───────────────────────────────────────────────────────────────────
-def run(store, sids=None, year=None, force=False, workers=6):
+def run(store, sids=None, year=None, force=False, workers=6, part=None):
     t_start = time.time()
     all_storms = load_storms()
     sel = []
@@ -296,6 +296,8 @@ def run(store, sids=None, year=None, force=False, workers=6):
                 r = finish(store, sid, s, pts, tr, states[n])
                 if r:
                     summary[sid] = r
+                    if part and len(summary) % 10 == 0:
+                        write_part(store, part, summary)
                 states[n] = None
         if done_frames and done_frames % 2000 < len(frames):
             el = time.time() - t0
@@ -329,6 +331,16 @@ def merge(store):
         names = [o["Key"].rsplit("/", 1)[-1][:-5] for o in resp.get("Contents", []) if o["Key"].endswith(".json")]
     for nm in sorted(names):
         parts.update(json.loads(store.get(f"{KEY_BASE}/parts/{nm}.json")))
+    # Totals on R2 that no part lists (a task killed before writing its part):
+    # read their index.json so the manifest covers everything built.
+    missing = sorted(existing_sids(store) - set(parts))
+    for sid in missing:
+        b = store.get(f"{KEY_BASE}/{sid}/index.json")
+        if b:
+            m = json.loads(b)
+            parts[sid] = [m.get("max_mm"), m.get("n_frames"), m.get("expected_frames")]
+    if missing:
+        log(f"added {len(missing)} storm(s) missing from the parts")
     man = {"storms": parts, "fields": ["max_mm", "n_frames", "expected_frames"],
            "radius_km": T.RADIUS_KM, **ATTRIBUTION,
            "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
@@ -356,8 +368,9 @@ def main():
     if year is None and not args.sids:
         sys.exit("give --sids, --year or run as a Cloud Run task")
     sids = set(args.sids.split(",")) if args.sids else None
-    summary = run(store, sids=sids, year=year, force=args.force, workers=args.workers)
-    write_part(store, str(year) if year else "adhoc", summary)
+    part = str(year) if year else "adhoc"
+    summary = run(store, sids=sids, year=year, force=args.force, workers=args.workers, part=part)
+    write_part(store, part, summary)
     return 0
 
 
