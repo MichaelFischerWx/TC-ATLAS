@@ -2275,7 +2275,7 @@
             return _rtFetch(url).then(function (r) { return r.ok ? r.blob() : null; })
                 .catch(function () { return null; });
         }
-        var m = url.match(/^(.*\/(ir|vis|wv))\/(\d{12})\/(\d+)\/(\d+)\/(\d+)\.png$/);
+        var m = url.match(/^(.*\/(ir|vis|wv|rain))\/(\d{12})\/(\d+)\/(\d+)\/(\d+)\.png$/);
         if (!m) return plain();
         var product = m[2], ts = m[3], key = m[4] + '/' + m[5] + '/' + m[6];
         var pf = _mosaicPackFrames[product];
@@ -2505,7 +2505,7 @@
             remove: function () {}, setZIndex: function () { return this; }
         };
     }
-    function _ir2aBuild(times) {
+    function _ir2aBuild(times, fromRain) {
         if (!_ir2aLayer) {
             var glOpts = {
                 id: 'ir2a-idx', tileUrl: _ir2aTileUrl, frames: times,
@@ -2534,7 +2534,11 @@
             // (z400+) — same stacking as the v2 mosaic raster — not on top of them.
             try { map._glAdd(_ir2aLayer.layer, 200); }
             catch (e) { console.error('[ir2a] addLayer failed', e); }
-        } else { _ir2aLayer.setFrames(times); }
+        } else if (fromRain || !_rainLoopOn) {
+            // While the rain loop runs it owns the frame list (rain-paired IR
+            // frames); a late still-layer build must not swap in the live list.
+            _ir2aLayer.setFrames(times);
+        }
         _ir2aOn = true;
     }
     function _ir2aDestroy() { if (_ir2aLayer) { try { _ir2aLayer.destroy(); } catch (e) {} _ir2aLayer = null; } _ir2aOn = false; }
@@ -2559,6 +2563,7 @@
     function _ir2aStill() {
         if (_satHidden) return;   // satellite hidden via the "Off" pill
         _ir2aEnsure(function () {
+            if (_rainLoopOn) return;   // the rain loop drives the layer
             _ir2aLayer.setFrame(_ir2aFrames.length - 1);
             _ir2aLayer.setOpacity(_productOpacity(globalProduct));
         });
@@ -2765,10 +2770,10 @@
     // pointer left the map re-showed the box, and nothing hid it again — it
     // stayed stuck on screen over other tabs.
     var _inspectSeq = 0;
-    function _inspectSampleTile(z, x, y, cb) {
+    function _inspectSampleTile(z, x, y, cb, url) {
         // idx (v3): the single channel IS the quantized Tb → exact readout (no RGB invert).
-        var url = (_IR2A ? _ir2aRoot('ir') + '/' + _mosaicTs : _MOSAIC_ROOT + '/ir/' + _mosaicTs)
-            + '/' + z + '/' + x + '/' + y + '.png';
+        url = url || ((_IR2A ? _ir2aRoot('ir') + '/' + _mosaicTs : _MOSAIC_ROOT + '/ir/' + _mosaicTs)
+            + '/' + z + '/' + x + '/' + y + '.png');
         var rec = _inspectTileCache[url];
         if (rec) {
             if (rec.cx) cb(rec);
@@ -2777,6 +2782,12 @@
             return;
         }
         rec = _inspectTileCache[url] = { waiters: [cb] };
+        // Bound it (each entry is a 512² canvas, ~1 MB): rain mode samples a
+        // different frame's tile every time the loop moves.
+        var _ik = Object.keys(_inspectTileCache);
+        for (var _ii = 0; _ik.length - _ii > 48; _ii++) {
+            if (!_inspectTileCache[_ik[_ii]].waiters) delete _inspectTileCache[_ik[_ii]];
+        }
         var done = function (ok) {
             var w = rec.waiters; rec.waiters = null;
             if (!w) return;
@@ -2793,7 +2804,39 @@
     // Sample the global IR mosaic at (lat, lon) and invert to Tb (Kelvin).
     // Map-agnostic — samples tiles by URL, so both the global map inspect
     // and the storm-detail hover use it. cb(tb) or cb(null) if no data.
-    function _mosaicTbAt(lat, lon, cb) {
+    // z4 tile + pixel under (lat, lon) on a 512-px Web-Mercator pyramid, or null.
+    function _z4Pixel(lat, lon) {
+        lon = ((lon + 180) % 360 + 360) % 360 - 180;
+        var n = 16, latR = lat * Math.PI / 180;
+        var xw = (lon + 180) / 360 * n;
+        var yw = (1 - Math.log(Math.tan(latR) + 1 / Math.cos(latR)) / Math.PI) / 2 * n;
+        if (!(yw >= 0 && yw < n)) return null;
+        var tx = Math.floor(xw), ty = Math.floor(yw);
+        return { tx: tx, ty: ty, px: Math.min(511, Math.floor((xw - tx) * 512)),
+                 py: Math.min(511, Math.floor((yw - ty) * 512)) };
+    }
+    // Rain rate (mm/h) at (lat, lon) in rain frame `ts`: cb(rate), 0 = dry,
+    // null = unknown. A tile the frame's pack leaves out is all dry.
+    function _rainRateAt(lat, lon, ts, cb) {
+        var p = _z4Pixel(lat, lon);
+        if (!p || !ts) { cb(null); return; }
+        var url = _rainTileUrl(ts, 4, p.tx, p.ty);
+        _inspectSampleTile(4, p.tx, p.ty, function (rec) {
+            if (!rec || !rec.cx) { cb(0); return; }
+            cb(_rainIdxToRate(rec.cx.getImageData(p.px, p.py, 1, 1).data[0]));
+        }, url);
+    }
+    function _mosaicTbAt(lat, lon, cb, ts) {
+        if (ts && _IR2A) {   // a specific (e.g. rain-paired, archived) IR frame
+            var q = _z4Pixel(lat, lon);
+            if (!q) { cb(null); return; }
+            _inspectSampleTile(4, q.tx, q.ty, function (rec) {
+                if (!rec || !rec.cx) { cb(null); return; }
+                var v = rec.cx.getImageData(q.px, q.py, 1, 1).data[0];
+                cb(v ? _irIdxToTb(v) : null);
+            }, _ir2aRoot('ir') + '/' + ts + '/4/' + q.tx + '/' + q.ty + '.png');
+            return;
+        }
         if (!_mosaicTs) { cb(null); return; }
         lon = ((lon + 180) % 360 + 360) % 360 - 180;   // normalize world-copy lng
         // z4 is the global base's deepest level = full native IR resolution (512px
@@ -2820,6 +2863,21 @@
     }
     function _inspectAt(lat, lon, clientX, clientY) {
         var seq = ++_inspectSeq;
+        if (_rainLoopOn && _ir2aLayer && _rainLayer) {
+            // Rain mode: the shown rain frame + the IR frame paired with it.
+            var rts = _rainLayer.currentFrame(), its = _ir2aLayer.currentFrame();
+            _rainRateAt(lat, lon, rts, function (rate) {
+                _mosaicTbAt(lat, lon, function (tb) {
+                    if (seq !== _inspectSeq) return;
+                    if ((tb == null && rate == null) || !_inspectOn ||
+                        document.documentElement.getAttribute('data-view') !== 'map') { _inspectTipOff(); return; }
+                    var rs = (rate == null) ? '' : (rate >= 75 ? '75+ mm/h (model cap)'
+                        : rate < 0.2 ? 'No rain' : (rate < 10 ? rate.toFixed(1) : rate.toFixed(0)) + ' mm/h');
+                    _inspectShowTip(clientX, clientY, tb, rs);
+                }, its);
+            });
+            return;
+        }
         _mosaicTbAt(lat, lon, function (tb) {
             if (seq !== _inspectSeq) return;   // superseded, or dismissed while the tile loaded
             if (tb == null || !_inspectOn ||
@@ -2827,7 +2885,7 @@
             _inspectShowTip(clientX, clientY, tb);
         });
     }
-    function _inspectShowTip(x, y, tb) {
+    function _inspectShowTip(x, y, tb, prefix) {
         if (!_inspectTipEl) {
             _inspectTipEl = document.createElement('div');
             _inspectTipEl.className = 'ir-inspect-tip';
@@ -2836,7 +2894,8 @@
                 'padding:3px 7px;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.4);';
             document.body.appendChild(_inspectTipEl);
         }
-        _inspectTipEl.textContent = tb.toFixed(0) + ' K · ' + (tb - 273.15).toFixed(0) + ' °C';
+        var tbs = (tb == null) ? '' : tb.toFixed(0) + ' K · ' + (tb - 273.15).toFixed(0) + ' °C';
+        _inspectTipEl.textContent = prefix ? prefix + (tbs ? ' · ' + tbs : '') : tbs;
         _inspectTipEl.style.left = (x + 14) + 'px'; _inspectTipEl.style.top = (y - 6) + 'px';
         _inspectTipEl.style.display = 'block';
     }
@@ -3475,6 +3534,7 @@
         if (_satHidden && !_rt3DOn) return _rt3DOn;
         if (!_rt3DOn) {
             if (!_mosaicTs) return false;   // need a mosaic frame to derive the DEM
+            if (_gRainOn) _rainStop(true);  // relief is built from the live IR, not the rain-paired frames
             if (_rtGlobeOn) _rtGlobeToggle(false);   // spike: 3D relief stays a flat-map mode
             _terrainEnsureProtocol();
             _rt3DOn = true;
@@ -5904,6 +5964,7 @@
         if (hidden) {
             // 3D relief is derived from the IR field — flatten it first.
             if (_rt3DOn) _rt3DToggle();
+            if (_gRainOn) _rainStop(true);   // the rain loop rides on the IR layer
             if (globalAnimFrameLayers.length) cleanupGlobalAnimation();
             if (_ir2aOn) _ir2aDestroy();
             removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
@@ -5989,6 +6050,9 @@
         globalAnimLoading = true;
         globalAnimLoaded = 0;
         globalAnimReady = false;
+
+        // ── Rain mode: the PARDIG timeline with rain-paired IR underneath ──
+        if (_rainBuildLoop()) return;
 
         // ── Radar mode: decoupled full IEM loop ──────────────────────────
         // When radar is on, the loop is the radar's OWN timeline — the latest
@@ -6143,6 +6207,7 @@
      *  frame's time (order-independent: safe to call before OR after the deck
      *  DOM exists, and before OR after the GIBS/mosaic times are known). */
     function _setGlobalSatTimeLabel() {
+        if (_rainLoopOn) return;   // the dock shows the rain frame's valid time
         var el = document.getElementById('ir-global-anim-time');
         var iso = _globalLatestSatIso();
         if (el && iso) el.textContent = fmtUTC(iso);
@@ -6396,6 +6461,7 @@
             _reloadGlobalAnimIfActive();
             return;
         }
+        if (_gRainOn) _rainStop(true);
         _gRadarOn = true;
         if (btn) btn.classList.add('active');
         _gRadarLegend(true);
@@ -6420,6 +6486,313 @@
         _iemRefreshLatest(function (changed) { if (changed) _gRadarRoll(); });
         _gRadarPoll(true);
     };
+
+    // ── Global-map rain rate (Google DeepMind PARDIG) ────────────────────
+    // An experimental AI estimate of near-surface rain rate from geostationary
+    // imagery (0.1°, every 15 min), posted in 6-hourly batches 2–8 h after
+    // valid time. build_pardig_rain.py publishes log-encoded single-channel
+    // tiles (the mosaic-v3 pack format) and frames.json, which pairs each rain
+    // frame with the archived IR mosaic frame nearest in time (≤5 min).
+    // Rain mode makes the loop the RAIN timeline: a second GPU idx layer for
+    // the rain, and the IR idx layer re-pointed at the paired IR frames, so
+    // cloud tops and rain are from the same time rather than hours-old rain
+    // over live IR. Mutually exclusive with US radar (a different timeline).
+    var _RAIN_ROOT = 'https://cdn.tcatlas.org/pardig-v1/rain';
+    var _RAIN_LOOP_FRAMES = 24;          // newest 6 h at 15 min
+    var _gRainOn = false;
+    var _rainManifest = null;            // frames.json
+    var _rainLayer = null;               // createMosaicGLLayer instance
+    var _rainLoopOn = false;             // the global loop is the rain timeline
+    var _rainPollTimer = null, _rainAgeTimer = null, _rainLoadSeq = 0;
+    var _rainPrevProduct = null, _rainPrevCmap = null;
+    // Discrete palette; white is reserved for the model's 75 mm/h cap. Light
+    // rain is translucent so wide stratiform shields don't bury the IR.
+    var _RAIN_EDGES = [0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7, 10, 13, 16, 20, 25, 30, 35, 40, 50, 60, 74.9];
+    var _RAIN_COLORS = [[67, 122, 205, 85], [62, 127, 218, 120], [54, 135, 229, 154], [44, 145, 236, 179],
+        [37, 161, 213, 197], [32, 181, 168, 209], [49, 195, 130, 218], [83, 204, 96, 223],
+        [109, 211, 70, 228], [151, 215, 55, 232], [216, 215, 45, 237], [250, 198, 38, 241],
+        [250, 170, 34, 244], [250, 143, 31, 246], [246, 113, 32, 248], [238, 82, 38, 250],
+        [232, 56, 42, 251], [224, 44, 66, 252], [209, 41, 124, 254], [188, 46, 175, 255],
+        [163, 61, 210, 255], [255, 255, 255, 255]];
+    var _RAIN_DROP_SVG = '<svg class="icon-inline" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"'
+        + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        + '<path d="M12 2.7s-6 6.6-6 11.3a6 6 0 0 0 12 0c0-4.7-6-11.3-6-11.3z"/></svg>';
+
+    /** Index → rain rate (mm/h, the bin's geometric center). 0 = no data
+     *  (null), 1 = dry, 255 = at the 75 mm/h cap (frames.json "encoding"). */
+    function _rainIdxToRate(i) {
+        var e = (_rainManifest && _rainManifest.encoding) || {};
+        var dry = e.dry_mm_h || 0.1, cap = e.cap_mm_h || 75, bins = e.bins || 253;
+        if (i <= 0) return null;
+        if (i === 1) return 0;
+        if (i >= 255) return cap;
+        return dry * Math.pow(cap / dry, (i - 2 + 0.5) / bins);
+    }
+    function _rainLut() {
+        var out = new Uint8Array(256 * 4), last = _RAIN_COLORS.length - 1;
+        for (var i = 2; i < 256; i++) {
+            var r = _rainIdxToRate(i), k = -1;
+            if (i === 255) k = last;
+            else for (var e = 0; e < last; e++) if (r >= _RAIN_EDGES[e]) k = e;
+            if (k < 0) continue;                         // below 0.2 mm/h: not drawn
+            var c = _RAIN_COLORS[k];
+            out[i * 4] = c[0]; out[i * 4 + 1] = c[1]; out[i * 4 + 2] = c[2]; out[i * 4 + 3] = c[3];
+        }
+        return out;
+    }
+    function _rainTileUrl(f, z, x, y) { return _RAIN_ROOT + '/' + f + '/' + z + '/' + x + '/' + y + '.png'; }
+    function _rainLoopTimes() {
+        var f = (_rainManifest && _rainManifest.frames) || [];
+        return f.slice(-_RAIN_LOOP_FRAMES);
+    }
+    /** The IR frame under each rain frame: the builder's pairing; a frame the
+     *  builder could not pair borrows its nearest paired neighbor's IR. */
+    function _rainIrTimes(times) {
+        var pair = (_rainManifest && _rainManifest.ir_pair) || {}, out = [], i, d;
+        for (i = 0; i < times.length; i++) out.push(pair[times[i]] || null);
+        for (i = 0; i < out.length; i++) {
+            if (out[i]) continue;
+            for (d = 1; d < out.length; d++) {
+                var a = pair[times[i - d]], b = pair[times[i + d]];
+                if (a || b) { out[i] = a || b; break; }
+            }
+        }
+        return out;
+    }
+    /** Register the manifest's frames with the packed-tile reader: the rain
+     *  packs, and the paired IR/WV/Vis frames that have rolled off the live
+     *  mosaic frames.json (still on R2 for 54 h, pack-only). */
+    function _rainRegister(m) {
+        var pf = {}, pins = {};
+        (m.frames || []).forEach(function (t) { pf[t] = 1; });
+        _mosaicPackFrames.rain = pf;
+        Object.keys(m.ir_pair || {}).forEach(function (k) { if (m.ir_pair[k]) pins[m.ir_pair[k]] = 6; });
+        ['ir', 'vis', 'wv'].forEach(function (p) { _pinPackFrames(p, pins); });
+    }
+    function _rainFetch() {
+        return _rtFetch(_RAIN_ROOT + '/frames.json', { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('rain frames.json HTTP ' + r.status); return r.json(); })
+            .then(function (j) {
+                if (!j || !j.frames || !j.frames.length) throw new Error('no rain frames');
+                _rainManifest = j;
+                _rainRegister(j);
+                return j;
+            });
+    }
+    function _rainEnsureLayer(times) {
+        if (_rainLayer) { _rainLayer.setFrames(times); return; }
+        var zmax = (_rainManifest && _rainManifest.zmax) || 4;
+        _rainLayer = window.createMosaicGLLayer({
+            id: 'rain-idx', tileUrl: _rainTileUrl, frames: times,
+            maxZoom: zmax, baseMaxZoom: zmax, tileSize: 512,
+            fetchTile: function (f, z, x, y) { return _v3TileBlob(_rainTileUrl(f, z, x, y)); },
+            lut: _rainLut(),
+            onError: function (m) { console.error('[rain] ' + m); }
+        });
+        // z350 = the radar pane's level: above the satellite (200), below
+        // coastlines, and kept by the imagery-only clean view.
+        if (map && map.createPane && !map.getPanes()['gRadarPane']) {
+            var pane = map.createPane('gRadarPane');
+            if (pane) pane.style.zIndex = 350;
+        }
+        try { map._glAdd(_rainLayer.layer, 350); }
+        catch (e) { console.error('[rain] addLayer failed', e); }
+    }
+    function _rainDestroyLayer() {
+        if (_rainLayer) { try { _rainLayer.destroy(); } catch (e) {} _rainLayer = null; }
+    }
+    // Deck stand-in: one per rain frame. Showing frame i moves BOTH GPU
+    // layers — the rain and its paired IR — to index i.
+    function _rainStub(i) {
+        return {
+            addTo: function () { return this; },
+            on: function (ev, cb) { if (ev === 'load') setTimeout(cb, 0); return this; },
+            setOpacity: function (o) {
+                if (!(o > 0)) return;
+                if (_ir2aLayer) { _ir2aLayer.setOpacity(o); _ir2aLayer.setFrame(i); }
+                if (_rainLayer) { _rainLayer.setOpacity(1); _rainLayer.setFrame(i); }
+            },
+            remove: function () {}, setZIndex: function () { return this; }
+        };
+    }
+    /** Rain-mode branch of loadGlobalAnimation. Returns true when it handled
+     *  the call (built the loop, or is waiting on the product's IR manifest);
+     *  false means "not rain mode" and the normal loop builds instead. */
+    function _rainBuildLoop() {
+        if (!_gRainOn || !_rainManifest || _IR2A_DEV || !_ir2aEligible()) return false;
+        var times = _rainLoopTimes();
+        if (!times.length) return false;
+        _ir2aProduct = globalProduct;
+        if (!(_ir2aFrames && _ir2aFrames.length && _ir2aFramesProduct === globalProduct)) {
+            // Same wait as the normal path: build once the product's manifest
+            // (pack/zmax maps) is in, so a late still-layer build can't race us.
+            globalAnimLoading = false;
+            _ir2aLoadFrames(globalProduct, loadGlobalAnimation,
+                function (e) { console.error('[rain] IR frames.json load failed', e); updateGlobalAnimControls('idle'); });
+            return true;
+        }
+        removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
+        removeGIBSOverlay(map, gibsVisLayers); gibsVisLayers = [];
+        _rainLoopOn = true;
+        _ir2aBuild(_rainIrTimes(times), true);
+        _rainEnsureLayer(times);
+        globalAnimFrameTimes = times.slice();
+        globalAnimFrameLayers = [];
+        for (var i = 0; i < times.length; i++) globalAnimFrameLayers.push(_rainStub(i));
+        globalAnimReady = true; globalAnimLoading = false;
+        globalAnimIndex = (_globalAnimPendingScrub != null)
+            ? Math.max(0, Math.min(times.length - 1, _globalAnimPendingScrub))
+            : times.length - 1;
+        _globalAnimPendingScrub = null;
+        showGlobalAnimFrame(globalAnimIndex);
+        updateGlobalAnimControls('ready');
+        _rainLegend(true);
+        if (_globalAnimAutoplay) startGlobalAnimation();
+        return true;
+    }
+
+    /** "6 h 49 m" between a 12-digit UTC stamp and now. */
+    function _rainAge(ts) {
+        var m = Math.max(0, Math.round((Date.now() - _tsToMin(ts) * 60000) / 60000));
+        var h = Math.floor(m / 60);
+        return (h ? h + ' h ' : '') + (m % 60) + ' m';
+    }
+    /** Discrete rain legend over the map (shares the radar legend's slot —
+     *  the two modes are exclusive). Its age line is the NEWEST frame's, so
+     *  it stays true for every frame of a saved GIF (the overlay is captured
+     *  once); each frame's own valid time is on the loop dock. */
+    function _rainLegend(show) {
+        var el = document.getElementById('ir-rain-global-legend');
+        if (_rainAgeTimer) { clearInterval(_rainAgeTimer); _rainAgeTimer = null; }
+        if (!show) { if (el) el.style.display = 'none'; return; }
+        if (!el) {
+            var host = document.getElementById('ir-map');
+            if (!host) return;
+            el = document.createElement('div');
+            el.id = 'ir-rain-global-legend';
+            el.className = 'ir-radar-global-legend ir-rain-global-legend';
+            var n = _RAIN_COLORS.length, sw = '';
+            for (var i = 0; i < n; i++) {
+                var c = _RAIN_COLORS[i];
+                sw += '<span style="background:rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (c[3] / 255).toFixed(2) + ')"></span>';
+            }
+            function tick(label, k) { return '<span style="left:' + (k / n * 100).toFixed(1) + '%">' + label + '</span>'; }
+            el.innerHTML = '<div class="ir-rain-legend-title">Rain rate (mm/h)</div>'
+                + '<div class="ir-rain-legend-bar">' + sw + '</div>'
+                + '<div class="ir-rain-legend-ticks">' + tick('0.2', 0) + tick('1', 4) + tick('5', 9)
+                + tick('20', 14) + tick('50', 19) + tick('75', n - 1) + '</div>'
+                + '<div class="ir-rain-legend-age" id="ir-rain-legend-age"></div>'
+                + '<div class="ir-rain-legend-src">Google DeepMind PARDIG · experimental</div>';
+            el.title = 'AI rain-rate estimate from geostationary satellite imagery, 0.1° every 15 min (CC BY 4.0). '
+                + 'Posted in batches 2–8 h after valid time. White = the model’s 75 mm/h cap. '
+                + 'Each rain frame shows the IR frame within 5 min of it.';
+            host.appendChild(el);
+        }
+        el.style.display = '';
+        function age() {
+            var a = document.getElementById('ir-rain-legend-age'), f = _rainManifest && _rainManifest.frames;
+            if (!a || !f || !f.length) return;
+            var t = f[f.length - 1];
+            a.textContent = 'Newest ' + fmtUTC(t, { date: false }) + ' · ' + _rainAge(t) + ' ago';
+        }
+        age();
+        _rainAgeTimer = setInterval(age, 60000);
+    }
+
+    /** Swap the satellite to grayscale IR under the rain colors (IR covers
+     *  day and night alike); remember the prior band + colormap. */
+    function _rainApplyBase() {
+        _rainPrevProduct = globalProduct;
+        _rainPrevCmap = _irColormap;
+        if (globalProduct !== 'ir') setGlobalProduct('ir');
+        _rtSetIRColormap('graylinear');
+        _syncSatSegment();
+    }
+    function _rainRestoreBase() {
+        if (_rainPrevProduct == null) return;
+        var p = _rainPrevProduct, c = _rainPrevCmap;
+        _rainPrevProduct = null; _rainPrevCmap = null;
+        if (c != null) _rtSetIRColormap(c);
+        setGlobalProduct(p);
+        _syncSatSegment();
+    }
+    // New batch landed: roll the loop forward, keeping play state (and the
+    // slider position when paused mid-loop).
+    function _rainRoll() {
+        if (!_gRainOn) return;
+        var atLatest = globalAnimIndex >= globalAnimFrameTimes.length - 1;
+        var wasPlaying = globalAnimPlaying, keepIdx = globalAnimIndex;
+        cleanupGlobalAnimation();
+        _globalAnimAutoplay = wasPlaying;
+        if (!wasPlaying && !atLatest) _globalAnimPendingScrub = keepIdx;
+        loadGlobalAnimation();
+    }
+    function _rainPoll(on) {
+        if (_rainPollTimer) { clearInterval(_rainPollTimer); _rainPollTimer = null; }
+        if (!on) return;
+        _rainPollTimer = setInterval(function () {
+            if (!_gRainOn || document.hidden) return;
+            var prev = (_rainManifest && _rainManifest.updated) || '';
+            _rainFetch().then(function (j) {
+                if (_gRainOn && j.updated !== prev) _rainRoll();
+            }).catch(function (e) { console.warn('[rain] refresh failed', e); });
+        }, 180000);
+    }
+    /** Leave rain mode. restoreBase=false when the caller is about to change
+     *  the satellite itself (hiding it, 3D, radar's own base swap). */
+    function _rainStop(restoreBase) {
+        if (!_gRainOn) return;
+        _gRainOn = false;
+        _rainLoadSeq++;                         // void an in-flight manifest load
+        var btn = document.getElementById('ir-rain-mode-btn');
+        if (btn) btn.classList.remove('active');
+        _rainPoll(false);
+        _rainLegend(false);
+        var wasPlaying = globalAnimPlaying;
+        if (globalAnimFrameLayers.length) cleanupGlobalAnimation();
+        _rainDestroyLayer();
+        if (restoreBase !== false) _rainRestoreBase();
+        else { _rainPrevProduct = null; _rainPrevCmap = null; }
+        if (_satHidden) return;
+        // Back to the live IR: still frame, or the live loop if one was playing.
+        if (wasPlaying) { _globalAnimAutoplay = true; loadGlobalAnimation(); }
+        else if (_ir2aEligible()) _ir2aStill();
+        _setGlobalSatTimeLabel();
+    }
+    /** Toggle the global-map rain overlay. */
+    window._gToggleRain = function () {
+        if (_gRainOn) { _rainStop(true); return; }
+        if (!window.LFLET_GL || !window.createMosaicGLLayer) { _rtToast('Rain needs the GL map'); return; }
+        if (_gRadarOn) window._gToggleRadar();          // different timeline (last hour)
+        if (_rt3DOn) _rt3DToggle();                     // 3D relief drapes the live IR only
+        if (_satHidden) { globalProduct = 'ir'; _setSatelliteHidden(false); }
+        _gRainOn = true;
+        var btn = document.getElementById('ir-rain-mode-btn');
+        if (btn) btn.classList.add('active');
+        _ga('rt_global_rain_toggle', { on: true });
+        _rainApplyBase();
+        var seq = ++_rainLoadSeq;
+        _rainFetch().then(function () {
+            if (seq !== _rainLoadSeq || !_gRainOn) return;
+            // loadGlobalAnimation no-ops until the satellite times are known;
+            // a tap (or a ?rain=1 link) can beat them on a cold load.
+            (function build(n) {
+                if (seq !== _rainLoadSeq || !_gRainOn) return;
+                if (!latestGIBSTime && n < 60) { setTimeout(function () { build(n + 1); }, 500); return; }
+                var wasPlaying = globalAnimPlaying;
+                if (globalAnimFrameLayers.length) cleanupGlobalAnimation();
+                _globalAnimAutoplay = wasPlaying;
+                loadGlobalAnimation();
+                _rainPoll(true);
+            })(0);
+        }).catch(function (e) {
+            if (seq !== _rainLoadSeq) return;
+            console.warn('[rain] frames.json load failed', e);
+            _rtToast('Rain data is unavailable right now — try again in a few minutes.');
+            _rainStop(true);
+        });
+    };
+    window._rainStats = function () { return _rainLayer ? _rainLayer.stats() : null; };
 
     // ── Global-map measure tool ──────────────────────────────────────────
     // Armed via the "Measure" pill: map panning pauses (wheel/pinch zoom stay
@@ -6794,6 +7167,7 @@
     /** Clean up global animation frames */
     function cleanupGlobalAnimation() {
         stopGlobalAnimation();
+        if (_rainLoopOn) { _rainLoopOn = false; if (_rainLayer) _rainLayer.setOpacity(0); }
         if (_ir2aOn) {
             // Keep the persistent idx layer (it serves the still too) — just drop the
             // animation proxy stubs below. The layer is torn down only on product switch.
@@ -7073,7 +7447,7 @@
                 var moreBtn = L.DomUtil.create('button', 'ir-global-toggle-btn ir-layers-icon-btn ir-more-btn', row);
                 moreBtn.id = 'ir-more-btn';
                 moreBtn.type = 'button';
-                moreBtn.title = 'More map tools — 3D, radar, measure, microwave, save';
+                moreBtn.title = 'More map tools — 3D, radar, rain, measure, microwave, save';
                 moreBtn.setAttribute('aria-haspopup', 'true');
                 moreBtn.setAttribute('aria-expanded', 'false');
                 moreBtn.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
@@ -7093,6 +7467,7 @@
                     return item('3d', '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 3 4 8 5-5 5 15H2L8 3z"/></svg>', '3D cloud tops', on(d3Btn))
                         + (globeBtn ? item('globe', '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/></svg>', 'Globe view', on(globeBtn)) : '')
                         + item('radar', '◈', 'US radar', on(radarBtn))
+                        + item('rain', _RAIN_DROP_SVG, 'Rain rate (PARDIG)', on(rainBtn))
                         + item('measure', '↔\uFE0E', 'Measure distance', on(measBtn))
                         + item('mw', '◉', 'Microwave', on(mwTopBtn))
                         + item('mwopts', '▾', 'Microwave options…', null)
@@ -7127,14 +7502,14 @@
                     var act = it.getAttribute('data-act');
                     if (act === 'png') _exportMapPng();
                     else if (act === 'gif') _exportMapGif();
-                    else ({ '3d': d3Btn, globe: globeBtn, radar: radarBtn, measure: measBtn, mw: mwTopBtn, mwopts: mwExpandBtn })[act].click();
+                    else ({ '3d': d3Btn, globe: globeBtn, radar: radarBtn, rain: rainBtn, measure: measBtn, mw: mwTopBtn, mwopts: mwExpandBtn })[act].click();
                 });
 
                 // Dot on [⋯] while any tool it hides is on — on a phone the
                 // hidden buttons can't show their own .active state. Observed
                 // (not polled): the toggles flip .active from many code paths.
                 setTimeout(function () {
-                    var watched = [d3Btn, globeBtn, radarBtn, measBtn, mwTopBtn].filter(Boolean);
+                    var watched = [d3Btn, globeBtn, radarBtn, rainBtn, measBtn, mwTopBtn].filter(Boolean);
                     function sync() {
                         moreBtn.classList.toggle('has-active', watched.some(function (b) {
                             return b.classList.contains('active');
@@ -7219,6 +7594,20 @@
                 radarBtn.title = 'Toggle US NEXRAD base reflectivity (IEM) — overlays the satellite, synced to the loop (CONUS only)';
                 radarBtn.innerHTML = '<span class="ir-radar-mode-glyph" aria-hidden="true">◈</span><span class="ir-radar-mode-text">Radar</span>';
                 radarBtn.addEventListener('click', function () { window._gToggleRadar(); });
+
+                // ── Rain rate (DeepMind PARDIG) toggle ──
+                // Loops the newest 6 h of AI rain-rate frames with the IR from
+                // the same times underneath (grayscale), plus a legend that
+                // says how old the newest frame is.
+                var rainBtn = L.DomUtil.create('button', 'ir-radar-mode-btn ir-rain-mode-btn', wrap);
+                rainBtn.id = 'ir-rain-mode-btn';
+                rainBtn.type = 'button';
+                rainBtn.title = 'Rain rate — Google DeepMind PARDIG, an experimental AI estimate from satellite imagery '
+                    + '(0.1°, every 15 min). Posted in batches 2–8 h after valid time; loops with the IR from the same times underneath.';
+                rainBtn.innerHTML = '<span class="ir-radar-mode-glyph" aria-hidden="true">' + _RAIN_DROP_SVG
+                    + '</span><span class="ir-radar-mode-text">Rain</span>';
+                rainBtn.addEventListener('click', function () { window._gToggleRain(); });
+                if (/[?&]rain=1\b/.test(location.search)) setTimeout(function () { window._gToggleRain(); }, 0);
 
                 // ── Measure tool toggle (sibling of 3D / Radar) ────────────
                 // Drag anywhere on the map for a great-circle distance readout

@@ -1226,6 +1226,36 @@ html, body { margin: 0; padding: 0; }
     .ir-mode-segment .ir-mode-btn { padding: 4px 6px; }
 }
 
+/* Rain-rate (PARDIG) legend: same slot + glass as the radar legend (the two
+   modes are exclusive). 22 equal-width discrete bins; white = the 75 mm/h cap. */
+.ir-rain-global-legend { width: 212px; bottom: 64px; }   /* clear the attribution line + status bar */
+.ir-rain-legend-title { font-weight: 600; margin-bottom: 4px; }
+.ir-rain-legend-bar {
+    display: flex;
+    height: 9px;
+    border-radius: var(--radius-xs);
+    overflow: hidden;
+    background: #0b1220;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.ir-rain-legend-bar span { flex: 1 1 0; }
+.ir-rain-legend-ticks {
+    position: relative;
+    height: 12px;
+    margin-top: 2px;
+    font-size: 9px;
+    color: var(--map-ink-dim);
+}
+.ir-rain-legend-ticks span { position: absolute; top: 0; transform: translateX(-50%); }
+.ir-rain-legend-ticks span:first-child { transform: none; }
+.ir-rain-legend-ticks span:last-child { transform: translateX(-30%); }
+.ir-rain-legend-age { margin-top: 3px; font-variant-numeric: tabular-nums; }
+.ir-rain-legend-src { font-size: 9px; color: var(--map-ink-dim); }
+.ir-rain-mode-btn .ir-radar-mode-glyph svg { display: block; }
+@media (max-width: 768px) {
+    .ir-rain-global-legend { bottom: 128px; }   /* above the full-width loop dock, like radar's */
+}
+
 /* IR Brightness Temperature legend overlay */
 .ir-tb-legend {
     position: absolute;
@@ -3133,6 +3163,7 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     .ir-layers-wrap #ir-3d-mode-btn,
     .ir-layers-wrap #ir-globe-mode-btn,
     .ir-layers-wrap #ir-radar-mode-btn,
+    .ir-layers-wrap #ir-rain-mode-btn,
     .ir-layers-wrap #ir-measure-mode-btn,
     .ir-layers-wrap #ir-mw-toggle-group,
     .ir-layers-wrap #ir-global-export-btn { display: none; }
