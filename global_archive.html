@@ -89,11 +89,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20261111r1">
+    <link rel="preload" as="script" href="global_archive.js?v=20261114ar1">
     <link rel="preload" as="script" href="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261104sd1">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20261111s5">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20261114ar1">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -450,6 +450,12 @@
                                 </button>
                                 <span id="ga-wf-status" class="ir-status"></span>
                             </div>
+                            <div id="ga-rain-toggle-wrap" class="ga-layer-item" style="display:none;">
+                                <button id="ga-rain-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleArchiveRain()" title="Storm-total rain within 500 km of the center, from Google DeepMind PARDIG (2016 on)">
+                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.7s-6 6.6-6 11.3a6 6 0 0 0 12 0c0-4.7-6-11.3-6-11.3z"/></svg><span class="rail-lbl">Rain</span>
+                                </button>
+                                <span id="ga-rain-status" class="ir-status"></span>
+                            </div>
                         </div>
                     </div><!-- /detail-float-tl -->
                         <div class="detail-map-ir-row">
@@ -464,6 +470,8 @@
                                 <div class="ga-wf-legend-row" id="ga-wf-legend-rmw"><span class="ga-wf-legend-line" style="background:#94a3b8;"></span>RMW ring</div>
                                 <div class="ga-wf-legend-row" id="ga-wf-legend-swath" style="display:none;"><span class="ga-wf-legend-line ga-wf-legend-swathline"></span>Lifetime swath</div>
                             </div>
+                            <!-- Storm-total rain legend (shown while the Rain overlay is on; filled by global_archive.js) -->
+                            <div id="ga-rain-legend" class="ga-rain-legend" style="display:none;"></div>
                             <!-- Loading spinner overlay (stays inside map) -->
                             <div id="ir-frame-loading" class="ir-map-loading" style="display:none;">
                                 <div class="tc-spinner"></div>
@@ -732,6 +740,16 @@
                                 &mdash; visit his site for interactive radii climatologies, trends, and idealized wind-field tools.
                                 <span class="ga-obs-dim">Data: NOAA IBTrACS v04r01 (NHC / JTWC best track), quadrants NE/SE/SW/NW, routinely analyzed ~2004 onward.</span>
                             </div>
+                        </div>
+                        <!-- Storm-total rain (Google DeepMind PARDIG) -->
+                        <div id="ga-rain-controls" class="ga-obs" data-role="rain" style="display:none;">
+                            <div class="ga-obs-head">
+                                <span class="ga-obs-label">Rain near the center</span>
+                                <span id="ga-rain-summary" class="ga-obs-status"></span>
+                            </div>
+                            <div id="ga-rain-chart" class="ga-rain-chart js-theme-chart"></div>
+                            <div id="ga-rain-readout" class="ga-obs-readout"></div>
+                            <div id="ga-rain-note" class="ga-obs-note"></div>
                         </div>
                         <!-- Flight-level reconnaissance controls -->
                         <div id="ga-fl-controls" class="ga-obs" data-role="fl" style="display:none;">
@@ -1804,7 +1822,8 @@
     <script defer src="lflet_gl.js?v=20261110gz1"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20261019rc1"></script>
-    <script defer src="global_archive.js?v=20261111r1"></script>
+    <script defer src="pardig_total.js?v=20261114pt1"></script>
+    <script defer src="global_archive.js?v=20261114ar1"></script>
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
