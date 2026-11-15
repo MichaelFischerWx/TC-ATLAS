@@ -65,11 +65,12 @@
     }
 
     /** Fetch <base>index.json + its PNG. Resolves {meta, idx} or null when the
-     *  storm has no total (404); rejects on other failures. */
-    function load(base, fetchJson) {
+     *  storm has no total (404); rejects on other failures. `query` (e.g.
+     *  '?u=<manifest updated>') versions the index URL past the CDN cache. */
+    function load(base, fetchJson, query) {
         var meta = null;
         var getJson = fetchJson || function (u) { return fetch(u, { cache: 'no-store' }); };
-        return getJson(base + 'index.json')
+        return getJson(base + 'index.json' + (query || ''))
             .then(function (r) {
                 if (r.status === 404 || r.status === 403) return null;
                 if (!r.ok) throw new Error('HTTP ' + r.status);

@@ -16668,7 +16668,13 @@ window.toggleArchiveRain = function () {
     var st = document.getElementById('ga-rain-status');
     if (st) st.textContent = 'Loading...';
     var req = ++_raReq, sid = storm.sid;
-    PT.load(_RA_ROOT + encodeURIComponent(sid) + '/').then(function (res) {
+    // Version the index URL by the manifest's build time: the CDN caches
+    // */index.json for a day, and a rebuild (monthly, or new fields) must
+    // not wait that out. The PNGs are content-named, so they stay cached.
+    _raManifest().then(function (m) {
+        var q = (m && m.updated) ? '?u=' + encodeURIComponent(m.updated) : '';
+        return PT.load(_RA_ROOT + encodeURIComponent(sid) + '/', null, q);
+    }).then(function (res) {
         if (req !== _raReq || !_raVisible) return;
         if (st) st.textContent = res ? '' : 'No rain total';
         if (!res) { _raVisible = false; _raHide(); return; }
