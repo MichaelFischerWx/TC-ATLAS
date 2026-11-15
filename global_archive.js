@@ -2014,6 +2014,7 @@ window.toggleDetailSidebar = function () {
         if (detailMap) { try { detailMap.invalidateSize(); } catch (e) {} }
         window.dispatchEvent(new Event('resize'));   // Plotly responsive charts re-fit the side panel
         _gaStripDraw();
+        _gaRecenter();   // keep the storm out from under the panel that just opened
     }, 60);
 };
 document.addEventListener('DOMContentLoaded', function () {
@@ -5646,6 +5647,71 @@ window.cycleIROpacity = function () {
     }
 };
 
+/** Pixels of the detail map hidden under the chrome that floats over it:
+ *  the title card (with the phone layer strip), the desktop rail, the IR
+ *  loop bar and the side panel (a right-hand column on desktop, a bottom
+ *  sheet over the lower 58% on phones). Each side starts at `base`. */
+function _gaMapInsets(base) {
+    var el = document.getElementById('detail-map');
+    if (!el) return null;
+    var mr = el.getBoundingClientRect();
+    if (!mr.width || !mr.height) return null;
+    function shown(sel) {
+        var e = document.querySelector(sel);
+        if (!e || e.offsetParent === null) return null;
+        var r = e.getBoundingClientRect();
+        return (r.width && r.height) ? r : null;
+    }
+    base = base || 0;
+    var pad = { top: base, bottom: base, left: base, right: base };
+    var tl = shown('.detail-float-tl'); if (tl) pad.top = Math.max(pad.top, tl.bottom - mr.top + 16);
+    var bar = shown('.ir-bar'); if (bar) pad.bottom = Math.max(pad.bottom, mr.bottom - bar.top + 16);
+    var side = shown('#detail-side');
+    if (side && side.top < mr.bottom - 40) {
+        if (side.width > mr.width * 0.6) pad.bottom = Math.max(pad.bottom, mr.bottom - side.top + 12);   // phone sheet
+        else if (side.left > mr.left + mr.width * 0.4) pad.right = Math.max(pad.right, mr.right - side.left + 20);
+    }
+    var rail = shown('.ga-layerbar');
+    if (rail) {
+        if (rail.width < mr.width * 0.3) pad.left = Math.max(pad.left, rail.right - mr.left + 16);   // desktop rail
+        else pad.top = Math.max(pad.top, rail.bottom - mr.top + 12);                                 // phone strip
+    }
+    // Never squeeze the view into a sliver: fall back toward the whole map.
+    if (mr.height - pad.top - pad.bottom < 100) { pad.top = 10; pad.bottom = Math.max(10, Math.min(pad.bottom, mr.height - 120)); }
+    if (mr.width - pad.left - pad.right < 120) { pad.left = 10; pad.right = Math.max(10, Math.min(pad.right, mr.width - 130)); }
+    return pad;
+}
+
+/** Center the detail map on `ll` within the part of the map the chrome
+ *  leaves visible, so the storm sits above the phone sheet rather than
+ *  under it. zoom == null keeps the current zoom. */
+function _gaCenterOn(ll, zoom, animate, duration) {
+    if (!detailMap || !ll) return;
+    var gl = detailMap.getGL && detailMap.getGL();
+    var pad = gl && _gaMapInsets(0);
+    if (!pad) {
+        if (zoom != null) detailMap.setView(ll, zoom, { animate: false });
+        else detailMap.panTo(ll, { animate: !!animate, duration: duration || 0.3 });
+        return;
+    }
+    gl.easeTo({
+        center: [ll.lng, ll.lat],
+        zoom: zoom != null ? zoom : gl.getZoom(),
+        offset: [Math.round((pad.left - pad.right) / 2), Math.round((pad.top - pad.bottom) / 2)],
+        duration: animate ? (duration || 0.3) * 1000 : 0,
+        essential: true
+    });
+}
+
+/** The panel opened or closed: bring the storm (or the storm-total swath
+ *  overview) back into the part of the map that is still visible. */
+function _gaRecenter() {
+    if (!detailMap) return;
+    if (_raVisible && _raMode === 'total' && !irPlaying) { _raFit(); return; }
+    if (!irFollowStorm || !irFollowZoomSet || !irCurrentBounds) return;
+    _gaCenterOn(irCurrentBounds.getCenter(), null, true, 0.3);
+}
+
 window.toggleIRFollow = function () {
     irFollowStorm = !irFollowStorm;
     irFollowZoomSet = false; // Reset so next frame establishes zoom
@@ -5654,13 +5720,12 @@ window.toggleIRFollow = function () {
         btn.classList.toggle('active', irFollowStorm);
         btn.title = irFollowStorm ? 'View locked to storm center (click to unlock)' : 'Free pan mode (click to lock on storm)';
     }
-    // If just enabled, immediately snap to current frame
-    if (irFollowStorm && irOverlayLayer && detailMap) {
-        var frameBounds = irOverlayLayer.getBounds();
-        if (frameBounds) {
-            detailMap.fitBounds(frameBounds.pad(0.15), { animate: true, duration: 0.3, maxZoom: 7 });
-            irFollowZoomSet = true;
-        }
+    // If just enabled, snap to the current frame at the follow zoom. (The
+    // facade's image overlay has no getBounds(); the old call threw here and
+    // the next frame did the snap instead.)
+    if (irFollowStorm && irCurrentBounds && detailMap) {
+        _gaCenterOn(irCurrentBounds.getCenter(), 6, true, 0.3);
+        irFollowZoomSet = true;
     }
 };
 
@@ -5810,15 +5875,13 @@ function displayIROnMap(data) {
             // fills most of the map panel (fitBounds on a 20° IR frame
             // naturally picks zoom 4, leaving ~60% of the panel empty).
             // Zoom 6 shows the storm core + eyewall at a good scale.
-            detailMap.setView(imageBounds.getCenter(), 6, { animate: false });
+            // Centered in the visible part of the map (above the phone sheet,
+            // left of the desktop panel).
+            _gaCenterOn(imageBounds.getCenter(), 6, false);
             irFollowZoomSet = true;
         } else {
-            // Subsequent frames: panTo center at existing zoom (no zoom jitter)
-            var center = imageBounds.getCenter();
-            detailMap.panTo(center, {
-                animate: irPlaying,
-                duration: irPlaying ? 0.3 : 0
-            });
+            // Subsequent frames: pan at the existing zoom (no zoom jitter)
+            _gaCenterOn(imageBounds.getCenter(), null, irPlaying, 0.3);
         }
     } else if (!detailMap.getBounds().contains(imageBounds)) {
         // Free-pan mode: only refit when IR drifts off-screen
@@ -16830,31 +16893,8 @@ function _raMarkChart() {
  *  bar and the side panel (all float over the full-bleed map). */
 function _raFit(g) {
     g = g || (_raData && _raData.meta.grid);
-    var el = document.getElementById('detail-map');
-    if (!g || !el || !detailMap) return;
-    var mr = el.getBoundingClientRect();
-    function shown(sel) {
-        var e = document.querySelector(sel);
-        if (!e || e.offsetParent === null) return null;
-        var r = e.getBoundingClientRect();
-        return (r.width && r.height) ? r : null;
-    }
-    var pad = { top: 30, bottom: 30, left: 30, right: 30 };
-    var tl = shown('.detail-float-tl'); if (tl) pad.top = Math.max(pad.top, tl.bottom - mr.top + 16);
-    var bar = shown('.ir-bar'); if (bar) pad.bottom = Math.max(pad.bottom, mr.bottom - bar.top + 16);
-    var side = shown('#detail-side');
-    if (side && side.top < mr.bottom - 40) {
-        if (side.width > mr.width * 0.6) pad.bottom = Math.max(pad.bottom, mr.bottom - side.top + 12);   // phone sheet
-        else if (side.left > mr.left + mr.width * 0.4) pad.right = Math.max(pad.right, mr.right - side.left + 20);
-    }
-    var rail = shown('.ga-layerbar');
-    if (rail) {
-        if (rail.width < mr.width * 0.3) pad.left = Math.max(pad.left, rail.right - mr.left + 16);   // desktop rail
-        else pad.top = Math.max(pad.top, rail.bottom - mr.top + 12);                                 // phone strip
-    }
-    // Never squeeze the swath into a sliver: fall back to the whole map.
-    if (mr.height - pad.top - pad.bottom < 100) { pad.top = 10; pad.bottom = Math.max(10, Math.min(pad.bottom, mr.height - 120)); }
-    if (mr.width - pad.left - pad.right < 120) { pad.left = 10; pad.right = Math.max(10, Math.min(pad.right, mr.width - 130)); }
+    var pad = _gaMapInsets(30);
+    if (!g || !pad || !detailMap) return;
     try { detailMap.fitBounds([[g.lat_s, g.lon_w], [g.lat_n, g.lon_e]], { padding: pad, maxZoom: 7 }); } catch (e) {}
 }
 
