@@ -516,9 +516,13 @@ function renderTbToDataURI(tbData, rows, cols, colormap, southLat, northLat, fea
 // the storm frames) and the validity mask in alpha, so it feeds the same
 // colormap + Mercator warp as the storm frame.
 var _CTX_BASE = 'https://cdn.tcatlas.org/ir-context/v1';
-var _CTX_LRU_MAX = 6;          // rendered PNG blob URLs kept (~6 MB each)
-// On by default on desktop; off on phones (~1.2 MB per 3-h step) unless the
-// viewer turns it on with the Globe button or ?ctx=1. The choice persists.
+// Rendered PNG blob URLs kept (~6 MB each) and decoded frames the worker keeps
+// (~8 MB each); phones keep half as many.
+var _CTX_LRU_MAX = _gaIsTouch() ? 3 : 6;
+// On by default, phones included: a phone fetches ~1.1 MB per 3-h step, only
+// for the steps it shows (no prefetch, and none mid-playback). Off when the
+// browser asks to save data. The Globe button (loop settings) toggles it and
+// the choice persists; ?ctx=1 forces it on.
 var _ctxFlag = /[?&]ctx=1\b/.test(location.search);
 var _ctxEnabled = (function () {
     try {
@@ -526,7 +530,8 @@ var _ctxEnabled = (function () {
         if (v === '1') return true;
         if (v === '0') return false;
     } catch (e) {}
-    return _ctxFlag || !_gaIsTouch();
+    var conn = navigator.connection;
+    return _ctxFlag || !(conn && conn.saveData);
 })();
 // Decode, colorize and PNG-encode run in a Web Worker (OffscreenCanvas); on the
 // main thread they cost ~250 ms per 3-h step and stuttered playback. Browsers
@@ -623,7 +628,18 @@ function _ctxGridBounds(rows, cols) {
  *  decodes a context WebP, keeps the last few decoded frames so a colormap
  *  change re-renders without refetching, and replies with a PNG blob. */
 function _ctxWorkerMain() {
-    var store = [], MAX = 6;
+    var store = [];
+    // One decode and one output canvas, reused: a fresh pair per step was two
+    // ~33 MB full-frame buffers left for GC each time, which mobile Safari counts
+    // against its canvas-memory cap. Each use is a synchronous block (draw + read,
+    // or put + convertToBlob, which snapshots), so overlapping renders can't mix.
+    var cvs = {};
+    function canvas(role, w, h, opts) {
+        var c = cvs[role];
+        if (!c) { c = cvs[role] = { oc: new OffscreenCanvas(w, h) }; c.g = c.oc.getContext('2d', opts); }
+        else if (c.oc.width !== w || c.oc.height !== h) { c.oc.width = w; c.oc.height = h; c.im = null; }
+        return c;
+    }
     function decoded(m) {
         for (var i = 0; i < store.length; i++) {
             if (store[i].ts === m.ts) { var hit = store.splice(i, 1)[0]; store.push(hit); return Promise.resolve(hit); }
@@ -635,13 +651,14 @@ function _ctxWorkerMain() {
                 // scale only if the GPU cannot take the frame as one texture
                 var f = bmp.width > m.maxTex ? bmp.width / m.maxTex : 1;
                 var cols = Math.floor(bmp.width / f), rows = Math.floor(bmp.height / f);
-                var oc = new OffscreenCanvas(cols, rows), g = oc.getContext('2d', { willReadFrequently: true });
-                g.drawImage(bmp, 0, 0, cols, rows);
+                var c = canvas('dec', cols, rows, { willReadFrequently: true });
+                c.g.clearRect(0, 0, cols, rows);      // transparent (masked) pixels must not keep the last frame
+                c.g.drawImage(bmp, 0, 0, cols, rows);
                 if (bmp.close) bmp.close();
-                var rec = { ts: m.ts, idx: _ctxIndexFromRGBA(g.getImageData(0, 0, cols, rows).data, rows, cols),
+                var rec = { ts: m.ts, idx: _ctxIndexFromRGBA(c.g.getImageData(0, 0, cols, rows).data, rows, cols),
                             rows: rows, cols: cols };
                 store.push(rec);
-                while (store.length > MAX) store.shift();
+                while (store.length > (m.keep || 6)) store.shift();
                 return rec;
             });
     }
@@ -649,11 +666,11 @@ function _ctxWorkerMain() {
         var m = e.data;
         decoded(m).then(function (rec) {
             var b = _ctxGridBounds(rec.rows, rec.cols);
-            var oc = new OffscreenCanvas(rec.cols, rec.rows), g = oc.getContext('2d');
-            var im = g.createImageData(rec.cols, rec.rows);
+            var c = canvas('out', rec.cols, rec.rows);
+            var im = c.im || (c.im = c.g.createImageData(rec.cols, rec.rows));   // every pixel is rewritten
             _tbColorizePixels(rec.idx, rec.rows, rec.cols, m.lut, b.south, b.north, 0, im.data);
-            g.putImageData(im, 0, 0);
-            return oc.convertToBlob({ type: 'image/png' }).then(function (blob) {
+            c.g.putImageData(im, 0, 0);
+            return c.oc.convertToBlob({ type: 'image/png' }).then(function (blob) {
                 self.postMessage({ id: m.id, blob: blob, bounds: b });
             });
         }).catch(function (err) { self.postMessage({ id: m.id, error: String((err && err.message) || err) }); });
@@ -700,7 +717,7 @@ function _ctxRender(t) {
             resolve(rec);
         };
         _ctxGetWorker().postMessage({ id: id, ts: t.ts, src: _CTX_BASE + '/' + t.year + '/' + t.ts + '.webp',
-                                      maxTex: _ctxMaxTexSize(), lut: lut });
+                                      maxTex: _ctxMaxTexSize(), lut: lut, keep: _CTX_LRU_MAX });
     });
     _ctxPending[key] = pr;
     var done = function () { delete _ctxPending[key]; };
@@ -6715,7 +6732,7 @@ function startIRPlayback() {
     _ga('ga_ir_playback', { storm: selectedStorm ? selectedStorm.name : '', n_frames: irMeta.n_frames });
     irPlaying = true;
     _cacheIREls();
-    if (_irElPlayBtn) _irElPlayBtn.innerHTML = '&#9646;&#9646; Pause';
+    if (_irElPlayBtn) _irElPlayBtn.innerHTML = '&#9646;&#9646;<span class="ir-btn-lbl"> Pause</span>';
 
     // Kick a prefetch burst when playback starts so the buffer fills faster
     prefetchIRFrames(irFrameIdx);
@@ -6729,7 +6746,9 @@ function stopIRPlayback() {
     if (irTimer) cancelAnimationFrame(irTimer);
     irTimer = null;
     _cacheIREls();
-    if (_irElPlayBtn) _irElPlayBtn.innerHTML = '&#9654;&#xFE0E; Play';
+    if (_irElPlayBtn) _irElPlayBtn.innerHTML = '&#9654;&#xFE0E;<span class="ir-btn-lbl"> Play</span>';
+    // Phones skip the context layer mid-playback; bring it up to the frame the loop stopped on.
+    if (_gaIsTouch() && irMeta && irMeta.frames) _ctxUpdate(irMeta.frames[irFrameIdx]);
 }
 
 window.seekIRFrame = function (val) {

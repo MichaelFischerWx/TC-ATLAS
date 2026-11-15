@@ -3758,6 +3758,15 @@ input[type="range"].ga-range::-moz-range-thumb {
     .detail-fs .detail-main #ir-map-controls .ir-bar-row1::-webkit-scrollbar { display: none; }
     .detail-fs .detail-main #ir-map-controls .ir-bar-row1 > * { flex: 0 0 auto; }
     .detail-fs .detail-main #ir-map-controls .ir-bar-row1 .ir-bar-slider { flex: 0 0 120px; }
+    /* Icon-only Play/Peak, a two-line date and a strip that takes what is left, so the loop-settings
+       button (Globe context, follow, track, colormaps) fits on screen instead of past the right edge */
+    .detail-fs .detail-main #ir-map-controls .ir-btn-lbl { display: none; }
+    .detail-fs .detail-main #ir-map-controls .ir-bar-row1 .ir-strip { flex: 1 1 auto; min-width: 64px; margin: 0 2px; }
+    .detail-fs .detail-main #ir-map-controls .ir-bar-row1 .ir-datetime {
+        flex: 0 1 auto; width: auto; max-width: 68px; margin-top: 0;
+        white-space: normal; font-size: 0.625rem; line-height: 1.15;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
     .detail-fs .detail-main #ir-map-controls .ir-bar-row2,
     .detail-fs .detail-main #ir-map-controls #ir-3d-btn,
     .detail-fs .detail-main #ir-map-controls #ir-gif-btn,
@@ -3874,6 +3883,9 @@ input[type="range"].ga-range::-moz-range-thumb {
     .ir-bar-more { right: 6px; left: 6px; max-width: none; }
     .detail-fs .ir-cbar-strip { height: 120px; top: auto; bottom: 64px; transform: none; }
     .detail-side-toggle { right: 6px; }
+    /* collapsed: just above the IR bar, not on top of its right end (the 48px desktop rule above leaked
+       here), and under the bar's settings popover (bar = 612) when that opens over it */
+    .detail-layout.side-collapsed .detail-side-toggle { right: 6px; bottom: 56px; z-index: 611; }
 }
 
 /* ── Dropsonde profile panel (sidebar, 2026-10-19) ──────────────
