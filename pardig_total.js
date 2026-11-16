@@ -32,6 +32,29 @@
     // Rain RATE (mm/h): the RT monitor's Rain-mode bins; white = the 75 mm/h cap.
     var RATE_EDGES = [0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7, 10, 13, 16, 20, 25, 30, 35, 40, 50, 60, 74.9];
     var RATE_TICKS = [['0.2', 0], ['1', 4], ['5', 9], ['20', 14], ['50', 19], ['75', 21]];
+    // Inches under the same bar (2026-11-16): one bar, two scales -- mm above, inches below -- rather than a unit
+    // toggle, so every reader (and every saved figure) gets both without a setting to carry around. Round inch
+    // values placed where they fall inside the bins (barPos), not mm ticks relabeled.
+    var MM_PER_IN = 25.4;
+    var IN_TICKS = [1, 2, 5, 10, 20, 40];              // storm total, in
+    var RATE_IN_TICKS = [0.01, 0.1, 0.5, 1, 2];        // rain rate, in/h
+
+    /** Where v (mm or mm/h) sits along a bar of equal-width bins, 0..1: bin k spans [edges[k], edges[k+1]),
+     *  log-spaced inside the bin; the last bin is the open-ended top (white). */
+    function barPos(v, edges) {
+        var n = edges.length;
+        if (v <= edges[0]) return 0;
+        for (var k = 0; k < n - 1; k++) {
+            if (v < edges[k + 1]) return (k + Math.log(v / edges[k]) / Math.log(edges[k + 1] / edges[k])) / n;
+        }
+        return (n - 1) / n;
+    }
+
+    /** mm (or mm/h) -> inches as text: 2 decimals under 1, 1 under 10, whole numbers above. */
+    function inText(mm) {
+        var v = mm / MM_PER_IN;
+        return v < 1 ? v.toFixed(2) : (v < 10 ? v.toFixed(1) : String(Math.round(v)));
+    }
 
     function idxToMm(i, enc) {
         enc = enc || {};
@@ -206,14 +229,15 @@
         if (!i) return null;
         if (kind === 'rate') {
             if (i === 1) return '&lt; 0.1 mm/h';
-            if (i === 255) return '&ge; 75 mm/h (cap)';
+            if (i === 255) return '&ge; 75 mm/h, ' + inText(75) + ' in/h (cap)';
             var rr = idxToRate(i, meta.encoding);
-            return '\u2248 ' + (rr < 10 ? rr.toFixed(1) : Math.round(rr)) + ' mm/h';
+            return '\u2248 ' + (rr < 10 ? rr.toFixed(1) : Math.round(rr)) + ' mm/h (' + inText(rr) + ' in/h)';
         }
         if (i === 1) return '&lt; 1 mm';
-        if (i === 255) return '&ge; ' + Math.round(idxToMm(255, meta.encoding)) + ' mm';
+        var top = idxToMm(255, meta.encoding);
+        if (i === 255) return '&ge; ' + Math.round(top) + ' mm (' + inText(top) + ' in)';
         var mm = idxToMm(i, meta.encoding);
-        return '≈ ' + (mm < 10 ? mm.toFixed(1) : Math.round(mm)) + ' mm';
+        return '≈ ' + (mm < 10 ? mm.toFixed(1) : Math.round(mm)) + ' mm (' + inText(mm) + ' in)';
     }
 
     function rampCss() {
@@ -223,19 +247,32 @@
         }).join(',') + ')';
     }
 
-    /** Discrete bar + ticks (uses the RT monitor's .ir-rain-legend-* classes,
-     *  or any page CSS that styles them). */
+    /** Discrete bar with mm ticks above and inch ticks below, each row's unit in a gutter right of the bar (uses
+     *  the RT monitor's .ir-rain-legend-* classes, or any page CSS that styles them). Tick offsets are inline, so
+     *  the pages' :first-child / :last-child tick rules no longer apply. */
     function barHtml(barClass, tickClass, kind) {
-        var n = COLORS.length, sw = '', ticks = '', tk = kind === 'rate' ? RATE_TICKS : TICKS;
+        var rate = kind === 'rate', n = COLORS.length, sw = '';
+        var edges = rate ? RATE_EDGES : EDGES, tc = tickClass || 'ir-rain-legend-ticks';
         for (var i = 0; i < n; i++) {
             var c = COLORS[i];
             sw += '<span style="background:rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (c[3] / 255).toFixed(2) + ')"></span>';
         }
-        tk.forEach(function (t) {
-            ticks += '<span style="left:' + (t[1] / n * 100).toFixed(1) + '%">' + t[0] + '</span>';
-        });
-        return '<div class="' + (barClass || 'ir-rain-legend-bar') + '">' + sw + '</div>'
-            + '<div class="' + (tickClass || 'ir-rain-legend-ticks') + '">' + ticks + '</div>';
+        function row(items, unit) {
+            var s = '';
+            items.forEach(function (t) {
+                s += '<span style="left:' + (t[1] * 100).toFixed(1) + '%;transform:translateX('
+                    + (t[1] === 0 ? '0' : '-50%') + ')">' + t[0] + '</span>';
+            });
+            return '<div class="' + tc + '">' + s + '<span class="rain-unit" style="left:calc(100% + 5px);'
+                + 'transform:none;white-space:nowrap">' + unit + '</span></div>';
+        }
+        var mm = (rate ? RATE_TICKS : TICKS).map(function (t) { return [t[0], t[1] / n]; });
+        var inch = (rate ? RATE_IN_TICKS : IN_TICKS).map(function (v) { return [String(v), barPos(v * MM_PER_IN, edges)]; });
+        return '<div class="rain-axis" style="margin-right:' + (rate ? 30 : 22) + 'px">'    // the unit tag's room
+            + row(mm, rate ? 'mm/h' : 'mm')
+            + '<div class="' + (barClass || 'ir-rain-legend-bar') + '">' + sw + '</div>'
+            + row(inch, rate ? 'in/h' : 'in')
+            + '</div>';
     }
 
     var CREDIT_HTML = '<a href="https://developers.google.com/weathernext/guides/pardig" target="_blank" rel="noopener">PARDIG</a>'
@@ -273,7 +310,7 @@
         COLORS: COLORS, EDGES: EDGES, TICKS: TICKS,
         idxToMm: idxToMm, idxToRate: idxToRate, load: load, piece: piece, addTo: addTo, update: update,
         loadAtlas: loadAtlas, rateFrame: rateFrame, nearestFrame: nearestFrame, valueText: valueText,
-        rampCss: rampCss, barHtml: barHtml, attribution: attribution,
+        rampCss: rampCss, barHtml: barHtml, attribution: attribution, inText: inText, MM_PER_IN: MM_PER_IN,
         CREDIT_HTML: CREDIT_HTML, RATE_CREDIT_HTML: RATE_CREDIT_HTML, ATTRIB_HTML: ATTRIB_HTML, EXPORT_CREDIT: EXPORT_CREDIT
     };
 })();

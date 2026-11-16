@@ -16929,7 +16929,7 @@ function _raRenderLegend() {
     var m = _raData.meta;
     if (_raMode === 'rate') {
         var rt = m.rate, k = _raRateK;
-        lg.innerHTML = '<div class="ga-rain-legend-title"><span>Rain rate</span><span>mm/h</span></div>'
+        lg.innerHTML = '<div class="ga-rain-legend-title"><span>Rain rate</span></div>'     // units on the bar's two rows
             + PT.barHtml('ga-rain-bar', 'ga-rain-ticks', 'rate')
             + '<div class="ga-rain-legend-meta">' + (k >= 0 ? 'PARDIG ' + TCTime.utc(rt.t[k], { date: true }) + ' · hourly, nearest the IR frame'
                                                               : 'No PARDIG hour within 45 min of this IR frame') + '</div>'
@@ -16938,7 +16938,7 @@ function _raRenderLegend() {
         _raPlaceLegend();
         return;
     }
-    lg.innerHTML = '<div class="ga-rain-legend-title"><span>Storm-total rain</span><span>mm</span></div>'
+    lg.innerHTML = '<div class="ga-rain-legend-title"><span>Storm-total rain</span></div>'
         + PT.barHtml('ga-rain-bar', 'ga-rain-ticks')
         + '<div class="ga-rain-legend-meta">Within ' + Math.round(m.radius_km || 500) + ' km of the center · '
         + '<span style="white-space:nowrap">' + TCTime.span(m.first_frame, m.last_frame, { year: true }) + '</span></div>'
@@ -16992,7 +16992,8 @@ function _raRenderCard() {
     var m = _raData.meta, s = m.series || {};
     card.style.display = '';
     var sum = document.getElementById('ga-rain-summary');
-    if (sum) sum.textContent = 'peak total ' + Math.round(m.max_mm).toLocaleString() + ' mm';
+    var PTi = window.PardigTotal.inText;
+    if (sum) sum.textContent = 'peak total ' + Math.round(m.max_mm).toLocaleString() + ' mm (' + PTi(m.max_mm) + ' in)';
     var lat = m.max_at && m.max_at[0], lon = m.max_at && m.max_at[1];
     var where = (lat != null)
         ? ' at ' + Math.abs(lat).toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S') + ' '
@@ -17006,7 +17007,8 @@ function _raRenderCard() {
     var rd = document.getElementById('ga-rain-readout');
     if (rd) rd.innerHTML = 'Mean rain rate within ' + Math.round(m.inner_km || 100) + ' and '
         + Math.round(m.radius_km || 500) + ' km of the IBTrACS center, every 15 min, '
-        + _raPeriod(m) + '. Storm total peaks at ' + Math.round(m.max_mm).toLocaleString() + ' mm' + where + '.' + cover;
+        + _raPeriod(m) + '. Storm total peaks at ' + Math.round(m.max_mm).toLocaleString() + ' mm (' + PTi(m.max_mm)
+        + ' in)' + where + '.' + cover;
     var note = document.getElementById('ga-rain-note');
     if (note) note.innerHTML = 'Rain: ' + window.PardigTotal.CREDIT_HTML + '. '
         + '<span class="ga-obs-dim">Satellite-based AI estimate on a 0.1° grid; PARDIG caps rain rate at '
@@ -17038,24 +17040,38 @@ function _raRenderChart(m, s) {
     var axis = rd('--plot-axis') || '#5b6573', grid = rd('--plot-grid') || 'rgba(15,22,35,0.22)';
     var bg = rd('--surface-raised') || '#ffffff';
     var inner = Math.round(m.inner_km || 100), outer = Math.round(m.radius_km || 500);
+    // in/h beside mm/h: hover carries both, and a right axis in in/h shares the left axis' range exactly (an
+    // explicit range on both, from the data max; Plotly draws an axis only for a trace on it, hence the empty one).
+    var MMI = window.PardigTotal.MM_PER_IN;
+    var r100 = s.r100 || [], r500 = s.r500 || [];
+    var ymax = 1;
+    r100.concat(r500).forEach(function (v) { if (v != null && isFinite(v) && v > ymax) ymax = v; });
+    ymax *= 1.08;
     var traces = [{
-        x: iso, y: s.r100, type: 'scatter', mode: 'lines', name: 'Within ' + inner + ' km',
+        x: iso, y: r100, type: 'scatter', mode: 'lines', name: 'Within ' + inner + ' km',
         line: { color: '#0891b2', width: 1.6 }, fill: 'tozeroy', fillcolor: 'rgba(6,182,212,0.22)',
-        customdata: cap.map(function (c, k) { return [c, nat[k] || '']; }),
+        customdata: cap.map(function (c, k) { return [c, nat[k] || '', (r100[k] || 0) / MMI]; }),
         hovertemplate: '<b>%{x|' + TCTime.plotly.utc + '}</b><br>Within ' + inner + ' km: %{y:.1f} mm/h'
+            + ' (%{customdata[2]:.2f} in/h)'
             + '<br>At the 75 mm/h cap: %{customdata[0]}%<extra>%{customdata[1]}</extra>'
     }, {
-        x: iso, y: s.r500, type: 'scatter', mode: 'lines', name: 'Within ' + outer + ' km',
+        x: iso, y: r500, type: 'scatter', mode: 'lines', name: 'Within ' + outer + ' km',
         line: { color: '#64748b', width: 1.4, dash: 'dot' },
-        hovertemplate: 'Within ' + outer + ' km: %{y:.1f} mm/h<extra></extra>'
+        customdata: r500.map(function (v) { return (v || 0) / MMI; }),
+        hovertemplate: 'Within ' + outer + ' km: %{y:.1f} mm/h (%{customdata:.2f} in/h)<extra></extra>'
+    }, {
+        x: [iso[0]], y: [null], yaxis: 'y2', type: 'scatter', mode: 'lines', showlegend: false, hoverinfo: 'skip'
     }];
     var layout = Object.assign({}, base, {
         paper_bgcolor: bg, plot_bgcolor: bg, height: 170,
-        margin: { l: 40, r: 10, t: 22, b: 26 },
+        margin: { l: 40, r: 40, t: 22, b: 26 },
         xaxis: { type: 'date', tickformat: TCTime.plotly.day, tickfont: { size: 10, color: axis },
                  gridcolor: grid, linecolor: grid },
         yaxis: { title: { text: 'mm/h', font: { size: 10, color: axis } }, tickfont: { size: 10, color: axis },
-                 gridcolor: grid, rangemode: 'tozero', fixedrange: true },
+                 gridcolor: grid, range: [0, ymax], fixedrange: true },
+        yaxis2: { title: { text: 'in/h', font: { size: 10, color: axis } }, tickfont: { size: 10, color: axis },
+                  overlaying: 'y', side: 'right', range: [0, ymax / MMI], showgrid: false, zeroline: false,
+                  fixedrange: true },
         shapes: shapes, showlegend: true,
         // Above the plot, transparent: clear of the data and of theme swaps.
         legend: { orientation: 'h', x: 1, xanchor: 'right', y: 1.02, yanchor: 'bottom', bgcolor: 'rgba(0,0,0,0)',

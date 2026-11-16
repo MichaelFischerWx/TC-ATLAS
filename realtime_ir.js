@@ -2875,8 +2875,9 @@
                     if (seq !== _inspectSeq) return;
                     if ((tb == null && rate == null) || !_inspectOn ||
                         document.documentElement.getAttribute('data-view') !== 'map') { _inspectTipOff(); return; }
-                    var rs = (rate == null) ? '' : (rate >= 75 ? '75+ mm/h (model cap)'
-                        : rate < 0.2 ? 'No rain' : (rate < 10 ? rate.toFixed(1) : rate.toFixed(0)) + ' mm/h');
+                    var rs = (rate == null) ? '' : (rate >= 75 ? '75+ mm/h, ' + _rainIn(75) + '+ in/h (model cap)'
+                        : rate < 0.2 ? 'No rain' : (rate < 10 ? rate.toFixed(1) : rate.toFixed(0)) + ' mm/h ('
+                          + _rainIn(rate) + ' in/h)');
                     _inspectShowTip(clientX, clientY, tb, rs);
                 }, its);
             });
@@ -6700,6 +6701,12 @@
         return true;
     }
 
+    /** mm (or mm/h) as inches text (pardig_total.js's rounding when loaded). */
+    function _rainIn(mm) {
+        if (window.PardigTotal && window.PardigTotal.inText) return window.PardigTotal.inText(mm);
+        var v = mm / 25.4;
+        return v < 1 ? v.toFixed(2) : (v < 10 ? v.toFixed(1) : String(Math.round(v)));
+    }
     /** "6 h 49 m" between a 12-digit UTC stamp and now. */
     function _rainAge(ts) {
         var m = Math.max(0, Math.round((Date.now() - _tsToMin(ts) * 60000) / 60000));
@@ -6727,10 +6734,13 @@
                 sw += '<span style="background:rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (c[3] / 255).toFixed(2) + ')"></span>';
             }
             function tick(label, k) { return '<span style="left:' + (k / n * 100).toFixed(1) + '%">' + label + '</span>'; }
-            el.innerHTML = '<div class="ir-rain-legend-title">Rain rate (mm/h)</div>'
-                + '<div class="ir-rain-legend-bar">' + sw + '</div>'
-                + '<div class="ir-rain-legend-ticks">' + tick('0.2', 0) + tick('1', 4) + tick('5', 9)
-                + tick('20', 14) + tick('50', 19) + tick('75', n - 1) + '</div>'
+            // mm/h above the bar, in/h below (pardig_total.js; same 22 colors and bins as _RAIN_COLORS/_RAIN_EDGES)
+            var PT = window.PardigTotal;
+            el.innerHTML = '<div class="ir-rain-legend-title">Rain rate' + (PT ? '' : ' (mm/h)') + '</div>'
+                + (PT ? PT.barHtml(null, null, 'rate')
+                      : '<div class="ir-rain-legend-bar">' + sw + '</div>'
+                        + '<div class="ir-rain-legend-ticks">' + tick('0.2', 0) + tick('1', 4) + tick('5', 9)
+                        + tick('20', 14) + tick('50', 19) + tick('75', n - 1) + '</div>')
                 + '<div class="ir-rain-legend-age" id="ir-rain-legend-age"></div>'
                 + '<div class="ir-rain-legend-src">' + _RAIN_CREDIT_HTML + '</div>';
             el.title = 'AI rain-rate estimate from geostationary satellite imagery, 0.1° every 15 min. '
@@ -27963,7 +27973,8 @@
         if (!box) return;
         var R = _detailRainT, mine = R.sid === currentStormId, sub, dis = false;
         if (mine && R.status === 'ok') {
-            sub = _rainTotalPeriod(R.meta) + ' · peak ' + Math.round(R.meta.max_mm) + ' mm';
+            sub = _rainTotalPeriod(R.meta) + ' · peak ' + Math.round(R.meta.max_mm) + ' mm ('
+                + _rainIn(R.meta.max_mm) + ' in)';
         } else if (mine && R.status === 'none') {
             sub = 'Not available for this storm yet'; dis = true;
         } else if (mine && R.status === 'error') {
@@ -27989,7 +28000,7 @@
         return '<div class="ir-detail-cbar-item ir-raint-item" title="Rain within ' + Math.round(m.radius_km || 500)
             + ' km of the center, summed over every 15-min PARDIG frame. PARDIG caps rain rate at '
             + (m.rate_cap_mm_h || 75) + ' mm/h, so totals under the most intense eyewall rain run low.">'
-            + '<div class="ir-detail-cbar-head"><span>Storm-total rain</span><span class="ir-detail-cbar-units">mm' + xBtn + '</span></div>'
+            + '<div class="ir-detail-cbar-head"><span>Storm-total rain</span><span class="ir-detail-cbar-units">' + xBtn + '</span></div>'
             + _PT.barHtml()
             + '<div class="ir-raint-meta">Within ' + Math.round(m.radius_km || 500) + ' km of the center \u00b7 '
             + _rainTotalPeriod(m) + ' \u00b7 ' + age + '</div>'
