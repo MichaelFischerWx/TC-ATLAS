@@ -2269,27 +2269,30 @@ def _list_jtwc_active_storms() -> Optional[list]:
                 bdeck_url = f"{base_url}/b{storm_id.lower()}.dat"
             storms.append((storm_id, bdeck_url))
 
-        # For SH storms that straddle year boundary (Nov→Apr),
-        # check previous year only in Jan-Mar when straddling is plausible
-        if _dt.now(timezone.utc).month <= 3:
-            prev_year = year - 1
+        # Southern Hemisphere ids carry the year their season ENDS (a season runs
+        # July-June): from July on, the running SH season's storms are NEXT year's
+        # numbers (Xavier, November 2026 = SH042027). Jan-Jun storms carry the
+        # current year and are matched above. (2026-11-16: this block used to look
+        # at the PREVIOUS year in Jan-Mar, which never holds a live storm, so every
+        # Jul-Dec Southern storm was missing from the monitor.)
+        if _dt.now(timezone.utc).month >= 7:
+            next_year = year + 1
             if source_name == "ucar":
-                prev_url = f"{base_url}/{prev_year}/"
-                prev_text = _http_get(prev_url, timeout=10)
+                next_text = _http_get(f"{base_url}/{next_year}/", timeout=10)
             else:
-                prev_text = text  # SSD flat listing already has all years
+                next_text = text  # SSD flat listing already has all years
 
-            if prev_text:
-                prev_pattern = re.compile(
-                    rf'b(sh\d{{2}}{prev_year})\.dat',
+            if next_text:
+                next_pattern = re.compile(
+                    rf'b(sh\d{{2}}{next_year})\.dat',
                     re.IGNORECASE,
                 )
-                for m in prev_pattern.finditer(prev_text):
+                for m in next_pattern.finditer(next_text):
                     storm_id = m.group(1).upper()
                     if storm_id not in seen:
                         seen.add(storm_id)
                         if source_name == "ucar":
-                            bdeck_url = f"{base_url}/{prev_year}/b{storm_id.lower()}.dat"
+                            bdeck_url = f"{base_url}/{next_year}/b{storm_id.lower()}.dat"
                         else:
                             bdeck_url = f"{base_url}/b{storm_id.lower()}.dat"
                         storms.append((storm_id, bdeck_url))
@@ -2308,15 +2311,16 @@ def _list_jtwc_active_storms() -> Optional[list]:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     print("[IR Monitor] JTWC b-deck sources unavailable, probing TCW files...")
-    year_2d = str(_dt.now(timezone.utc).year)[-2:]
-    full_year = str(_dt.now(timezone.utc).year)
+    _now = _dt.now(timezone.utc)
     tcw_storms = []
 
     def _probe_tcw(basin, num):
-        storm_id_lower = f"{basin}{num:02d}{year_2d}"
+        # SH ids carry the season's END year: next year's from July on
+        yr = _now.year + (1 if basin == "sh" and _now.month >= 7 else 0)
+        storm_id_lower = f"{basin}{num:02d}{str(yr)[-2:]}"
         tcw_url = f"{JTWC_TCW_BASE}/{storm_id_lower}.tcw"
         if _http_head(tcw_url, timeout=3):
-            atcf_id = f"{basin.upper()}{num:02d}{full_year}"
+            atcf_id = f"{basin.upper()}{num:02d}{yr}"
             return (atcf_id, None)
         return None
 
@@ -5202,6 +5206,14 @@ def _list_recent_atcf_ids(days_back: int) -> list:
                 sid = m.group(1).lower()
                 if sid[:2].upper() not in _NHC_BASINS:
                     ids.add(sid)
+        # SH ids carry the season's END year: from July on the running season's
+        # storms are next year's numbers (UCAR keeps them in the next year's folder)
+        if now.month >= 7:
+            nxt = now.year + 1
+            ntext = (_http_get(f"{base_url}/{nxt}/", timeout=10) or ""
+                     if source_name == "ucar" else text)
+            for m in re.finditer(rf'b(sh\d{{2}}{nxt})\.dat', ntext, re.IGNORECASE):
+                ids.add(m.group(1).lower())
         if ids:
             break  # one JTWC source succeeded; no need to try fallback
 
