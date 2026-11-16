@@ -259,9 +259,11 @@
         }
         function row(items, unit) {
             var s = '';
-            items.forEach(function (t) {
-                s += '<span style="left:' + (t[1] * 100).toFixed(1) + '%;transform:translateX('
-                    + (t[1] === 0 ? '0' : '-50%') + ')">' + t[0] + '</span>';
+            items.forEach(function (t, j) {
+                // first tick left-aligned at the bar's edge; the last nudged right (-30%) as the pages' CSS did,
+                // which keeps "50 75" apart on a 150-px phone legend
+                var tr = t[1] === 0 ? '0' : (j === items.length - 1 ? '-30%' : '-50%');
+                s += '<span style="left:' + (t[1] * 100).toFixed(1) + '%;transform:translateX(' + tr + ')">' + t[0] + '</span>';
             });
             return '<div class="' + tc + '">' + s + '<span class="rain-unit" style="left:calc(100% + 5px);'
                 + 'transform:none;white-space:nowrap">' + unit + '</span></div>';

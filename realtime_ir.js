@@ -2480,7 +2480,10 @@
         }
         return out;
     }
+    var _rainLutMemo = null;
     function _idxLutForProduct(product, cmap) {
+        // PARDIG rain-rate tiles on the storm card (idxcolor://rain/...): the Rain-mode palette; idx 0/1 transparent.
+        if (product === 'rain') return _rainLutMemo || (_rainLutMemo = _rainLut());
         if (product === 'wv') return _WV_IDX_LUT;
         if (product === 'vis') return _VIS_IDX_LUT;
         if (product === 'combo') return _comboIdxLut(cmap);
@@ -2875,9 +2878,7 @@
                     if (seq !== _inspectSeq) return;
                     if ((tb == null && rate == null) || !_inspectOn ||
                         document.documentElement.getAttribute('data-view') !== 'map') { _inspectTipOff(); return; }
-                    var rs = (rate == null) ? '' : (rate >= 75 ? '75+ mm/h, ' + _rainIn(75) + '+ in/h (model cap)'
-                        : rate < 0.2 ? 'No rain' : (rate < 10 ? rate.toFixed(1) : rate.toFixed(0)) + ' mm/h ('
-                          + _rainIn(rate) + ' in/h)');
+                    var rs = (rate == null) ? '' : _rainRateText(rate);
                     _inspectShowTip(clientX, clientY, tb, rs);
                 }, its);
             });
@@ -6707,6 +6708,12 @@
         var v = mm / 25.4;
         return v < 1 ? v.toFixed(2) : (v < 10 ? v.toFixed(1) : String(Math.round(v)));
     }
+    /** Hover text for a sampled rain rate (mm/h): both units, the cap, or "No rain". */
+    function _rainRateText(rate) {
+        return rate >= 75 ? '75+ mm/h, ' + _rainIn(75) + '+ in/h (model cap)'
+            : rate < 0.2 ? 'No rain'
+            : (rate < 10 ? rate.toFixed(1) : rate.toFixed(0)) + ' mm/h (' + _rainIn(rate) + ' in/h)';
+    }
     /** "6 h 49 m" between a 12-digit UTC stamp and now. */
     function _rainAge(ts) {
         var m = Math.max(0, Math.round((Date.now() - _tsToMin(ts) * 60000) / 60000));
@@ -9194,6 +9201,9 @@
         // Also clean up Visible / WV frames
         cleanupVisFrameLayers();
         cleanupWvFrameLayers();
+        // Any rebuild (product switch, storm switch, refresh) ends the rain-rate deck; its own
+        // builder turns it back on after this teardown.
+        if (_detailRainR && (_detailRainR.on || _detailRainR.layers.length)) _rainRateTeardown();
     }
 
     /** Show/hide the loading progress overlay on the detail map */
@@ -9515,6 +9525,8 @@
      *  clobber the lite layers with a heavyweight bundle on the next poll. */
     function _refreshLiteFramesIfNewer(atcfId) {
         if (animFrameTimes.length === 0) return;
+        // The rain-rate deck runs on PARDIG's frame list, not the live mosaic's.
+        if (_detailRainR && _detailRainR.on) { _rainRateRefresh(atcfId); return; }
         // Refresh whichever product is shown (IR/Vis/WV all ride the mosaic
         // now). Combo's timeline IS the IR manifest, so it polls 'ir' too —
         // only the rebuild differs (it has to re-pair the Vis band).
@@ -12445,7 +12457,8 @@
         // Name the channel (matches the Vis/WV/GeoColor labels) so the
         // saved image always states what's shown, even with the product
         // toggle stripped from the export.
-        if (_elSatLabel) _elSatLabel.textContent = 'Infrared — ' + (detailSatName || 'GIBS IR');
+        if (_elSatLabel) _elSatLabel.textContent = (_detailRainR && _detailRainR.on ? 'Rain rate over infrared — ' : 'Infrared — ')
+            + (detailSatName || 'GIBS IR');
     }
 
     /** Show a specific frame by toggling opacity (instant — no tile fetching) */
@@ -12845,6 +12858,8 @@
                 && animFrameLayers[prevIdx]) {
             animFrameLayers[prevIdx].setOpacity(0);
         }
+        // Rain-rate deck: each IR frame has a rain layer riding with it.
+        if (_detailRainR && _detailRainR.on) _rainRateShowFrame(idx, prevIdx);
 
         // Keep the storm centered as the frame's true position moves.
         _recenterDetailToFrame(animFrameLayers[idx]);
@@ -27660,7 +27675,7 @@
             var tip = _envHoverTipEl();
             if (lines.length === 0) { tip.style.display = 'none'; return; }
             lines.push('<span style="color:#94a3b8;font-size:0.62rem;">'
-                + lat.toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S')
+                + Math.abs(lat).toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S')
                 + ' ' + Math.abs(lon).toFixed(1) + '°' + (lon >= 0 ? 'E' : 'W')
                 + '</span>');
             tip.innerHTML = lines.join('<br>');
@@ -27844,6 +27859,7 @@
         });
         _detailEnvActive = {};
         _rainTotalDrop();
+        _rainRateTeardown();
         _updateDetailLayersCount();
     }
 
@@ -27899,6 +27915,7 @@
     function _rainTotalShow() {
         var R = _detailRainT;
         if (!detailMap || R.status !== 'ok' || R.on) return;
+        if (_detailRainR.on) _rainRateOff();     // one rain layer at a time (same palette)
         R.overlays = [_PT.addTo(detailMap, R.meta, R.idx, _detailEnvOpacity)];
         R.on = true;
         _rainAttribution(true, detailMap);
@@ -27957,6 +27974,168 @@
         _updateDetailLayersCount();
         _renderDetailRainRow();
     };
+    // ── Rain RATE on the storm card (2026-11-16) ─────────────────────────
+    // The Global Map's Rain mode, on the card: the newest 6 h of PARDIG 15-min frames, each drawn over the
+    // grayscale IR frame the PARDIG job paired with it (frames.json ir_pair, within 5 min; those IR frames stay on
+    // R2 as packs for 54 h). PARDIG posts 2-8 h after valid time, so this loop is NOT the live loop: the card's
+    // timeline becomes the rain frames, and the legend says how old the newest one is. Built as a second set of
+    // tile layers riding the card's IR deck (one rain layer per frame, shown by showFrame), through the same
+    // idxcolor:// protocol as the IR -- no extra GL context on phones. Any deck rebuild (product or storm
+    // switch) ends it; switching it off rebuilds the live IR loop.
+    var _detailRainR = { on: false, sid: null, prevCmap: null, layers: [], times: [], irTimes: [], busy: false, err: false };
+
+    function _rainRateAvail() {
+        return !!(detailMap && _liteActive && _IR2A && window.maplibregl && window.maplibregl.addProtocol);
+    }
+    function _rainRateStorm() {
+        if (_deferredStormRef && _deferredStormRef.atcf_id === currentStormId) return _deferredStormRef;
+        for (var i = 0; i < stormData.length; i++) if (stormData[i].atcf_id === currentStormId) return stormData[i];
+        return null;
+    }
+    /** Replace the card's deck with the rain-rate deck. false if no rain frame has a paired IR frame. */
+    function _rainRateBuild(storm) {
+        var R = _detailRainR, times = _rainLoopTimes(), irT = _rainIrTimes(times), keep = [], i, k;
+        for (i = 0; i < times.length; i++) if (irT[i]) keep.push(i);
+        if (!keep.length || !detailMap) return false;
+        cleanupFrameLayers();                         // also tears down a previous rain deck
+        _liteActive = true;
+        _idxColorEnsureProtocol();
+        if (productMode !== 'eir') {                  // rain rides the IR timeline
+            productMode = 'eir';
+            _irSyncProductButtons('eir');
+            var tbLeg = document.getElementById('ir-tb-legend'); if (tbLeg) tbLeg.style.display = 'block';
+            ['ir-vigor-legend', 'ir-wv-legend'].forEach(function (id) {
+                var el = document.getElementById(id); if (el) el.style.display = 'none';
+            });
+        }
+        // Grayscale IR under the rain colors, as the Global Map's Rain mode and the storm total do.
+        if (_irColormap !== 'graylinear') { R.prevCmap = _irColormap; _rtSetIRColormap('graylinear'); }
+        var panes = detailMap.getPanes();
+        if (!panes.detailRainPane) { var pn = detailMap.createPane('detailRainPane'); if (pn) pn.style.zIndex = 350; }
+        var zmax = (_rainManifest && _rainManifest.zmax) || 4, n = keep.length, stage = [];
+        R.layers = []; R.times = []; R.irTimes = [];
+        for (k = 0; k < n; k++) {
+            i = keep[k];
+            var it = irT[i], rt = times[i];
+            var ir = L.tileLayer('idxcolor://ir/' + _ir2aRoot('ir') + '/' + it + '/{z}/{x}/{y}.png', {
+                tileSize: 512, maxNativeZoom: _stormZmaxFor('ir', it), maxZoom: GIBS_VIS_MAX_ZOOM,
+                crisp: true, opacity: 0, pane: 'tilePane', keepBuffer: 2
+            });
+            ir._mosaicTs = it;                        // eye fixes / pin follow the IR frame
+            var rn = L.tileLayer('idxcolor://rain/' + _RAIN_ROOT + '/' + rt + '/{z}/{x}/{y}.png', {
+                tileSize: 512, maxNativeZoom: zmax, maxZoom: GIBS_VIS_MAX_ZOOM,
+                crisp: true, opacity: 0, pane: 'detailRainPane', keepBuffer: 2
+            });
+            if (k === n - 1) { ir.addTo(detailMap); rn.addTo(detailMap); }
+            else stage.push(ir, rn);
+            animFrameLayers.push(ir);
+            animFrameTimes.push(_mosaicTsToIso(rt));  // the timeline is the rain's valid time
+            validFrames.push(k);
+            frameHasError.push(false);
+            R.layers.push(rn); R.times.push(rt); R.irTimes.push(it);
+        }
+        R.on = true; R.sid = currentStormId; R.err = false;
+        framesLoaded = n; framesReady = true; animIndex = n - 1; _firstFrameShown = true;
+        showFrame(n - 1);
+        showLoadingProgress(false);
+        var sl = document.getElementById('ir-anim-slider');
+        if (sl) { sl.max = n - 1; sl.value = n - 1; }
+        var pb = document.getElementById('ir-anim-play');
+        if (pb) { pb.disabled = false; pb.title = 'Play/Pause'; }
+        updateAnimCounter();
+        updateFrameOverlay();
+        var satLbl = document.getElementById('ir-satellite-label');
+        if (satLbl) satLbl.textContent = 'Rain rate over infrared — ' + (_liteSatDisplay || detailSatName || '');
+        _rainAttribution(true, detailMap);
+        _litePrefetchState = { product: 'ir', frames: R.irTimes.slice() };
+        _liteStageStart(stage, function () { _litePrefetchSchedule(); });
+        _updateDetailLayersCount(); _renderDetailRainRow(); _renderDetailEnvColorbar();
+        return true;
+    }
+    function _rainRateShowFrame(idx, prevIdx) {
+        var Ls = _detailRainR.layers, cur = Ls[idx];
+        if (!cur) return;
+        if (!cur._map && !cur._added) { try { cur.addTo(detailMap); } catch (e) {} }   // staging skips it later
+        cur.setOpacity(1);
+        if (prevIdx >= 0 && prevIdx !== idx && Ls[prevIdx]) Ls[prevIdx].setOpacity(0);
+    }
+    /** Drop the rain layers and the mode (no rebuild of the IR deck). */
+    function _rainRateTeardown() {
+        var R = _detailRainR;
+        if (detailMap) R.layers.forEach(function (l) { try { detailMap.removeLayer(l); } catch (e) {} });
+        R.layers = []; R.times = []; R.irTimes = [];
+        if (!R.on) return;
+        R.on = false;
+        _rainAttribution(false, detailMap);
+        if (R.prevCmap && _irColormap === 'graylinear') _rtSetIRColormap(R.prevCmap);
+        R.prevCmap = null;
+        var satLbl = document.getElementById('ir-satellite-label');
+        if (satLbl && /^Rain rate/.test(satLbl.textContent)) satLbl.textContent = 'Infrared — ' + (_liteSatDisplay || detailSatName || '');
+        _updateDetailLayersCount(); _renderDetailRainRow(); _renderDetailEnvColorbar();
+    }
+    /** Switch the mode off and bring back the live IR loop. */
+    function _rainRateOff() {
+        var storm = _rainRateStorm();
+        _rainRateTeardown();
+        if (storm && detailMap) _initDetailMapMosaic(storm, 'ir');
+    }
+    /** New PARDIG batch posted while the mode is on: rebuild on the newer frames. */
+    function _rainRateRefresh(atcfId) {
+        var R = _detailRainR, last = R.times[R.times.length - 1];
+        _rainFetch().then(function (m) {
+            if (!R.on || currentStormId !== atcfId || !detailMap) return;
+            var f = (m && m.frames) || [];
+            if (!f.length || !last || f[f.length - 1] <= last) return;
+            var storm = _rainRateStorm();
+            if (!storm) return;
+            var wasPlaying = animPlaying;
+            if (wasPlaying) stopAnimation();
+            _rainRateBuild(storm);
+            if (wasPlaying) setTimeout(function () { if (framesReady && _detailRainR.on) startAnimation(); }, 250);
+        }).catch(function () {});
+    }
+    window._irDetailToggleRainRate = function () {
+        var R = _detailRainR;
+        if (R.on) {
+            _rainRateOff();
+            _ga('rt_detail_rain_rate', { on: false, storm: currentStormId });
+            return;
+        }
+        if (!_rainRateAvail() || R.busy) return;
+        var sid = currentStormId;
+        R.busy = true; R.err = false;
+        _renderDetailRainRow();
+        _rainFetch().then(function () {
+            R.busy = false;
+            if (currentStormId !== sid || !detailMap) return;
+            if (_detailRainT.on) _rainTotalDrop();
+            var storm = _rainRateStorm(), wasPlaying = animPlaying;
+            if (wasPlaying) stopAnimation();
+            if (!storm || !_rainRateBuild(storm)) { R.err = true; _renderDetailRainRow(); return; }
+            _ga('rt_detail_rain_rate', { on: true, storm: sid, frames: R.times.length });
+        }).catch(function (e) {
+            R.busy = false; R.err = true;
+            console.warn('[RT Monitor] storm rain rate:', e);
+            _renderDetailRainRow();
+        });
+    };
+    /** Legend item for the card's colorbar stack. */
+    function _rainRateLegendHtml() {
+        var R = _detailRainR, PT = window.PardigTotal;
+        if (!R.on || !R.times.length || !PT) return '';
+        var t0 = R.times[0], t1 = R.times[R.times.length - 1];
+        var xBtn = '<button class="env-cbar-x" onclick="window._irDetailToggleRainRate()" '
+            + 'title="Remove rain rate" aria-label="Remove rain rate">&times;</button>';
+        return '<div class="ir-detail-cbar-item ir-raint-item" title="AI rain-rate estimate from geostationary '
+            + 'satellite imagery, 0.1° every 15 min, posted 2–8 h after valid time. Each rain frame is shown over the '
+            + 'IR frame within 5 min of it. White = the model’s 75 mm/h cap.">'
+            + '<div class="ir-detail-cbar-head"><span>Rain rate</span><span class="ir-detail-cbar-units">' + xBtn + '</span></div>'
+            + PT.barHtml(null, null, 'rate')
+            + '<div class="ir-raint-meta">Every 15 min, ' + fmtUTC(t0, { date: false }).replace(/ UTC$/, '')
+            + '–' + fmtUTC(t1, { date: false }) + ' · newest ' + _rainAge(t1) + ' ago</div>'
+            + '<div class="ir-rain-legend-src">' + _RAIN_CREDIT_HTML + '</div></div>';
+    }
+
     window._rainTotalStats = function () {
         var R = _detailRainT;
         return { sid: R.sid, status: R.status, on: R.on, overlays: R.overlays.length, fitted: R.fitted,
@@ -27986,6 +28165,30 @@
             + '<label class="ir-dl-row' + (dis ? ' is-disabled' : '') + '">'
             + '<input type="checkbox"' + (R.on && mine ? ' checked' : '') + (dis ? ' disabled' : '')
             + ' onchange="window._irDetailToggleRainTotal()"><span>Storm-total rain</span>'
+            + '<span class="ir-menu-ramp" aria-hidden="true" style="background:' + _rainRampCss() + '"></span></label>'
+            + '<div class="ir-dl-sub">' + sub + '</div>'
+            + _rainRateRowHtml();
+    }
+    function _rainRateRowHtml() {
+        var R = _detailRainR, ok = _rainRateAvail(), sub, dis = !ok || R.busy;
+        if (!ok) {
+            sub = 'Available with the default satellite view';
+        } else if (R.busy) {
+            sub = 'Loading…';
+        } else if (R.err) {
+            sub = 'Couldn’t load rain frames for this view';
+        } else if (R.on && R.times.length) {
+            var t1 = R.times[R.times.length - 1];
+            sub = 'Loop shows rain to ' + fmtUTC(t1, { date: false }) + ' (' + _rainAge(t1) + ' ago) over IR from the same times';
+        } else {
+            var m = _rainManifest || _rainPeek, f = m && m.frames, nw = f && f.length ? f[f.length - 1] : null;
+            sub = 'Last 6 h of rain over IR from the same times'
+                + (nw ? ' · newest ' + fmtUTC(nw, { date: false }) + ', ' + _rainAge(nw) + ' ago' : ' · 2–8 h behind real time');
+            if (!m) _rainPeekNewest();
+        }
+        return '<label class="ir-dl-row' + (dis ? ' is-disabled' : '') + '">'
+            + '<input type="checkbox"' + (R.on ? ' checked' : '') + (dis ? ' disabled' : '')
+            + ' onchange="window._irDetailToggleRainRate()"><span>Rain rate</span>'
             + '<span class="ir-menu-ramp" aria-hidden="true" style="background:' + _rainRampCss() + '"></span></label>'
             + '<div class="ir-dl-sub">' + sub + '</div>';
     }
@@ -28129,7 +28332,7 @@
 
     function _updateDetailLayersCount() {
         var names = Object.keys(_detailEnvActive);
-        var n = names.length + (_detailRainT.on ? 1 : 0);
+        var n = names.length + (_detailRainT.on ? 1 : 0) + (_detailRainR.on ? 1 : 0);
         var badge = document.getElementById('ir-detail-layers-count');
         if (badge) {
             badge.textContent = n;
@@ -28169,7 +28372,7 @@
         var active = Object.keys(_detailEnvActive)
             .map(function (k) { return _detailEnvActive[k]; })
             .filter(function (e) { return e && e.overlayKind !== 'wind'; });
-        var rainHtml = _rainTotalLegendHtml();
+        var rainHtml = _rainTotalLegendHtml() + _rainRateLegendHtml();
         if (!active.length && !rainHtml) { box.style.display = 'none'; box.innerHTML = ''; return; }
         setTimeout(_detailPlaceCbars, 0);
         box.style.display = '';
@@ -28266,20 +28469,25 @@
         var pt = e.originalEvent;
         var wantTb = (typeof productMode === 'undefined' || productMode === 'eir');
         var seq = ++_envHoverSeq;
+        // Rain-rate deck: sample the SHOWN frame's rain and its paired IR frame (the default Tb sample reads
+        // the newest live mosaic frame, hours from the rain's valid time).
+        var RR = _detailRainR, rrOn = RR.on && RR.times[animIndex];
+        var rateTs = rrOn ? RR.times[animIndex] : null, irTs = rrOn ? RR.irTimes[animIndex] : undefined;
         // IR Tb is async (mosaic tile sample); render once it resolves so the
         // Tb line leads the tooltip. Skip the Tb sample for Vis/WV products.
-        var render = function (tb) {
+        var render = function (tb, rate) {
             if (seq !== _envHoverSeq) return;   // superseded, or the pointer left while the tile loaded
             var lines = [];
             if (tb != null) {
                 lines.push('<b>IR:</b> ' + tb.toFixed(0) + ' K · ' + (tb - 273.15).toFixed(0) + ' °C');
             }
+            if (rate != null) lines.push('<b>Rain rate:</b> ' + _rainRateText(rate));
             lines = lines.concat(envLines);
             var tip = _envHoverTipEl();
             if (!lines.length) { tip.style.display = 'none'; return; }
             var lonW = ((lon + 180) % 360 + 360) % 360 - 180;   // the map wraps past the dateline
             lines.push('<span style="color:#94a3b8;font-size:0.62rem;">'
-                + lat.toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S')
+                + Math.abs(lat).toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S')
                 + ' ' + Math.abs(lonW).toFixed(1) + '°' + (lonW >= 0 ? 'E' : 'W') + '</span>');
             tip.innerHTML = lines.join('<br>');
             if (pt) {
@@ -28288,8 +28496,12 @@
                 tip.style.display = '';
             }
         };
-        if (wantTb) _mosaicTbAt(lat, lon, render);
-        else render(null);
+        var withRate = function (tb) {
+            if (!rateTs) { render(tb, null); return; }
+            _rainRateAt(lat, lon, rateTs, function (rate) { render(tb, rate); });
+        };
+        if (wantTb) _mosaicTbAt(lat, lon, withRate, irTs);
+        else withRate(null);
     }
 
     window._irDetailToggleEnvLayer = function (name) {
