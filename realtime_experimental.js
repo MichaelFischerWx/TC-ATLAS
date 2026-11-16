@@ -86,7 +86,12 @@
                 IO: 'North Indian Ocean estimates are <strong>provisional</strong>: ' +
                     'no storm from this basin is in the model’s training or ' +
                     'verification record. Imagery: Meteosat-9 over 45.5°E ' +
-                    '(contains EUMETSAT data).'
+                    '(contains EUMETSAT data).',
+                SH: 'Southern Hemisphere estimates are <strong>provisional</strong>: ' +
+                    'the models were trained only on Northern Hemisphere storms, ' +
+                    'so each image of a Southern storm is flipped north to south ' +
+                    'before they read it, and no storm from this hemisphere is in ' +
+                    'the training or verification record.'
             },
             /* No SHAP: the ridge\u2019s coefficients are FPM\u2019s drivers, the
                tree\u2019s SHAP is GHOST\u2019s; neither describes the mean.
@@ -1237,7 +1242,8 @@
         '<strong>Direction convention:</strong> the arrow points from the ' +
         'low-level center toward the displaced mid-level center; the ' +
         'shear-relative panel is degrees counterclockwise from downshear ' +
-        '(sheared storms typically tilt downshear-left). ' +
+        '(sheared storms typically tilt downshear-left in the Northern ' +
+        'Hemisphere and downshear-right, the mirror image, in the Southern). ' +
         '<strong>RI guidance</strong> (Atlantic only) stratifies observed ' +
         'rapid-intensification frequency by tilt and ventilation. Read it ' +
         'as relative ordering &mdash; which regime a storm is in &mdash; ' +
@@ -3095,8 +3101,9 @@
     /* ---------------- TILT-RF panels ---------------- */
 
     /* Shear-relative quadrant name. Positive = counterclockwise (left of
-       shear for a NH storm); the physically expected residence quadrant for
-       a sheared TC is downshear-left. */
+       shear); the physically expected residence quadrant for a sheared TC
+       is downshear-left in the NH and downshear-right in the SH (the
+       producer reports geographic angles, so the labels hold in both). */
     function shearQuadrant(d) {
         if (d == null || !isFinite(d)) return null;
         if (d >= -45 && d < 45) return 'downshear';
