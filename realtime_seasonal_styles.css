@@ -1072,6 +1072,18 @@ body.seasonal-maximized .seasonal-header {
    grow; this panel's chart is a grid item, so it never grew and the
    400 px figure overflowed into the caption below it. */
 #seasonal-ace-plot { height: 400px; min-height: 400px; }
+#seasonal-ace-plot { position: relative; }
+.seasonal-ace-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--text-dim, #8892a0);
+    font-size: 13px;
+}
 @media (max-width: 640px) {
     #seasonal-ace-plot { height: 470px; min-height: 470px; }
 }

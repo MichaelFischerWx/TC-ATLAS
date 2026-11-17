@@ -108,6 +108,7 @@
         acePace: { basin: 'NA', compare: '', view: 'cum', group: '' },
         ace_pace: null,        // parsed ace_pace_climo.json
         ace_live: null,        // /ir-monitor/seasonal/ace-live
+        ace_live_pending: true, // live fetch still in flight
         ace_storms: null,      // parsed ace_pace_storms.json (lazy)
 
         anomZoom: 'global',
@@ -968,6 +969,8 @@
                 pctTxt = Math.round(st.pct) + '% of normal';
                 pctCls = (st.pct >= 115) ? ' ace-hi'
                        : (st.pct <= 85) ? ' ace-lo' : '';
+            } else if (st && st.ace === null && state.ace_live_pending) {
+                pctTxt = 'loading';
             } else if (st) {
                 pctTxt = 'pre-season';
             }
@@ -1375,6 +1378,8 @@
     function _renderAcePace() {
         var el = document.getElementById('seasonal-ace-plot');
         if (!el || typeof Plotly === 'undefined') return;
+        var loading = el.querySelector('.seasonal-ace-loading');
+        if (loading) loading.remove();
         var basin = state.acePace.basin;
         var cl = _aceBasinClimo(basin);
         var note = document.getElementById('seasonal-ace-note');
@@ -1707,7 +1712,10 @@
                 '.<br>';
         }
         if (note) {
-            if (!st || st.ace === null) {
+            if ((!st || st.ace === null) && state.ace_live_pending) {
+                note.innerHTML = groupHtml + cl.name + ': loading the live ' +
+                    'season-to-date ACE&hellip;';
+            } else if (!st || st.ace === null) {
                 note.innerHTML = groupHtml + cl.name + ': live season-to-date ACE ' +
                     'unavailable (the b-deck feed did not respond).';
             } else {
@@ -1748,9 +1756,15 @@
     // The live fetch is allowed to fail — the climatology alone is still
     // a useful panel, and the note line says the live feed is missing.
     var _acePaceLoaded = false;
+    // How long the bands wait for the live curve before drawing without
+    // it. The live feed normally lands within a few hundred ms of the
+    // climatology; this only matters when the API is cold, and keeps the
+    // usual load from flashing bands-then-line.
+    var ACE_LIVE_GRACE_MS = 700;
     function _loadAcePace() {
         if (_acePaceLoaded) return;
         _acePaceLoaded = true;
+        state.ace_live_pending = true;
         var pClimo = _fetchData('ace_pace_climo.json').then(
             function (j) { state.ace_pace = j; },
             function () { state.ace_pace = null; }
@@ -1758,22 +1772,45 @@
         var pLive = _fetchJSON(API_BASE + '/ir-monitor/seasonal/ace-live').then(
             function (j) { state.ace_live = j; },
             function () { state.ace_live = null; }
-        );
-        Promise.all([pClimo, pLive]).then(function () {
-            if (!state.ace_pace) return;
-            // Default the basin to whichever hemisphere is actually in
-            // season: in NH summer the Atlantic is the story, but a user
-            // opening the tab in January should not land on an empty
-            // Atlantic panel.
-            var m = (new Date()).getUTCMonth() + 1;
-            if (m >= 12 || m <= 3) {
-                state.acePace.basin = 'SI';
+        ).then(function () { state.ace_live_pending = false; });
+        var drawn = false;
+        function draw() {
+            if (!drawn) {
+                drawn = true;
+                // Default the basin to whichever hemisphere is actually in
+                // season: in NH summer the Atlantic is the story, but a user
+                // opening the tab in January should not land on an empty
+                // Atlantic panel.
+                var m = (new Date()).getUTCMonth() + 1;
+                if (m >= 12 || m <= 3) {
+                    state.acePace.basin = 'SI';
+                }
+                _populateAceCompare();
+                _renderAceChips();
+                _renderAcePace();
+                _addPlotSaveBtn('seasonal-panel-ace-pace', 'seasonal-ace-plot',
+                                'seasonal_ace_pace');
+                return;
             }
+            // Live curve arrived after the bands were drawn.
             _populateAceCompare();
             _renderAceChips();
             _renderAcePace();
-            _addPlotSaveBtn('seasonal-panel-ace-pace', 'seasonal-ace-plot',
-                            'seasonal_ace_pace');
+        }
+        pClimo.then(function () {
+            if (!state.ace_pace) {
+                // Clears the spinner and says the climatology is missing.
+                _renderAcePace();
+                return;
+            }
+            // The bands don't depend on the live feed: draw them as soon
+            // as they're here, and the live season joins when it lands.
+            var timer = state.ace_live_pending
+                ? setTimeout(draw, ACE_LIVE_GRACE_MS) : null;
+            pLive.then(function () {
+                if (timer) clearTimeout(timer);
+                draw();
+            });
         });
     }
 
@@ -10905,11 +10942,32 @@
             }
             legend.setAttribute('data-mode', 'shear_anom');
         } else {
-            // Reset to the SST defaults (matches the CSS rule + HTML).
-            bar.style.background = '';
-            if (spans.length >= 2) {
-                spans[0].textContent = '−3 °C';
-                spans[1].textContent = '+3 °C';
+            // SST: draw the bar from the scale the published PNGs were
+            // rendered with (latest.json anom_scale), so the legend can't
+            // drift from the image. A latest.json from before the ±5 °C
+            // scale has none and gets the old ±3 °C RdBu_r defaults
+            // (the CSS rule + HTML).
+            var sc = state.latest && state.latest.anom_scale;
+            var fmt = function (v) {
+                return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v) + ' °C';
+            };
+            if (sc && sc.stops && sc.stops.length > 1 && sc.vmax > sc.vmin) {
+                var span = sc.vmax - sc.vmin;
+                bar.style.background = 'linear-gradient(to right, ' +
+                    sc.stops.map(function (st) {
+                        return st[1] + ' ' +
+                            (100 * (st[0] - sc.vmin) / span).toFixed(2) + '%';
+                    }).join(', ') + ')';
+                if (spans.length >= 2) {
+                    spans[0].textContent = fmt(sc.vmin);
+                    spans[1].textContent = fmt(sc.vmax);
+                }
+            } else {
+                bar.style.background = '';
+                if (spans.length >= 2) {
+                    spans[0].textContent = '−3 °C';
+                    spans[1].textContent = '+3 °C';
+                }
             }
             legend.removeAttribute('data-mode');
         }
@@ -10951,6 +11009,7 @@
             'the 1991-2020 monthly climatology (interpolated to the day)' +
             (state.anomVar === 'relative' ? ', ' + _relativeSstNote() : ''));
         if (!state.latest) return;
+        _applyAnomLegend('sst');   // again, now that anom_scale is known
         var isRel = state.anomVar === 'relative';
         var pngName = isRel
             ? (state.latest.anom_png_relative || state.latest.anom_png)

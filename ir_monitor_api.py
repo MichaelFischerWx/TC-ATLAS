@@ -9788,42 +9788,139 @@ def _compute_live_ace() -> dict:
     }
 
 
+# Panel A on the Seasonal tab waits on this endpoint, and a fresh compute
+# walks ~40-80 b-deck downloads (measured 5.3 s). So nobody should ever pay
+# for one: the endpoint is stale-while-revalidate (an expired copy is served
+# at once while ONE background thread recomputes), the last good payload is
+# shared through GCS so a brand-new instance answers from it instead of
+# recomputing, and /warmup refreshes it on the scheduler's dime.
+_ACE_LIVE_GCS_KEY = f"{_GCS_RT_VERSION}/seasonal/ace-live.json"
+_ACE_LIVE_REFRESH_LOCK = threading.Lock()   # single-flight recompute
+
+
+def _ace_live_gcs_get() -> tuple:
+    """(payload, computed_at) from the shared GCS copy, or (None, 0.0)."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return None, 0.0
+    try:
+        d = json.loads(bucket.blob(_ACE_LIVE_GCS_KEY)
+                       .download_as_bytes(timeout=10))
+        if isinstance(d, dict) and isinstance(d.get("payload"), dict):
+            return d["payload"], float(d.get("computed_at") or 0.0)
+    except Exception as ex:
+        logger.info(f"ace-live: GCS copy unavailable ({type(ex).__name__})")
+    return None, 0.0
+
+
+def _ace_live_gcs_put(payload: dict, computed_at: float) -> None:
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    try:
+        blob = bucket.blob(_ACE_LIVE_GCS_KEY)
+        # Public bucket: without this GCS stamps max-age=3600 and readers
+        # would adopt copies far older than computed_at says.
+        blob.cache_control = "no-store"
+        blob.upload_from_string(
+            json.dumps({"computed_at": computed_at, "payload": payload},
+                       default=str).encode("utf-8"),
+            content_type="application/json", timeout=10)
+    except Exception as ex:
+        logger.warning(f"ace-live: GCS put failed: {ex}")
+
+
+def _ace_live_cached() -> tuple:
+    """(payload, computed_at) from memory, adopting the GCS copy when this
+    instance has none yet."""
+    with _ACE_LIVE_LOCK:
+        payload = _ACE_LIVE_CACHE.get("payload")
+        ts = _ACE_LIVE_CACHE.get("ts", 0.0)
+    if payload is not None:
+        return payload, ts
+    payload, ts = _ace_live_gcs_get()
+    if payload is not None:
+        with _ACE_LIVE_LOCK:
+            if _ACE_LIVE_CACHE.get("payload") is None:
+                _ACE_LIVE_CACHE["payload"] = payload
+                _ACE_LIVE_CACHE["ts"] = ts
+    return payload, ts
+
+
+def refresh_ace_live_cache(max_age_s: Optional[float] = None,
+                           wait: bool = True) -> dict:
+    """Recompute the live ACE payload if it is older than `max_age_s`
+    (default: the TTL). Single-flight: if another thread is already
+    recomputing, returns without waiting for it unless `wait`. Used by
+    the endpoint (in a background thread) and by /warmup."""
+    max_age = _ACE_LIVE_TTL if max_age_s is None else max_age_s
+    _, ts = _ace_live_cached()
+    if ts and time.time() - ts < max_age:
+        return {"refreshed": False, "age_s": int(time.time() - ts)}
+    if not _ACE_LIVE_REFRESH_LOCK.acquire(blocking=wait):
+        return {"refreshed": False, "reason": "already-running"}
+    try:
+        # Another thread may have finished while we waited for the lock.
+        _, ts = _ace_live_cached()
+        if ts and time.time() - ts < max_age:
+            return {"refreshed": False, "age_s": int(time.time() - ts)}
+        t0 = time.time()
+        payload = _compute_live_ace()
+        now_t = time.time()
+        with _ACE_LIVE_LOCK:
+            _ACE_LIVE_CACHE["payload"] = payload
+            _ACE_LIVE_CACHE["ts"] = now_t
+        _ace_live_gcs_put(payload, now_t)
+        return {"refreshed": True, "elapsed_s": round(now_t - t0, 1)}
+    finally:
+        _ACE_LIVE_REFRESH_LOCK.release()
+
+
+def _ace_live_refresh_bg() -> None:
+    def _run():
+        try:
+            refresh_ace_live_cache(wait=False)
+        except Exception as e:
+            logger.warning(f"ace-live background refresh failed: {e}")
+    threading.Thread(target=_run, daemon=True,
+                     name="ace-live-refresh").start()
+
+
 @router.get("/seasonal/ace-live")
 def get_seasonal_ace_live():
     """Season-to-date cumulative ACE per basin, from operational b-decks.
 
     Shares the 366-day season-day axis with `seasonal/ace_pace_climo.json`
     so the live curve drops straight onto the climatological percentile
-    bands in Panel A. Cached for 30 min — b-decks only move on the 6-hourly
-    synoptic cycle, and the listing walk is ~40-80 small fetches.
+    bands in Panel A. b-decks only move on the 6-hourly synoptic cycle, so
+    a copy up to a TTL (30 min) old is served as current; an older one is
+    still served immediately while a background thread recomputes it.
+    Only the very first request with no copy anywhere computes inline.
     """
-    now_t = time.time()
-    with _ACE_LIVE_LOCK:
-        cached = _ACE_LIVE_CACHE.get("payload")
-        if cached and (now_t - _ACE_LIVE_CACHE.get("ts", 0.0)) < _ACE_LIVE_TTL:
+    cached, ts = _ace_live_cached()
+    if cached is not None:
+        age = time.time() - ts
+        if age >= _ACE_LIVE_TTL:
+            _ace_live_refresh_bg()
             return JSONResponse(
                 content=cached,
-                headers={"Cache-Control": "public, max-age=900"},
+                headers={"Cache-Control": "public, max-age=60"},
             )
+        return JSONResponse(
+            content=cached,
+            headers={"Cache-Control": "public, max-age=900"},
+        )
     try:
-        payload = _compute_live_ace()
+        refresh_ace_live_cache()
     except Exception as e:
         logger.warning(f"ace-live failed: {e}")
-        with _ACE_LIVE_LOCK:
-            stale = _ACE_LIVE_CACHE.get("payload")
-        if stale:
-            # Serving a stale-but-real season total beats an empty panel.
-            return JSONResponse(
-                content={**stale, "stale": True},
-                headers={"Cache-Control": "public, max-age=300"},
-            )
         raise HTTPException(status_code=502,
                             detail="live ACE unavailable") from e
-    with _ACE_LIVE_LOCK:
-        _ACE_LIVE_CACHE["payload"] = payload
-        _ACE_LIVE_CACHE["ts"] = now_t
+    cached, _ = _ace_live_cached()
+    if cached is None:
+        raise HTTPException(status_code=502, detail="live ACE unavailable")
     return JSONResponse(
-        content=payload,
+        content=cached,
         headers={"Cache-Control": "public, max-age=900"},
     )
 

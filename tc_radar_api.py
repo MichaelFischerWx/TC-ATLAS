@@ -1561,6 +1561,17 @@ def warmup():
         result["genesis_priming"] = False
         result["genesis_error"] = str(e)
 
+    # 5. Keep the live season-ACE payload (Seasonal tab, Panel A) fresh so
+    #    no visitor waits on its ~5 s b-deck walk. Refreshed a little before
+    #    its TTL so the scheduler, not a user, absorbs the recompute; also
+    #    writes the shared GCS copy that brand-new instances adopt.
+    try:
+        from ir_monitor_api import refresh_ace_live_cache, _ACE_LIVE_TTL
+        result["ace_live"] = refresh_ace_live_cache(
+            max_age_s=_ACE_LIVE_TTL * 0.5, wait=False)
+    except Exception as e:
+        result["ace_live_error"] = str(e)
+
     return result
 
 

@@ -1640,7 +1640,15 @@
                      1100 px. -->
                 <div class="seasonal-ace-layout">
                     <div class="seasonal-ace-chart">
-                        <div id="seasonal-ace-plot" class="seasonal-ts-plot"></div>
+                        <div id="seasonal-ace-plot" class="seasonal-ts-plot">
+                            <!-- Static, so it shows from the moment the tab
+                                 opens (before Plotly and the module load);
+                                 _renderAcePace removes it. -->
+                            <div class="seasonal-ace-loading" role="status">
+                                <div class="tc-spinner tc-spinner--lg" aria-hidden="true"></div>
+                                <span>Loading season ACE&hellip;</span>
+                            </div>
+                        </div>
                         <p class="seasonal-panel-desc" id="seasonal-ace-note"></p>
                     </div>
                     <div class="seasonal-ace-storms" id="seasonal-ace-storms"></div>
@@ -3011,7 +3019,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261116sh1';
+        var _LAZY_ASSET_V = '?v=20261117ap1';
         var _lazyViewMods = {
             recon:       { js: ['plotly_dark.js', 'tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

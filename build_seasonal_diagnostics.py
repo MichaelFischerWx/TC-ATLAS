@@ -62,7 +62,38 @@ WORK_DIR = Path(os.environ.get("SEASONAL_WORK_DIR", "/tmp/seasonal_work"))
 # via a "Zoom" selector without needing per-basin PNGs.
 PNG_LAT_MIN, PNG_LAT_MAX = LAT_MIN, LAT_MAX
 PNG_LON_MIN, PNG_LON_MAX = LON_MIN, LON_MAX
-PNG_VMIN, PNG_VMAX = -3.0, 3.0            # °C, symmetric
+PNG_VMIN, PNG_VMAX = -5.0, 5.0            # °C, symmetric
+
+# SST anomaly colormap. Inside ±PNG_BODY it is plain RdBu_r stretched over
+# ±3 °C — the scale the panel always used, so ordinary anomalies look the
+# same as before. A strong El Niño or a coastal Peru warm pool runs +4-6 °C
+# relative, which a ±3 scale flattened into one slab of dark red; beyond
+# ±3 the bar keeps going in new hues (magenta to pink warm, indigo to
+# lavender cold) so the extremes read as extremes. The stops are also
+# published in latest.json (anom_scale) so the page's legend is drawn from
+# the same numbers as the PNG it sits under.
+PNG_BODY = 3.0
+PNG_EXT_COLD = [(-5.0, "#c994ff"), (-4.0, "#5b2a9e")]
+PNG_EXT_WARM = [(4.0, "#b0006e"), (5.0, "#ff7ad9")]
+
+
+def _anom_cmap_stops() -> list:
+    """[(value °C, '#rrggbb'), ...] from PNG_VMIN to PNG_VMAX."""
+    import matplotlib
+    from matplotlib.colors import to_hex
+    rdbu = matplotlib.colormaps["RdBu_r"]
+    body = [(float(t), to_hex(rdbu((t + PNG_BODY) / (2 * PNG_BODY))))
+            for t in np.linspace(-PNG_BODY, PNG_BODY, 13)]
+    return PNG_EXT_COLD + body + PNG_EXT_WARM
+
+
+def _anom_cmap():
+    from matplotlib.colors import LinearSegmentedColormap
+    span = PNG_VMAX - PNG_VMIN
+    return LinearSegmentedColormap.from_list(
+        "sst_anom_ext",
+        [((v - PNG_VMIN) / span, c) for v, c in _anom_cmap_stops()],
+        N=1024)
 
 
 # --------------------------------------------------------------------------
@@ -288,7 +319,7 @@ def render_anomaly_png(anom: xr.DataArray, valid_time: str) -> Path:
     ax.imshow(
         sub.values, origin="lower",
         extent=[PNG_LON_MIN, PNG_LON_MAX, PNG_LAT_MIN, PNG_LAT_MAX],
-        cmap="RdBu_r", vmin=PNG_VMIN, vmax=PNG_VMAX,
+        cmap=_anom_cmap(), vmin=PNG_VMIN, vmax=PNG_VMAX,
         interpolation="bilinear",
     )
     ax.set_axis_off()
@@ -866,6 +897,11 @@ def write_latest_json(row: dict, png_name: str) -> None:
         "anom_grid": png_name.replace(".png", ".grid.json"),
         "anom_png_relative": rel_png,
         "anom_grid_relative": rel_png.replace(".png", ".grid.json"),
+        # Color scale the PNGs were drawn with; the legend reads this.
+        "anom_scale": {
+            "vmin": PNG_VMIN, "vmax": PNG_VMAX,
+            "stops": [[v, c] for v, c in _anom_cmap_stops()],
+        },
         "indices": {k: v for k, v in row.items() if k not in ("date", "dayofyear")},
         "generated_utc": datetime.now(timezone.utc).isoformat(),
     }
