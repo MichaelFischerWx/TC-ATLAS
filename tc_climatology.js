@@ -210,7 +210,7 @@ function _ensureIntensityChangeData() {
     return _intensityChangePromise;
 }
 
-// ── Lazy-load IBTrACS tracks (~44 MB) — only the ACE modal needs them ──
+// ── Lazy-load IBTrACS tracks (~1.6 MB packed) — only the ACE modal needs them ──
 // Returns a promise that resolves once allTracks is populated.
 function _ensureTracksLoaded() {
     if (Object.keys(allTracks).length > 0) return Promise.resolve(allTracks);
@@ -223,7 +223,9 @@ function _ensureTracksLoaded() {
         .then(function (m) {
             var chunks = m.chunks || [];
             return Promise.all(chunks.map(function (f) {
-                return fetch(f + '?' + DATA_VER).then(function (r) { return r.json(); });
+                return window.TCTracks
+                    ? TCTracks.fetchChunk(f, DATA_VER)      // packed copy, same objects
+                    : fetch(f + '?' + DATA_VER).then(function (r) { return r.json(); });
             }));
         })
         .then(function (chunkArr) {

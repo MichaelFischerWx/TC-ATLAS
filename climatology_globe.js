@@ -134,7 +134,10 @@ function loadTracks() {
         .then(r => { if (!r.ok) throw new Error('manifest unavailable'); return r.json(); })
         .then(m => {
             const chunks = m.chunks || [];
-            return Promise.all(chunks.map(f => fetch(f + '?' + DATA_VER).then(r => r.json())));
+            // Packed copy of each chunk (tc_tracks.js), same per-fix objects.
+            return Promise.all(chunks.map(f => window.TCTracks
+                ? window.TCTracks.fetchChunk(f, DATA_VER)
+                : fetch(f + '?' + DATA_VER).then(r => r.json())));
         })
         .then(chunkArr => {
             chunkArr.forEach(c => Object.assign(_tracks, c));
