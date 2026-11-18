@@ -52,6 +52,7 @@ CHANNELS = {"ir": ("IR_108", "brightness_temperature"),
 CACHE_DIR = os.environ.get("MET9_CACHE_DIR", "/tmp/met9_cache")
 TOL_MIN = 20
 EDGE_TRIM_PX = 8       # part-space rim of the scanned disk (see decode)
+CACHED = "cached"      # download_nat: the cache already holds the wanted scan
 
 
 def log(msg):
@@ -82,9 +83,21 @@ def _credentials():
     return None
 
 
-def download_nat(dt, work):
+def _cached_product(cache_dir):
+    """Product id of the scan already in the cache, or None."""
+    if not cache_dir:
+        return None
+    try:
+        with np.load(os.path.join(cache_dir, "nav.npz")) as nav:
+            return str(nav["product"])
+    except Exception:
+        return None
+
+
+def download_nat(dt, work, cache_dir=CACHE_DIR):
     """Latest IODC scan whose start is nearest the frame time (within TOL_MIN).
-    Returns (nat_path, scan_start, product_id) or None."""
+    Returns (nat_path, scan_start, product_id), CACHED when the cache already
+    holds that scan, or None."""
     import eumdac
     cred = _credentials()
     if not cred:
@@ -111,6 +124,12 @@ def download_nat(dt, work):
     scan = best.sensing_start.replace(tzinfo=None)
     log(f"search {time.time()-t0:.1f}s → {best} (scan {scan:%H:%M}Z, "
         f"{best_gap:.0f} min from frame)")
+    # IODC scans every 15 min, frames every 10: about one run in three wants the
+    # scan the previous run already cached (on the Mac, where /tmp persists).
+    # Skip that 271 MB re-download.
+    if _cached_product(cache_dir) == str(best):
+        log("cache already holds this scan — no download")
+        return CACHED
     t0 = time.time()
     dest = os.path.join(work, os.path.basename(nat))
     with best.open(entry=nat) as src, open(dest, "wb") as dst:
@@ -223,9 +242,13 @@ def main():
         shutil.rmtree(work, ignore_errors=True)
         os.makedirs(work)
         try:
-            got = download_nat(dt, work)
+            # --build-kernel always downloads: it needs a fresh decode's nav.
+            got = download_nat(dt, work, None if a.build_kernel else a.cache_dir)
             if not got:
                 return 1
+            if got == CACHED:
+                log(f"done {time.time()-t0:.1f}s (cached)")
+                return 0
             nat, scan, product = got
             bands, nav = decode(nat)
         finally:

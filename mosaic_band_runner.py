@@ -29,6 +29,7 @@ Usage: identical CLI to build_ir_mosaic.py; --bands is split and run serially:
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -120,12 +121,26 @@ def main():
     # bands simply blend without Meteosat-9 (read_met9_full_disk finds no cache).
     if os.environ.get("MOSAIC_MET9", "0") not in ("0", "false", "off", ""):
         fetch = os.path.join(os.path.dirname(BUILDER), "met9_fetch.py")
+        # Own short cap, NOT the band limit: on 2026-11-18 the EUMETSAT Data
+        # Store answered every download with a 504 after 3 min and eumdac
+        # retried 4x, so an uncapped fetch ate 12 of the job's 15 min (every
+        # backstop execution timed out) and a 420 s one pushed the Mac's frames
+        # past the backstop check. Normal fetch: p50 ~70 s, p90 ~120-160 s.
+        # 180 s + the bands still lands a Mac frame inside its +7 min window.
+        met9_timeout = float(os.environ.get("MOSAIC_MET9_TIMEOUT_S", "180"))
+        if band_timeout:
+            met9_timeout = min(met9_timeout, band_timeout)
         log("── met9 fetch")
         try:
             rc = subprocess.run([sys.executable, fetch, "--dt", ts],
-                                timeout=band_timeout).returncode
+                                timeout=met9_timeout).returncode
         except subprocess.TimeoutExpired:
-            rc = "timeout"
+            rc = f"timeout {met9_timeout:.0f} s"
+            # The killed child never reached its cleanup; on Cloud Run /tmp is
+            # RAM, so a partial .nat would sit beside the band children.
+            cache = os.environ.get("MET9_CACHE_DIR", "/tmp/met9_cache")
+            shutil.rmtree(cache + ".nat", ignore_errors=True)
+            shutil.rmtree(cache + ".tmp", ignore_errors=True)
         if rc != 0:
             log(f"met9 fetch failed (rc {rc}) — building without Meteosat-9")
     for band in bands:
