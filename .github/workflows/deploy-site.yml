@@ -1,0 +1,95 @@
+name: Deploy site
+
+# Publishes tcatlas.org. On every push to main that touches the site, this
+# builds the published copy (tools/site-build/build.mjs: first-party JS and
+# CSS with comments and whitespace stripped, everything else as committed)
+# and deploys it to GitHub Pages.
+#
+# Needs: repo Settings > Pages > Build and deployment > Source = "GitHub
+# Actions". While Source is still "Deploy from a branch" the deploy step
+# fails and the site keeps publishing the old way, straight from main.
+#
+# Cost: one job, about a minute. GitHub rounds each job up to a whole minute,
+# which is why build and deploy share a job instead of taking one each. The
+# last step writes a month-to-date usage table to the run's summary page.
+
+on:
+  push:
+    branches: [main]
+    # Backend and tooling only: nothing the site serves. KEEP IN STEP with
+    # NOT_SITE_* in tools/site-build/build.mjs. (.github/ and tools/ are
+    # absent on purpose: a change to the build itself must redeploy.)
+    paths-ignore:
+      - '**.py'
+      - '**.sh'
+      - '**.md'
+      - '**.plist'
+      - '**.docx'
+      - '**.npz'
+      - '**/Dockerfile*'
+      - 'Dockerfile*'
+      - 'requirements.txt'
+      - 'deploy.env.example'
+      - 'ir_cache_lifecycle.json'
+      - '.gitignore'
+      - '.dockerignore'
+      - '.gcloudignore*'
+      - 'tests/**'
+      - 'bin/**'
+      - 'pipeline/**'
+      - 'scripts/**'
+      - 'cloudflare/**'
+      - 'r2/**'
+      - 'monitoring/**'
+      - 'docs/**'
+      - 'og_assets/**'
+  # Manual run: Actions tab > Deploy site > Run workflow.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write        # deploy to Pages
+  id-token: write     # Pages verifies the deployment came from this workflow
+  actions: read       # usage log reads this workflow's run history
+
+# One deploy at a time. A deploy in progress finishes; of the pushes that
+# arrive meanwhile only the newest is deployed, the rest are skipped unrun
+# (and unbilled).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # A stuck job stops here instead of running for the 6-hour default.
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v6
+
+      - name: Install build tools
+        run: npm ci --prefix tools/site-build --no-audit --no-fund
+
+      - name: Build site
+        run: node tools/site-build/build.mjs --out _site
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+
+      - name: Deploy usage log
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO_PRIVATE: ${{ github.event.repository.private }}
+        run: node tools/site-build/usage_log.mjs

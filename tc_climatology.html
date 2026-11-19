@@ -62,7 +62,7 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundle, discoverable from byte 0. Token MUST match
          the script tag below. -->
-    <link rel="preload" as="script" href="tc_climatology.js?v=20261101i1">
+    <link rel="preload" as="script" href="tc_climatology.js?v=20261117tk1">
 
     <!-- Shared chrome (topbar, fonts, basin chips, modals); page-specific
          layout in tc_climatology_styles.css. global_archive_styles.css is
@@ -227,8 +227,8 @@
                 <a class="tc-clim-tile" href="climatology_globe.html#f=tp&amp;m=8"
                    onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'monsoon_jas'})">
                     <div class="tc-clim-tile-thumb">
-                        <img src="assets/gallery/monsoon-jja.gif" alt=""
-                             loading="lazy" onerror="this.style.display='none'">
+                        <img src="assets/gallery/monsoon-jja.webp" alt="" width="880" height="515"
+                             loading="lazy" decoding="async" onerror="this.style.display='none'">
                     </div>
                     <div class="tc-clim-tile-body">
                         <div class="tc-clim-tile-title">JAS monsoon precipitation</div>
@@ -240,8 +240,8 @@
                 <a class="tc-clim-tile" href="climatology_globe.html#f=sst&amp;d=anomaly&amp;cr=c:roni:ge:1.0:9&amp;m=9"
                    onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'enso_composite'})">
                     <div class="tc-clim-tile-thumb">
-                        <img src="assets/gallery/enso_example.png" alt=""
-                             loading="lazy" onerror="this.style.display='none'">
+                        <img src="assets/gallery/enso_example.webp" alt="" width="880" height="518"
+                             loading="lazy" decoding="async" onerror="this.style.display='none'">
                     </div>
                     <div class="tc-clim-tile-body">
                         <div class="tc-clim-tile-title">El Niño SST anomaly · Sep</div>
@@ -253,8 +253,8 @@
                 <a class="tc-clim-tile" href="climatology_globe.html#f=chi&amp;L=200&amp;m=1"
                    onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'walker_chi'})">
                     <div class="tc-clim-tile-thumb">
-                        <img src="assets/gallery/walker-chi.gif" alt=""
-                             loading="lazy" onerror="this.style.display='none'">
+                        <img src="assets/gallery/walker-chi.webp" alt="" width="880" height="515"
+                             loading="lazy" decoding="async" onerror="this.style.display='none'">
                     </div>
                     <div class="tc-clim-tile-body">
                         <div class="tc-clim-tile-title">Walker circulation · χ at 200 hPa</div>
@@ -266,8 +266,8 @@
                 <a class="tc-clim-tile" href="climatology_globe.html#f=mpi&amp;m=9"
                    onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'mpi_sep'})">
                     <div class="tc-clim-tile-thumb">
-                        <img src="assets/gallery/mpi_sep.png" alt=""
-                             loading="lazy" onerror="this.style.display='none'">
+                        <img src="assets/gallery/mpi_sep.webp" alt="" width="880" height="518"
+                             loading="lazy" decoding="async" onerror="this.style.display='none'">
                     </div>
                     <div class="tc-clim-tile-body">
                         <div class="tc-clim-tile-title">Maximum potential intensity · Sep</div>
@@ -279,8 +279,8 @@
                 <a class="tc-clim-tile" href="climatology_globe.html#f=sst&amp;m=6"
                    onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'sst_ace_corr'})">
                     <div class="tc-clim-tile-thumb">
-                        <img src="assets/gallery/june_sst_ace_corr.png" alt=""
-                             loading="lazy" onerror="this.style.display='none'">
+                        <img src="assets/gallery/june_sst_ace_corr.webp" alt="" width="880" height="518"
+                             loading="lazy" decoding="async" onerror="this.style.display='none'">
                     </div>
                     <div class="tc-clim-tile-body">
                         <div class="tc-clim-tile-title">SST &times; Atlantic ACE — June</div>
@@ -292,8 +292,8 @@
                 <a class="tc-clim-tile" href="climatology_globe.html#f=dls&amp;m=7"
                    onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'dls_july'})">
                     <div class="tc-clim-tile-thumb">
-                        <img src="assets/gallery/shear_july.png" alt=""
-                             loading="lazy" onerror="this.style.display='none'">
+                        <img src="assets/gallery/shear_july.webp" alt="" width="880" height="518"
+                             loading="lazy" decoding="async" onerror="this.style.display='none'">
                     </div>
                     <div class="tc-clim-tile-body">
                         <div class="tc-clim-tile-title">Deep-layer shear · July</div>
@@ -1061,6 +1061,7 @@
     <script defer src="lflet_gl.js?v=20261110gz1"></script>
     <script defer src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script defer src="subseasonal_clock.js?v=20261031mp1"></script>
-    <script defer src="tc_climatology.js?v=20261101i1"></script>
+    <script defer src="tc_tracks.js?v=20261117tk1"></script>
+    <script defer src="tc_climatology.js?v=20261117tk1"></script>
 </body>
 </html>

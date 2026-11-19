@@ -3019,11 +3019,11 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261117ap1';
+        var _LAZY_ASSET_V = '?v=20261117tk1';
         var _lazyViewMods = {
             recon:       { js: ['plotly_dark.js', 'tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
-            seasonal:    { js: ['realtime_seasonal.js'], css: ['realtime_seasonal_styles.css'] },
+            seasonal:    { js: ['tc_tracks.js', 'realtime_seasonal.js'], css: ['realtime_seasonal_styles.css'] },
             experimental:{ js: ['realtime_experimental.js'] },
             /* Same module, different model profile — see VALID_VIEWS. */
             experimental_v2:{ js: ['realtime_experimental.js'] },

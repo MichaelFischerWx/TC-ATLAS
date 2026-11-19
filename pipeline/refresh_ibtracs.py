@@ -7,6 +7,12 @@ files in the repo root that the frontend reads at boot:
     ibtracs_tracks_0.json          { sid: [{t, la, lo, w, p, n}, ...], ... }  ~22 MB
     ibtracs_tracks_1.json          (size-balanced split — older storms in 0,
                                     newer + larger tracks in 1)
+    ibtracs_tracks_p0.json         packed copies of the two chunks — the same
+    ibtracs_tracks_p1.json         values as columns, a quarter of the bytes.
+                                   These are what the pages download
+                                   (tc_tracks.js rebuilds the per-fix objects);
+                                   the per-fix chunks stay for the Python jobs
+                                   and as the pages' fallback. See pack_tracks.py.
     ibtracs_tracks.json            single-file fallback (concat of both chunks)
     ibtracs_storms.json            per-storm metadata + global summary
     intensity_changes.json         { basins: { NA: [[Δw_kt, year], ...] } }
@@ -49,6 +55,9 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import pack_tracks  # noqa: E402
 
 LOG = logging.getLogger("tc-atlas.refresh_ibtracs")
 
@@ -770,6 +779,22 @@ def write_outputs(tracks: dict, storms: list, chunk0: dict, chunk1: dict,
     atomic_write(root / "ibtracs_tracks_0.json", chunk0)
     atomic_write(root / "ibtracs_tracks_1.json", chunk1)
     atomic_write(root / "ibtracs_tracks.json", tracks)
+
+    # Packed copies of the chunks (what the pages download). pack_chunk
+    # raises rather than round, and the round trip is checked before a file
+    # is written, so a packed file never disagrees with its chunk. On a
+    # failure the stale packed file is removed: tc_tracks.js then falls back
+    # to the per-fix chunk instead of serving last refresh's tracks.
+    for name, chunk in (("ibtracs_tracks_0.json", chunk0), ("ibtracs_tracks_1.json", chunk1)):
+        packed_path = root / pack_tracks.packed_name(name)
+        try:
+            packed = pack_tracks.pack_chunk(chunk)
+            if pack_tracks.unpack_chunk(packed) != chunk:
+                raise ValueError("packed copy does not round-trip")
+            atomic_write(packed_path, packed)
+        except Exception as e:  # noqa: BLE001
+            packed_path.unlink(missing_ok=True)
+            LOG.error(f"{packed_path.name} NOT written ({e}); pages will fall back to {name}")
 
     # Storms metadata + global summary.
     basin_counts: dict[str, int] = {}

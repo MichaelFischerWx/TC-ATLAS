@@ -7109,8 +7109,9 @@ function _loadIBTrACSFull(onDone) {
             var nChunks = manifest.chunks.length;
             var loaded = 0;
             manifest.chunks.forEach(function(chunkName) {
-                fetch(chunkName + '?' + IBTRACS_DATA_VER)
-                    .then(function(r) { return r.json(); })
+                (window.TCTracks
+                        ? TCTracks.fetchChunk(chunkName, IBTRACS_DATA_VER)   // packed copy, same objects
+                        : fetch(chunkName + '?' + IBTRACS_DATA_VER).then(function(r) { return r.json(); }))
                     .then(function(chunk) {
                         var keys = Object.keys(chunk);
                         for (var i = 0; i < keys.length; i++) { _allTracks[keys[i]] = chunk[keys[i]]; }

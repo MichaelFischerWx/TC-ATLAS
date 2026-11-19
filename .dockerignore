@@ -64,3 +64,9 @@ README.md
 LICENSE
 *.md
 *.docx
+
+# ── Site build output + its tooling (GitHub Pages only, never in the API image) ──
+_site/
+node_modules/
+tools/
+.github/

@@ -2170,7 +2170,7 @@ function loadData() {
 
     // Load track data — try chunked manifest first, fall back to single file.
     // Each chunk is rendered incrementally as it arrives so the user sees
-    // partial tracks within ~2 s instead of waiting for the full ~44 MB.
+    // partial tracks instead of waiting for both chunks.
     showToast('Loading track data...');
     fetch(TRACKS_MANIFEST)
         .then(function (r) {
@@ -2197,8 +2197,11 @@ function loadData() {
             }
 
             return Promise.all(chunks.map(function (chunkFile) {
-                return fetch(chunkFile + '?' + DATA_VER)
-                    .then(function (r) { return r.json(); })
+                // Packed copy of the chunk (a quarter of the bytes), rebuilt
+                // into the same per-fix objects by tc_tracks.js.
+                return (window.TCTracks
+                        ? TCTracks.fetchChunk(chunkFile, DATA_VER)
+                        : fetch(chunkFile + '?' + DATA_VER).then(function (r) { return r.json(); }))
                     .then(function (chunk) {
                         Object.keys(chunk).forEach(function (sid) {
                             allTracks[sid] = chunk[sid];

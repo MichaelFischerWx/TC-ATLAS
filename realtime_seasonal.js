@@ -6694,8 +6694,9 @@
         // Chunk 1 (1977-present) is enough — era5_daily archive starts 1991.
         if (_evoState.tracks) return Promise.resolve(_evoState.tracks);
         if (_evoState.tracksPromise) return _evoState.tracksPromise;
-        _evoState.tracksPromise = fetch('ibtracs_tracks_1.json?v20261101i1')
-            .then(function (r) { return r.ok ? r.json() : null; })
+        _evoState.tracksPromise = (window.TCTracks
+                ? TCTracks.fetchChunk('ibtracs_tracks_1.json', 'v20261101i1')   // packed copy, same objects
+                : fetch('ibtracs_tracks_1.json?v20261101i1').then(function (r) { return r.ok ? r.json() : null; }))
             .then(function (j) {
                 _evoState.tracks = j || {};
                 return _evoState.tracks;

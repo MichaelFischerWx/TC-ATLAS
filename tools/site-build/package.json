@@ -1,0 +1,13 @@
+{
+  "name": "tc-atlas-site-build",
+  "private": true,
+  "description": "Build step for the published copy of tcatlas.org (see build.mjs).",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
