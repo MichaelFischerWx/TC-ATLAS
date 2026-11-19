@@ -251,13 +251,12 @@
     <section id="download">
         <div class="content-section">
             <h2 class="section-title">Download <span class="accent">TC-RADAR</span></h2>
-            <p class="section-desc">The explorer shows <strong>TC-RADAR v4.0</strong> (1997&ndash;2025). Until the v4.0 files are posted at AOML, the previous release, v3m (1997&ndash;2024), is available as four netCDF files grouped by data type and time period, each about 10 GB.</p>
+            <p class="section-desc"><strong>TC-RADAR v4.0</strong> (1997&ndash;2025) comes as two netCDF-4 files, one per analysis type. The <a href="tc_radar_readme.html" style="color:var(--blue-light);">documentation page</a> has checksums, command-line downloads, Python and MATLAB examples, and every variable.</p>
             <div class="data-files">
-                <div class="file-card"><h3>Swath Data</h3><p class="file-period">1997&ndash;2019</p><div class="file-size">~10 GB</div><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/tc_radar_v3m_1997_2019_xy_rel_swath_ships.nc" class="download-btn" target="_blank">Download</a></div>
-                <div class="file-card"><h3>Swath Data</h3><p class="file-period">2020&ndash;2024</p><div class="file-size">~10 GB</div><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/tc_radar_v3m_2020_2024_xy_rel_swath_ships.nc" class="download-btn" target="_blank">Download</a></div>
-                <div class="file-card"><h3>Merged Data</h3><p class="file-period">1997&ndash;2019</p><div class="file-size">~10 GB</div><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/tc_radar_v3m_1997_2019_xy_rel_merge_ships.nc" class="download-btn" target="_blank">Download</a></div>
-                <div class="file-card"><h3>Merged Data</h3><p class="file-period">2020&ndash;2024</p><div class="file-size">~10 GB</div><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/tc_radar_v3m_2020_2024_xy_rel_merge_ships.nc" class="download-btn" target="_blank">Download</a></div>
+                <div class="file-card"><h3>Merged Data</h3><p class="file-period">474 flights, 1997&ndash;2025</p><div class="file-size">7.1 GB</div><a href="https://cdn.tcatlas.org/tc-radar/v4.0/tc_radar_v4.0_xy_rel_merge.nc" class="download-btn" download>Download</a></div>
+                <div class="file-card"><h3>Swath Data</h3><p class="file-period">1,640 center passes, 1997&ndash;2025</p><div class="file-size">10.6 GB</div><a href="https://cdn.tcatlas.org/tc-radar/v4.0/tc_radar_v4.0_xy_rel_swath.nc" class="download-btn" download>Download</a></div>
             </div>
+            <p style="margin-top:1rem;text-align:center;font-size:0.875rem;color:var(--slate);">The previous release, v3m (1997&ndash;2024), remains at <a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/" target="_blank" rel="noopener" style="color:var(--blue-light);">NOAA AOML</a>.</p>
             <div class="usage-policy">
                 <h3>Usage Policy</h3>
                 <p>Users are free to download TC-RADAR. However, we request that you notify <strong>Dr. Michael Fischer</strong> (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu</a>) and NOAA's Hurricane Research Division radar team lead, <strong>Dr. Paul Reasor</strong> (<a href="mailto:paul.reasor@noaa.gov">paul.reasor@noaa.gov</a>), of the nature of your research project to ensure proper usage. Users should carefully examine data and apply additional QC consistent with their objectives.</p>
@@ -268,7 +267,7 @@
                 <p style="margin-top:1rem;padding-top:0.75rem;border-top:1px solid var(--border);">
                 <strong style="color:var(--blue-light);">For vortex tilt analyses, also cite:</strong><br>Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2024: An Observational Analysis of the Relationship between Tropical Cyclone Vortex Tilt, Precipitation Structure, and Intensity Change. Mon. Wea. Rev., 152, 203-225, https://doi.org/10.1175/MWR-D-23-0089.1.</p>
             </div>
-            <p style="margin-top:1.5rem;text-align:center;"><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/TC_RADAR_README.pdf" target="_blank" style="color:var(--blue-light);font-size:0.9rem;">Full TC-RADAR Documentation (README PDF)</a></p>
+            <p style="margin-top:1.5rem;text-align:center;"><a href="tc_radar_readme.html" style="color:var(--blue-light);font-size:0.9rem;">Full TC-RADAR v4.0 documentation</a></p>
         </div>
     </section>
 
@@ -313,7 +312,7 @@
 
     <footer>
         <div>Created by Michael S. Fischer &middot; University of Miami</div>
-        <div style="margin-top:6px;"><a href="index.html">TC-ATLAS Home</a> &middot; <a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/TC_RADAR_README.pdf" target="_blank">TC-RADAR Documentation</a></div>
+        <div style="margin-top:6px;"><a href="index.html">TC-ATLAS Home</a> &middot; <a href="tc_radar_readme.html">TC-RADAR Documentation</a></div>
         <div style="margin-top:10px;font-size:0.7rem;color:#64748b;max-width:650px;margin-left:auto;margin-right:auto;line-height:1.4;">
             TC-ATLAS is a research visualization platform provided for research and educational purposes only. Not intended for operational forecasting. Data provided as-is without warranty.
         </div>

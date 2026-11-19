@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Google Analytics (GA4) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-EFM8GFFKLK"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-EFM8GFFKLK');
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="TC-RADAR v4.0 documentation: airborne tail Doppler radar analyses of tropical cyclones (1997–2025). Download the files, read them in Python or MATLAB, and browse every variable.">
+    <meta name="author" content="Dr. Michael Fischer, University of Miami / NOAA HRD">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="TC-RADAR v4.0 documentation — TC-ATLAS">
+    <meta property="og:description" content="Download TC-RADAR v4.0, read it in Python or MATLAB, and browse every variable in the swath and merged files.">
+    <meta property="og:url" content="https://tcatlas.org/tc_radar_readme.html">
+    <meta property="og:image" content="https://tcatlas.org/images/og-preview.png">
+    <meta property="og:site_name" content="TC-ATLAS">
+    <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png?v=20261009p1a">
+    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png?v=20261009p1a">
+    <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png?v=20261009p1a">
+    <link rel="apple-touch-icon" sizes="180x180" href="tc-atlas-apple-touch-180.png?v=20261009p1a">
+    <link rel="manifest" href="manifest.json">
+    <link rel="canonical" href="https://tcatlas.org/tc_radar_readme.html">
+    <meta name="theme-color" content="#005030" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0a0e14" media="(prefers-color-scheme: dark)">
+    <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
+    <title>TC-RADAR v4.0 documentation — TC-ATLAS</title>
+    <script src="theme.js?v=20261104cr1"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20261104sd1">
+    <link rel="stylesheet" href="site_pages.css?v=20261031p6">
+    <link rel="stylesheet" href="tc_radar_readme.css?v=20261119rd1">
+</head>
+<body>
+    <a href="#main" class="skip-link">Skip to main content</a>
+    <header class="topbar" role="banner">
+        <div class="topbar-inner">
+            <div class="topbar-brand">
+                <a class="topbar-home" href="index.html" aria-label="TC-ATLAS home">
+                    <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="" class="topbar-icon" width="28" height="28">
+                    <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                </a>
+                <div class="topbar-divider"></div>
+                <div class="topbar-subtitle">TC-RADAR Docs</div>
+            </div>
+            <nav aria-label="Main navigation">
+                <ul class="topbar-nav">
+                    <li><a href="realtime_ir.html"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">Monitor</span></a></li>
+                    <li><a href="global_archive.html"><span class="nav-full">Global Archive</span><span class="nav-short">Archive</span></a></li>
+                    <li><a href="explorer.html" class="nav-active">TC-RADAR</a></li>
+                    <li><a href="tc_climatology.html"><span class="nav-full">TC Climatology</span><span class="nav-short">Climatology</span></a></li>
+                    <li><a href="about.html">About</a></li>
+                </ul>
+            </nav>
+            <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+            <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
+        </div>
+    </header>
+
+    <div class="rd-hero">
+        <div class="rd-hero-inner">
+            <div class="rd-kicker">Dataset documentation</div>
+            <h1>TC-RADAR <span class="rd-ver">v4.0</span></h1>
+            <p class="rd-hero-sub">Tropical Cyclone Radar Archive of Doppler Analyses with Recentering: NOAA P-3 tail Doppler radar analyses of tropical cyclones on storm-centered grids, with best-track and environmental metadata.</p>
+            <div class="rd-authors">Michael Fischer (University of Miami, CIMAS) &middot; Paul Reasor, Robert Rogers, and John Gamache (NOAA/AOML Hurricane Research Division)<br>First released 3 April 2020 &middot; this version November 2026</div>
+            <div class="rd-stats" role="list">
+                <div class="rd-stat" role="listitem"><div class="rd-stat-num">1,640</div><div class="rd-stat-label">swath analyses</div></div>
+                <div class="rd-stat" role="listitem"><div class="rd-stat-num">474</div><div class="rd-stat-label">merged analyses (one per flight)</div></div>
+                <div class="rd-stat" role="listitem"><div class="rd-stat-num">1997&ndash;2025</div><div class="rd-stat-label">Atlantic, eastern and central Pacific</div></div>
+                <div class="rd-stat" role="listitem"><div class="rd-stat-num">2 &times; 0.5 km</div><div class="rd-stat-label">horizontal &times; vertical grid spacing</div></div>
+            </div>
+            <div class="rd-hero-actions">
+                <a class="rd-btn rd-btn-primary" href="#download"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>Download</a>
+                <a class="rd-btn" href="explorer.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Browse cases in the explorer</a>
+                <a class="rd-btn" href="#cite">How to cite</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="rd-toc">
+        <nav class="about-toc" aria-label="On this page">
+            <a href="#overview">Overview</a>
+            <a href="#download">Download</a>
+            <a href="#quickstart">Quick start</a>
+            <a href="#frames">Grids and centers</a>
+            <a href="#variables">Variables</a>
+            <a href="#environment">Environment</a>
+            <a href="#methods">Methods</a>
+            <a href="#issues">Known issues</a>
+            <a href="#versions">Versions</a>
+            <a href="#cite">Cite</a>
+        </nav>
+    </div>
+
+    <main id="main" class="rd-page">
+
+    <section id="overview">
+        <div class="content-section">
+            <h2 class="section-title">Overview</h2>
+            <p class="rd-lede">NOAA's WP-3D (P-3) hurricane hunters carry an X-band tail Doppler radar (TDR) that scans fore and aft of the aircraft, so a variational analysis can retrieve the three-dimensional wind field (Gamache et al. 1995). Each pass through the storm center yields one <strong>swath</strong> analysis. Observations reach roughly 50 km from the aircraft, so a single swath covers only the region near the flight track. A flight usually makes three or four center passes along different headings; averaging every swath from one flight gives a <strong>merged</strong> analysis with far fuller azimuthal coverage.</p>
+            <p class="rd-lede">TC-RADAR gathers the post-processed swath and merged analyses into two files on common storm-centered grids, with best-track and environmental metadata attached to every analysis, so storms can be compared directly and composited. Analyses span the whole life cycle, from pre-genesis disturbances to mature hurricanes and storms nearing extratropical transition.</p>
+            <div class="rd-grid2">
+                <div class="rd-card">
+                    <h3>Swath analyses</h3>
+                    <p>One analysis per center pass, about an hour of observations.</p>
+                    <ul><li>Convective-scale features, which merging smooths out</li><li>Pass-to-pass evolution within a flight</li><li>Begin and end times and per-level coverage for each pass</li></ul>
+                </div>
+                <div class="rd-card">
+                    <h3>Merged analyses</h3>
+                    <p>All swaths from one flight averaged about their 2-km centers.</p>
+                    <ul><li>Vortex-scale structure: azimuthal means, wavenumber asymmetries, tilt</li><li>Core-averaged wind and shear profiles (merged file only)</li><li>Number of swaths that went into each analysis</li></ul>
+                </div>
+            </div>
+
+            <div class="rd-card rd-chart-card">
+                <div class="rd-chart-head">
+                    <div class="rd-chart-title" id="rd-chart-title">Swath analyses per year</div>
+                    <div class="rd-seg" role="group" aria-label="Analysis type">
+                        <button type="button" data-kind="swath" aria-pressed="true">Swath</button>
+                        <button type="button" data-kind="merged" aria-pressed="false">Merged</button>
+                    </div>
+                </div>
+                <div class="rd-chart" id="rd-year-chart" role="img" aria-labelledby="rd-chart-title"></div>
+                <div class="rd-chart-foot">
+                    <span id="rd-chart-summary"></span>
+                    <button type="button" class="rd-linkbtn" id="rd-table-toggle" aria-expanded="false" aria-controls="rd-year-table">Show as table</button>
+                </div>
+                <div class="rd-table-wrap" id="rd-year-table" hidden></div>
+            </div>
+        </div>
+    </section>
+
+    <section id="download" class="section-bg">
+        <div class="content-section">
+            <h2 class="section-title">Download</h2>
+            <p class="rd-lede">Two netCDF-4 files, one per analysis type, each holding every case from 1997 to 2025. Downloads can be resumed, so an interrupted transfer picks up where it stopped.</p>
+            <div class="rd-files">
+                <div class="rd-file">
+                    <div class="rd-file-head"><h3>Merged analyses</h3><div class="rd-file-size">7.1 GB</div></div>
+                    <div class="rd-file-meta">474 flights &middot; recommended starting point</div>
+                    <div class="rd-file-name">tc_radar_v4.0_xy_rel_merge.nc</div>
+                    <div class="rd-sha" title="SHA-256 checksum"><span>SHA-256 f93ea152b77f1c071a49ccc7f4f0215aeebc2a390b0198d9751b0fe42a00619a</span><button type="button" class="rd-copy" data-copy="f93ea152b77f1c071a49ccc7f4f0215aeebc2a390b0198d9751b0fe42a00619a">Copy</button></div>
+                    <div class="rd-file-actions"><a class="rd-btn rd-btn-primary" href="https://cdn.tcatlas.org/tc-radar/v4.0/tc_radar_v4.0_xy_rel_merge.nc" download><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>Download merged</a></div>
+                </div>
+                <div class="rd-file">
+                    <div class="rd-file-head"><h3>Swath analyses</h3><div class="rd-file-size">10.6 GB</div></div>
+                    <div class="rd-file-meta">1,640 center passes</div>
+                    <div class="rd-file-name">tc_radar_v4.0_xy_rel_swath.nc</div>
+                    <div class="rd-sha" title="SHA-256 checksum"><span>SHA-256 5b0378fd40aaa3f430ded4bcb63f227aa8176564daa7da6425dbd00f93ca2b59</span><button type="button" class="rd-copy" data-copy="5b0378fd40aaa3f430ded4bcb63f227aa8176564daa7da6425dbd00f93ca2b59">Copy</button></div>
+                    <div class="rd-file-actions"><a class="rd-btn rd-btn-primary" href="https://cdn.tcatlas.org/tc-radar/v4.0/tc_radar_v4.0_xy_rel_swath.nc" download><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>Download swath</a></div>
+                </div>
+            </div>
+
+            <h3 class="rd-h3">From the command line</h3>
+            <div class="rd-code rd-solo"><button type="button" class="rd-copy" data-copy-from="rd-cli">Copy</button><pre id="rd-cli"><span class="c"># -c resumes an interrupted download</span>
+wget -c https://cdn.tcatlas.org/tc-radar/v4.0/tc_radar_v4.0_xy_rel_merge.nc
+wget -c https://cdn.tcatlas.org/tc-radar/v4.0/tc_radar_v4.0_xy_rel_swath.nc
+
+<span class="c"># check both files against the published checksums</span>
+curl -O https://cdn.tcatlas.org/tc-radar/v4.0/SHA256SUMS.txt
+shasum -a 256 -c SHA256SUMS.txt      <span class="c"># Linux: sha256sum -c SHA256SUMS.txt</span></pre></div>
+            <p class="rd-small rd-muted" style="margin-top:8px;">Downloading from a script? Use <code>wget</code>, <code>curl</code>, or Python's <code>requests</code>. The site's bot protection rejects Python's built-in <code>urllib</code> unless you set a <code>User-Agent</code> header.</p>
+
+            <div class="usage-policy">
+                <h3>Usage policy</h3>
+                <p>Users are free to download TC-RADAR. We ask that you tell <strong>Dr. Michael Fischer</strong> (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu</a>) and NOAA's Hurricane Research Division radar team lead, <strong>Dr. Paul Reasor</strong> (<a href="mailto:paul.reasor@noaa.gov">paul.reasor@noaa.gov</a>), about your research project so the data are used appropriately. Examine the analyses carefully and apply any additional quality control your work needs; see <a href="#issues">Known issues</a>.</p>
+            </div>
+            <p class="rd-prev">The previous release, v3m (1997&ndash;2024), remains at <a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/" target="_blank" rel="noopener">NOAA AOML</a> with its <a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/TC_RADAR_README.pdf" target="_blank" rel="noopener">PDF README</a>.</p>
+        </div>
+    </section>
+
+    <section id="quickstart">
+        <div class="content-section">
+            <h2 class="section-title">Quick start</h2>
+            <p class="rd-lede">Each analysis is stored as its own compressed chunk, so reading one case reads only that case from disk (about 0.4 MB per three-dimensional field), not the whole file.</p>
+            <div class="rd-tabs" role="tablist" aria-label="Language">
+                <button type="button" role="tab" id="tab-py" aria-selected="true" aria-controls="panel-py">Python</button>
+                <button type="button" role="tab" id="tab-ml" aria-selected="false" aria-controls="panel-ml" tabindex="-1">MATLAB</button>
+                <button type="button" role="tab" id="tab-cli" aria-selected="false" aria-controls="panel-cli" tabindex="-1">ncdump</button>
+            </div>
+            <div class="rd-code" role="tabpanel" id="panel-py" aria-labelledby="tab-py"><button type="button" class="rd-copy" data-copy-from="code-py">Copy</button><pre id="code-py">import numpy as np
+import xarray as xr
+
+<span class="c"># Opening is lazy: only the cases you index are read from disk.</span>
+ds = xr.open_dataset("tc_radar_v4.0_xy_rel_merge.nc")
+
+<span class="c"># Pick a flight by its mission ID (Hurricane Dorian, 1 September 2019)</span>
+case = int(np.flatnonzero(ds["mission_ID"].values == "190901H1")[0])
+vt = ds["recentered_tangential_wind"].isel(num_cases=case)   <span class="c"># m/s, (y, x, height)</span>
+
+<span class="c"># Azimuthal mean about the 2-km TC center, in 2-km radial bins</span>
+radius = np.hypot(ds["eastward_distance"], ds["northward_distance"]).rename("radius")
+edges = np.arange(0, 152, 2)
+vt_mean = vt.groupby_bins(radius, edges, labels=edges[:-1] + 1).mean()
+
+vt_mean.plot(x="radius_bins", y="height")   <span class="c"># radius-height cross section</span></pre></div>
+            <div class="rd-code" role="tabpanel" id="panel-ml" aria-labelledby="tab-ml" hidden><button type="button" class="rd-copy" data-copy-from="code-ml">Copy</button><pre id="code-ml">f = 'tc_radar_v4.0_xy_rel_merge.nc';
+
+<span class="c">% Pick a flight by its mission ID (Hurricane Dorian, 1 September 2019)</span>
+ids = string(ncread(f, 'mission_ID'));
+k = find(ids == "190901H1", 1);
+
+<span class="c">% MATLAB reverses netCDF dimension order: this is [height x east x north].</span>
+<span class="c">% ncread applies the scale factor and returns missing values as NaN.</span>
+vt = ncread(f, 'recentered_tangential_wind', [1 1 1 k], [Inf Inf Inf 1]);
+z  = ncread(f, 'height');
+x  = ncread(f, 'eastward_distance');
+
+<span class="c">% East-west cross section through the 2-km center</span>
+pcolor(x, z, squeeze(vt(:, :, 101))); shading flat; colorbar
+xlabel('Eastward distance (km)'); ylabel('Height (km)')</pre></div>
+            <div class="rd-code" role="tabpanel" id="panel-cli" aria-labelledby="tab-cli" hidden><button type="button" class="rd-copy" data-copy-from="code-cli">Copy</button><pre id="code-cli"><span class="c"># every variable with its units and description</span>
+ncdump -h tc_radar_v4.0_xy_rel_merge.nc
+
+<span class="c"># the mission ID of every merged analysis</span>
+ncdump -v mission_ID tc_radar_v4.0_xy_rel_merge.nc</pre></div>
+            <ul class="rd-notes">
+                <li>Gridded fields are stored as 16-bit integers with a <code>scale_factor</code>. xarray, netCDF4-python, and MATLAB's <code>ncread</code> unpack them and return missing values as NaN.</li>
+                <li>Find analyses by <code>mission_ID</code> and <code>time</code>, not by index. Case indices change between versions as analyses are added.</li>
+                <li>Identify storms by <code>tcid_ships</code> (the best-track ID). Some <code>storm_name</code> values are placeholders from the original analysis files, such as <code>TDR</code>, <code>CYCLONE</code>, or <code>INVEST</code>.</li>
+            </ul>
+        </div>
+    </section>
+
+    <section id="frames" class="section-bg">
+        <div class="content-section">
+            <h2 class="section-title">Grids and centers</h2>
+            <p class="rd-lede">Every radar field comes on three grids that differ only in which center they follow. All three are storm-motion-relative unless the name says <code>earth_relative</code>. Choose a grid to see how it lines up with a tilted vortex.</p>
+            <div class="rd-frames">
+                <div>
+                    <div class="rd-frame-pick" role="group" aria-label="Grid">
+                        <button type="button" class="rd-frame-btn" data-frame="original" aria-pressed="false"><b>Original analysis grid</b><code>swath_*</code> &middot; <code>merged_*</code></button>
+                        <button type="button" class="rd-frame-btn" data-frame="recentered" aria-pressed="true"><b>Low-level recentered</b><code>recentered_*</code></button>
+                        <button type="button" class="rd-frame-btn" data-frame="tilt" aria-pressed="false"><b>Tilt-relative</b><code>total_recentered_*</code></button>
+                    </div>
+                    <div class="rd-frame-detail" id="rd-frame-detail" aria-live="polite"></div>
+                </div>
+                <div class="rd-frame-diagram">
+                    <svg id="rd-frame-svg" viewBox="0 0 440 300" role="img" aria-labelledby="rd-frame-svg-title">
+                        <title id="rd-frame-svg-title">Side view of a tilted vortex with the analysis grid at each level</title>
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="variables">
+        <div class="content-section">
+            <h2 class="section-title">Variables</h2>
+            <p class="rd-lede">Every variable in both files, read from the released netCDF headers. Search by name or description, filter by group, and click a name to copy it.</p>
+            <div class="rd-vb-controls">
+                <input type="search" class="rd-search" id="rd-vsearch" placeholder="Search variables, for example tangential, shear, sst" aria-label="Search variables">
+                <div class="rd-seg" role="group" aria-label="File">
+                    <button type="button" data-file="all" aria-pressed="true">Both files</button>
+                    <button type="button" data-file="merged" aria-pressed="false">Merged</button>
+                    <button type="button" data-file="swath" aria-pressed="false">Swath</button>
+                </div>
+            </div>
+            <div class="rd-chips" id="rd-vchips" role="group" aria-label="Variable group"></div>
+            <div class="rd-vb-count" id="rd-vcount" aria-live="polite"></div>
+            <div class="rd-table-wrap">
+                <table class="rd-vtable">
+                    <thead><tr><th scope="col">Variable</th><th scope="col">Description</th><th scope="col">Units</th><th scope="col">Dimensions</th></tr></thead>
+                    <tbody id="rd-vbody"><tr><td colspan="4" class="rd-empty">Loading variables&hellip;</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section id="environment" class="section-bg">
+        <div class="content-section">
+            <h2 class="section-title">Environment and best track</h2>
+            <p class="rd-lede">Every analysis carries 17 snapshots of track and environmental data at 6-h intervals, from 48 h before to 48 h after the best-track time nearest the analysis (<code>ships_lag_times</code>; index 8 is the 0-h snapshot).</p>
+            <div class="rd-grid2">
+                <div class="rd-card">
+                    <h3><code>*_ships</code> variables</h3>
+                    <p>Best-track position, intensity, and motion, plus SHIPS-style shear, humidity, potential intensity, SST, ocean heat content, and precipitable water. The names are kept for continuity with v3, but in v4.0 the track values come from IBTrACS and the environmental values are computed from ERA5 through TC-PRIMED, not taken from the SHIPS developmental data. Ocean heat content is the tropical cyclone heat potential from GLORYS12V1, averaged within 50 km of the best-track position.</p>
+                </div>
+                <div class="rd-card">
+                    <h3><code>era5_*</code> variables</h3>
+                    <p>ERA5 diagnostics from TC-PRIMED: profiles on 23 pressure levels (1000&ndash;50 hPa), area averages over four regions (0&ndash;300, 0&ndash;500, 0&ndash;800, and 200&ndash;800 km), sector means in 15&deg; azimuth sectors and 200-km radial bands, layer shear and helicity, cyclone phase space parameters, empirical and theoretical potential intensity, eddy flux convergence, and precipitable water in radial bins.</p>
+                </div>
+            </div>
+            <div class="rd-callout">Because the sources changed, v4.0 environmental values differ from the SHIPS values in v3m. Don't mix the two versions in one analysis.</div>
+            <h3 class="rd-h3">Units and angle conventions</h3>
+            <div class="rd-table-wrap">
+                <table class="rd-deftable">
+                    <thead><tr><th scope="col">Variable</th><th scope="col">Convention</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>lon_ships</code></td><td>Degrees <strong>west</strong>, positive. Every other longitude in the files is in degrees east (western hemisphere negative).</td></tr>
+                        <tr><td><code>tc_tilt_direction</code>, <code>core_shear_direction</code></td><td>Radians, mathematical convention: the direction the vector points, 0 = east, increasing counterclockwise. Equal to <code>atan2(northward, eastward)</code> of the matching components.</td></tr>
+                        <tr><td><code>sddc_ships</code>, <code>era5_shear_direction</code></td><td>Degrees, compass heading toward which the shear vector points: westerly shear = 90&deg;.</td></tr>
+                        <tr><td><code>era5_azimuth</code></td><td>Degrees, mathematical convention: 0 = due east of the TC center, increasing counterclockwise.</td></tr>
+                        <tr><td><code>vmax_ships</code>, <code>shdc_ships</code>, <code>mpi_ships</code></td><td>Knots. Gridded radar winds are in m s<sup>&minus;1</sup>.</td></tr>
+                        <tr><td><code>tc_tilt_*</code></td><td>Kilometers, relative to the 2-km TC center.</td></tr>
+                        <tr><td><code>ohc_ships</code></td><td>kJ cm<sup>&minus;2</sup>, relative to the 26 &deg;C isotherm; 0 where the surface is cooler than 26 &deg;C.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section id="methods">
+        <div class="content-section">
+            <h2 class="section-title">Methods</h2>
+            <h3 class="rd-h3">Grids</h3>
+            <p>Analyses use Cartesian grids with 2-km horizontal and 0.5-km vertical spacing from 0 to 18 km height (37 levels). The recentered grids span &plusmn;200 km (201 &times; 201 points) about the TC center. The 0-km level is kept for grid continuity only; it is missing everywhere because the Doppler analyses contain no valid data at the surface.</p>
+            <h3 class="rd-h3">Finding the center</h3>
+            <p>The TC center is found with a weighted circulation maximization (WCM) method (Fischer et al. 2024). For a series of trial centers, the storm-relative wind direction at each grid point is compared with purely tangential flow about that trial center. The best center is the one with the smallest mean difference. Each point's mismatch is weighted by wind speed and by distance from the trial center, so strong winds near the center count most. The search runs for every swath and merged analysis, at every height, which gives the center profile (<code>tc_center_latitudes</code>, <code>tc_center_longitudes</code>), the radius of maximum wind profile (<code>tc_rmw</code>), and the vortex tilt relative to the 2-km center (<code>tc_tilt_*</code>). Where coverage is too sparse to fix a center, these values are missing.</p>
+            <h3 class="rd-h3">Building merged analyses</h3>
+            <p>Each swath from a flight is first recentered on its own 2-km center, and the recentered swaths are averaged into the merged analysis. A revised center is then estimated from the merged tangential wind field; its greater azimuthal coverage should give a more accurate center than any single swath.</p>
+            <h3 class="rd-h3">Core-averaged wind and shear</h3>
+            <p>The merged file holds vertical profiles of the wind averaged over the TC core and of its vertical shear (<code>core_*</code>; earlier versions called this local shear). Averaging radii run from 25 to 100 km in 5-km steps (<code>core_radii</code>). A value is computed only where at least half of the points in every geographic quadrant (northwest, southwest, southeast, northeast) hold valid data, so small radii have values more often than large ones. The mean and minimum quadrant coverage are stored alongside (<code>core_mean_quadrant_coverage</code>, <code>core_minimum_quadrant_coverage</code>). Use these profiles with great caution.</p>
+            <h3 class="rd-h3">Quality control</h3>
+            <p>Quality control of the raw radar data (Level 1a) balances keeping as much meteorological signal as possible against removing non-meteorological artifacts; removing all artifacts would also remove real data. Because coverage matters for most research uses, the QC behind the Level 2 analyses in TC-RADAR does not aim to remove every artifact. The production of the Level 2 analyses since 2020 is described in the <a href="https://www.aoml.noaa.gov/wp-content/uploads/2023/04/README_radar_dataset.pdf" target="_blank" rel="noopener">HRD radar data README</a>.</p>
+        </div>
+    </section>
+
+    <section id="issues" class="section-bg">
+        <div class="content-section">
+            <h2 class="section-title">Known issues</h2>
+            <div class="rd-callout rd-callout-warn">
+                <div class="rd-callout-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9.5 17h-19z"/><path d="M12 10v4"/><path d="M12 17.5v.01"/></svg>Vertical velocity before 2010</div>
+                Analyses before the 2010 season were made with an error in the synthesis software that made vertical velocities too deep and too strong in some cases. <strong>Do not use the TDR vertical velocity quantitatively before 2010.</strong> Analyses from 2010 on have the error corrected. Details are in Fischer et al. (2022).
+            </div>
+            <div class="rd-callout rd-callout-warn">
+                <div class="rd-callout-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9.5 17h-19z"/><path d="M12 10v4"/><path d="M12 17.5v.01"/></svg>Reflectivity is not calibrated</div>
+                Reflectivity can differ by up to 7&ndash;10 dB between the radars on the two P-3s (N42 and N43) in some seasons, and between seasons as the radar systems changed. The X-band signal is also attenuated in heavy precipitation, especially along swath edges, and TC-RADAR does not correct for it. <strong>Until a calibration is done, use reflectivity quantitatively only within individual case studies.</strong>
+            </div>
+            <div class="rd-callout">
+                <div class="rd-callout-title">Analyses are lightly quality-controlled</div>
+                Some non-meteorological artifacts remain by design (see <a href="#methods">Quality control</a>). Examine the wind and reflectivity fields and apply further QC suited to your objectives.
+            </div>
+            <div class="rd-callout">
+                <div class="rd-callout-title">Placeholder storm names</div>
+                Some <code>storm_name</code> values come straight from the original analysis files and are not names, for example <code>TDR</code>, <code>CYCLONE</code>, <code>INVEST</code>, or <code>PTC09</code>. Use <code>tcid_ships</code> to identify the storm.
+            </div>
+        </div>
+    </section>
+
+    <section id="versions" class="rd-versions">
+        <div class="content-section">
+            <h2 class="section-title">Version history</h2>
+            <div class="changelog-list">
+                <div class="changelog-entry">
+                    <div class="changelog-date">v4.0 &middot; Nov 2026</div>
+                    <div class="changelog-text">
+                        <ul>
+                            <li>Adds the 2025 season and a few earlier flights: 1,640 swath and 474 merged analyses (v3m had 1,510 and 436).</li>
+                            <li>One file per analysis type; v3m split each type into two year ranges.</li>
+                            <li>Track values now come from IBTrACS and environmental values from ERA5 via TC-PRIMED, replacing the SHIPS developmental data. The <code>*_ships</code> names are kept.</li>
+                            <li>Adds 44 ERA5 environmental variables (<code>era5_*</code>), storm type (<code>stype_ships</code>), and land masks (<code>land_mask</code>, <code>recentered_land_mask</code>, <code>land_fraction</code>).</li>
+                            <li>Ocean heat content from GLORYS12V1, in kJ cm<sup>&minus;2</sup>.</li>
+                            <li>The 0-km level is set to missing; the analyses contain no valid surface data.</li>
+                            <li>Case indices differ from v3m. Match analyses by mission ID and time.</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="changelog-entry">
+                    <div class="changelog-date">v3m &middot; Aug 2025</div>
+                    <div class="changelog-text">Added 2024 cases and the nearest best-track time to the SHIPS variables, for easier time referencing. The center-finding search was streamlined so a crude initial search is no longer needed; this may slightly improve swath tilt estimates in a handful of cases. The weights and cost function were unchanged.</div>
+                </div>
+                <div class="changelog-entry">
+                    <div class="changelog-date">v3l &middot; Oct 2024</div>
+                    <div class="changelog-text">Added 2023 cases. Variable names revised to follow netCDF CF conventions, with long names added. Added four SHIPS precipitable water variables.</div>
+                </div>
+                <div class="changelog-entry">
+                    <div class="changelog-date">v3k &middot; Jun 2023</div>
+                    <div class="changelog-text">Added 2022 cases. A larger core-radius parameter made center finding more consistent on swath analyses. The files were split into two swath and two merged files by year range to limit memory use, and some coordinate names were made easier to use.</div>
+                </div>
+            </div>
+            <details class="rd-older">
+                <summary>Earlier versions (v3a&ndash;v3j)</summary>
+                <div class="changelog-list">
+                    <div class="changelog-entry"><div class="changelog-date">v3j &middot; May 2022</div><div class="changelog-text">Added 2021 cases. Revised center finding to estimate centers more accurately from swath data, especially at mid-levels in weak storms, with a stricter coverage constraint. Fixed the divergence calculation.</div></div>
+                    <div class="changelog-entry"><div class="changelog-date">v3i</div><div class="changelog-text">Version used in the TC-RADAR paper (Fischer et al. 2022). Fixed the routine that computes each grid point's bearing, which affected center finding.</div></div>
+                    <div class="changelog-entry"><div class="changelog-date">v3h</div><div class="changelog-text">Corrected the latitudes and longitudes of each analysis for Earth's curvature and for the grid origin falling between grid points. Some centers and tilts changed.</div></div>
+                    <div class="changelog-entry"><div class="changelog-date">v3g</div><div class="changelog-text">Added swath begin and end times. Fixed date stamps for flights that crossed a month boundary, which had kept a few merged analyses from pairing with best-track and SHIPS data.</div></div>
+                    <div class="changelog-entry"><div class="changelog-date">v3f</div><div class="changelog-text">Added 2020 cases. Revised center finding so it no longer depends on swath RMW, which agreed better with subjective analyses.</div></div>
+                    <div class="changelog-entry"><div class="changelog-date">v3e</div><div class="changelog-text">Vortex tilt computed from swath data. Stricter coverage criteria for recentering; cases that fail are set to NaN.</div></div>
+                    <div class="changelog-entry"><div class="changelog-date">v3d</div><div class="changelog-text">Fixed best-track pairing for analyses between 21 and 00 UTC. Replaced the Earl (2010) analyses with an updated QC version.</div></div>
+                    <div class="changelog-entry"><div class="changelog-date">v3c</div><div class="changelog-text">Tuned the center-finding parameters and improved code efficiency.</div></div>
+                    <div class="changelog-entry"><div class="changelog-date">v3b</div><div class="changelog-text">Fixed center-finding bugs.</div></div>
+                    <div class="changelog-entry"><div class="changelog-date">v3a</div><div class="changelog-text">Beta version of the new center-finding method.</div></div>
+                </div>
+            </details>
+        </div>
+    </section>
+
+    <section id="cite" class="section-bg">
+        <div class="content-section">
+            <h2 class="section-title">How to cite</h2>
+            <p class="rd-lede">Publications and presentations that use TC-RADAR should cite the database paper. Work that uses the center finding or vortex tilt should also cite the tilt paper.</p>
+            <div class="cite-list">
+                <div class="cite-pub">
+                    <div class="cite-pub-label">TC-RADAR database</div>
+                    <div class="cite-pub-text" id="cite-2022">Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An analysis of tropical cyclone vortex and convective characteristics in relation to storm intensity using a novel airborne Doppler radar database. <em>Mon. Wea. Rev.</em>, <strong>150</strong>, 2255&ndash;2278, <a href="https://doi.org/10.1175/MWR-D-21-0223.1" target="_blank" rel="noopener">https://doi.org/10.1175/MWR-D-21-0223.1</a>.</div>
+                    <button type="button" class="cite-copy-landing" data-copy-from="cite-2022">Copy citation</button>
+                </div>
+                <div class="cite-pub">
+                    <div class="cite-pub-label">Center finding and vortex tilt</div>
+                    <div class="cite-pub-text" id="cite-2024">Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2024: An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change. <em>Mon. Wea. Rev.</em>, <strong>152</strong>, 203&ndash;225, <a href="https://doi.org/10.1175/MWR-D-23-0089.1" target="_blank" rel="noopener">https://doi.org/10.1175/MWR-D-23-0089.1</a>.</div>
+                    <button type="button" class="cite-copy-landing" data-copy-from="cite-2024">Copy citation</button>
+                </div>
+                <div style="text-align:center;margin-top:0.5rem;"><button type="button" class="cite-bibtex-landing" id="rd-bibtex">Copy BibTeX for both</button></div>
+            </div>
+            <h3 class="rd-h3">Data sources in v4.0</h3>
+            <ul class="rd-notes">
+                <li><strong>TC-PRIMED</strong> (ERA5 environmental diagnostics): Razin, M. N., C. J. Slocum, J. A. Knaff, and P. J. Brown, 2023: Tropical Cyclone PRecipitation, Infrared, Microwave, and Environmental Dataset (TC PRIMED). V1.0. NOAA NCEI, <a href="https://doi.org/10.25921/dmy1-0595" target="_blank" rel="noopener">doi:10.25921/dmy1-0595</a>.</li>
+                <li><strong>ERA5</strong>: Hersbach, H., and Coauthors, 2020: The ERA5 global reanalysis. <em>Quart. J. Roy. Meteor. Soc.</em>, <strong>146</strong>, 1999&ndash;2049, <a href="https://doi.org/10.1002/qj.3803" target="_blank" rel="noopener">doi:10.1002/qj.3803</a>.</li>
+                <li><strong>IBTrACS</strong>: Knapp, K. R., M. C. Kruk, D. H. Levinson, H. J. Diamond, and C. J. Neumann, 2010: The International Best Track Archive for Climate Stewardship (IBTrACS). <em>Bull. Amer. Meteor. Soc.</em>, <strong>91</strong>, 363&ndash;376, <a href="https://doi.org/10.1175/2009BAMS2755.1" target="_blank" rel="noopener">doi:10.1175/2009BAMS2755.1</a>.</li>
+                <li><strong>GLORYS12V1</strong> ocean reanalysis: E.U. Copernicus Marine Service, Global Ocean Physics Reanalysis, <a href="https://doi.org/10.48670/moi-00021" target="_blank" rel="noopener">doi:10.48670/moi-00021</a>.</li>
+                <li><strong>TDR analysis method</strong>: Gamache, J. F., F. D. Marks, and F. Roux, 1995: Comparison of three airborne Doppler sampling techniques with airborne in situ wind observations in Hurricane Gustav (1990). <em>J. Atmos. Oceanic Technol.</em>, <strong>12</strong>, 171&ndash;181, <a href="https://doi.org/10.1175/1520-0426(1995)012%3C0171:COTADS%3E2.0.CO;2" target="_blank" rel="noopener">doi:10.1175/1520-0426(1995)012&lt;0171:COTADS&gt;2.0.CO;2</a>.</li>
+            </ul>
+            <p class="rd-small rd-muted" style="margin-top:1.5rem;">Questions about the data: Michael Fischer (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu</a>) or the HRD radar team.</p>
+        </div>
+    </section>
+
+    </main>
+
+    <footer>
+        <div>Created by Michael S. Fischer &middot; University of Miami</div>
+        <div style="margin-top:6px;">Built with assistance from <a href="https://claude.ai" target="_blank" rel="noopener">Claude</a> (Anthropic)</div>
+    </footer>
+
+    <script src="tc_radar_readme.js?v=20261119rd1" defer></script>
+</body>
+</html>
