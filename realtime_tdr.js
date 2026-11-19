@@ -8102,16 +8102,21 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                         var v = o[varName];
                         if (v != null && isFinite(v)) kt = (v * 1.94384).toFixed(1);
                     }
-                    return [utc, kt];
+                    // Signed minutes from the reference time ("T+12.5"):
+                    // Plotly 2.27 ignores a hover format with the "+" flag and prints the raw float, so the signed text is built here.
+                    var tm = Math.round(o.time_offset_s / 6.0) / 10.0;
+                    var tAbs = Math.abs(tm).toFixed(1).replace(/\.0$/, '');
+                    var tRel = (tAbs === '0' ? '' : tm > 0 ? '+' : '\u2212') + tAbs;
+                    return [utc, kt, tRel];
                 });
 
                 var hoverTpl;
                 if (isWind) {
                     hoverTpl = cfg.label + style.suffix + ': %{y} ' + cfg.units +
-                        ' (%{customdata[1]} kt)<br>%{customdata[0]} UTC · T%{x:+} min<extra></extra>';
+                        ' (%{customdata[1]} kt)<br>%{customdata[0]} UTC · T%{customdata[2]} min<extra></extra>';
                 } else {
                     hoverTpl = cfg.label + style.suffix + ': %{y} ' + cfg.units +
-                        '<br>%{customdata[0]} UTC · T%{x:+} min<extra></extra>';
+                        '<br>%{customdata[0]} UTC · T%{customdata[2]} min<extra></extra>';
                 }
 
                 traces.push({

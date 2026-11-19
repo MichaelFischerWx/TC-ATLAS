@@ -5215,10 +5215,17 @@
         if (!_whyLife) return;
         var cols = ['#F47321', '#94a3b8', '#2e7dff', '#4a9b6e', '#6db993', '#f9a66c', '#64748b'];
         var allS = idx.map(function (i) { return whySteps(fr[i]); });
+        /* Plotly 2.27 ignores a hover format with the "+" flag and prints the raw float, so the signed text is built here */
+        function sgn1(v) {
+            if (v === null || v === undefined || !isFinite(v)) return '';
+            var s = Math.abs(v).toFixed(1);
+            return (s === '0.0' ? '' : v > 0 ? '+' : '\u2212') + s;
+        }
         var tr = WHY_V.map(function (w, k) {
-            return { type: 'bar', x: T, y: allS.map(function (q) { return q.dv[k]; }),
+            var ys = allS.map(function (q) { return q.dv[k]; });
+            return { type: 'bar', x: T, y: ys, customdata: ys.map(sgn1),
                      name: w[0], marker: { color: cols[k], line: { width: 0 } }, opacity: 0.9,
-                     hovertemplate: w[0] + ': %{y:+.1f} kt<extra></extra>' };
+                     hovertemplate: w[0] + ': %{customdata} kt<extra></extra>' };
         }).filter(function (t) { return t.y.some(function (y) { return Math.abs(y) > 0.05; }); });
         /* break the net line across gaps (> 3 h, e.g. a remnant-low spell) */
         var netX = [], netY = [];
@@ -5227,9 +5234,9 @@
             netX.push(T[k]); netY.push(Math.round((q.v[7] - q.v[0]) * 10) / 10);
         });
         tr.push({ type: 'scatter', mode: 'lines', x: netX, connectgaps: false,
-                  y: netY,
+                  y: netY, customdata: netY.map(sgn1),
                   name: 'Net change', line: { color: ink, width: 1.8 },
-                  hovertemplate: 'net %{y:+.1f} kt<extra></extra>' });
+                  hovertemplate: 'net %{customdata} kt<extra></extra>' });
         Plotly.react('exp-why-t', tr, {
             title: { text: narrow ? 'Each step through the storm’s life'
                                   : 'How each step moved the wind through the storm’s life',
@@ -5317,12 +5324,15 @@
                 type: 'bar', orientation: 'h',
                 x: r.map(function (d) { return d.v; }),
                 y: r.map(function (d) { return d.f; }),
+                // [gloss, signed value]: Plotly 2.27 ignores a hover format with the "+" flag and prints the raw float, so the signed text is built here.
                 customdata: r.map(function (d) {
-                    return wrapGloss(featGloss(d.f)); }),
+                    var a = Math.abs(d.v).toFixed(2);
+                    return [wrapGloss(featGloss(d.f)),
+                            (a === '0.00' ? '' : d.v > 0 ? '+' : '\u2212') + a]; }),
                 marker: { color: r.map(function (d) {
                     return d.v >= 0 ? '#f43f5e' : '#2e7dff'; }) },
-                hovertemplate: '%{y}: %{x:+.2f}' + unit +
-                    '<br><i>%{customdata}</i><extra></extra>'
+                hovertemplate: '%{y}: %{customdata[1]}' + unit +
+                    '<br><i>%{customdata[0]}</i><extra></extra>'
             }], {
                 title: { text: title, font: { size: 12 } },
                 height: 300, margin: { l: 150, r: 12, t: 30, b: 34 },

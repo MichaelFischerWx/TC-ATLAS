@@ -30374,7 +30374,12 @@
                 color: binColors,
                 line: { color: 'rgba(0,0,0,0.3)', width: 0.5 }
             },
-            hovertemplate: '%{x:+.0f} kt/' + interval + 'h<br>%{y} members<extra></extra>'
+            // Plotly 2.27 ignores a hover format with the "+" flag and prints the raw float, so the signed text is built here.
+            customdata: binCenters.map(function (c) {
+                var a = Math.abs(c).toFixed(0);
+                return (a === '0' ? '' : c > 0 ? '+' : '\u2212') + a;
+            }),
+            hovertemplate: '%{customdata} kt/' + interval + 'h<br>%{y} members<extra></extra>'
         };
 
         var shapes = [
