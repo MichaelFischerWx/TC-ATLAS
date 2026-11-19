@@ -396,6 +396,7 @@
     // rolling forward with the live feed under a track that is hours old.
     var _hdobFrozenAt = null, _hdobGibsFrozen = null, _hdobSatNote = '', _hdobSatTarget = null;
     var _hdobSearMarkers = [];   // SEAR pass-peak markers + radials from the center
+    var _hdobSearDrawn = { pk: 0, ctr: 0, prelim: 0 };   // what _hdobRenderSearPasses put on the map (legend)
     // recon-sat/<ATCF>/index.json: per-pass mosaic frames the SEAR publisher
     // copies off the rolling mosaic (full resolution, durable). Stepper state:
     // _hdobPassSel = index into _hdobPassList(), null = automatic backdrop.
@@ -786,11 +787,12 @@
         _hdobResCache = { '10': null, '1': null };   // payloads belong to the old selection
         _hdobFlightSel = '';   // back to all flights when switching storm/mission
         _hdobFl1s = false;     // back to the 10-s operational wind on switch
-        _hdobFrozenAt = null; _hdobSatNote = ''; _hdobSatTarget = null; _hdobDropGibsFrozen();
+        _hdobFrozenAt = null; _hdobSatNote = ''; _hdobSatTarget = null; _hdobSatStamp = null; _hdobDropGibsFrozen();
         _hdobPassSel = null; _hdobRecsat = null; _hdobRecsatKey = null; _hdobRecsatTs = 0;
         for (var sm = 0; sm < _hdobSearMarkers.length; sm++) { try { _hdobMap.removeLayer(_hdobSearMarkers[sm]); } catch (e) {} }
         _hdobSearMarkers = [];
         _hdobTdrReset();
+        _hdobEyeHide();
         if (value.indexOf('mission:') === 0) {
             // Mission mode: a standalone flight, attributed by aircraft tail.
             var tail = value.slice(8);
@@ -929,10 +931,12 @@
                 if (!blob || !(blob.aircraft || []).length) throw new Error('empty blob');
                 // Reset the live selection exactly like a picker change, then take over.
                 if (_hdobPollTimer) { clearInterval(_hdobPollTimer); _hdobPollTimer = null; }
+                _hdobReqSeq++;   // drop a live /recon/realtime response still in flight: it used to land
+                                 // after this and replace the archive with the picker's default ("0 obs")
                 _hdobArchive = null;
                 _hdobData = null; _hdobFitDone = false; _hdobReplay = null; _hdobLoggedLoad = false;
                 _hdobResCache = { '10': null, '1': null }; _hdobFlightSel = ''; _hdobFl1s = false;
-                _hdobFrozenAt = null; _hdobSatNote = ''; _hdobSatTarget = null; _hdobDropGibsFrozen();
+                _hdobFrozenAt = null; _hdobSatNote = ''; _hdobSatTarget = null; _hdobSatStamp = null; _hdobDropGibsFrozen();
                 _hdobPassSel = null; _hdobRecsat = null; _hdobRecsatKey = null; _hdobRecsatTs = 0;
                 _hdobMissionTail = null; _hdobAtcf = atcf; _hdobName = entry.name || atcf; _hdobLat = null; _hdobLon = null;
                 _hdobClearMapLayers();
@@ -972,6 +976,7 @@
     };
 
     function _hdobClearMapLayers() {
+        _hdobEyeHide();
         if (!_hdobMap) return;
         for (var sm = 0; sm < _hdobSearMarkers.length; sm++) { try { _hdobMap.removeLayer(_hdobSearMarkers[sm]); } catch (e) {} }
         _hdobSearMarkers = [];
@@ -1222,21 +1227,44 @@
     function _hdobAddLegend(mapEl) {
         if (!mapEl || mapEl.querySelector('.recon-hdob-mapkey')) return;
         var rows = [
-            { sym: '<span class="recon-hdob-legend-diamond"></span>', label: 'Dropsonde' },
-            { sym: '<span style="color:#f87171;font-size:14px;line-height:13px;">⊕</span>', label: 'Center fix (VDM)' },
-            { sym: '<span style="display:inline-block;width:13px;height:13px;"><svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" style=\"display:block;filter:drop-shadow(0 0 1.5px rgba(0,0,0,0.8));\"><path d=\"M12 2 L14.2 10 L22 13.5 L22 15.5 L14.2 13.5 L13.4 19 L16 21 L16 22.3 L12 21.2 L8 22.3 L8 21 L10.6 19 L9.8 13.5 L2 15.5 L2 13.5 L9.8 10 Z\" fill=\"#fde047\" stroke=\"#1f2937\" stroke-width=\"0.7\" stroke-linejoin=\"round\"/></svg></span>', label: 'Aircraft (latest)' },
-            { sym: '<span style="color:#ec4899;font-size:14px;line-height:13px;font-weight:600;">×</span>', label: 'SEAR pass center (prelim) · dotted = center track' },
-            { sym: '<span style="color:#ec4899;font-size:13px;line-height:13px;">○</span>', label: 'SEAR peak 10-m est (exp) · kt + sector, radial to center' }
+            { key: 'sat', sym: '<span class="recon-hdob-legend-sat"></span>', label: '<span data-lab="sat"></span>' },
+            { key: 'sonde', sym: '<span class="recon-hdob-legend-diamond"></span>', label: 'Dropsonde' },
+            { key: 'vdm', sym: '<span style="color:#f87171;font-size:14px;line-height:13px;">⊕</span>', label: 'Center fix (VDM)' },
+            { key: 'aircraft', sym: '<span style="display:inline-block;width:13px;height:13px;"><svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" style=\"display:block;filter:drop-shadow(0 0 1.5px rgba(0,0,0,0.8));\"><path d=\"M12 2 L14.2 10 L22 13.5 L22 15.5 L14.2 13.5 L13.4 19 L16 21 L16 22.3 L12 21.2 L8 22.3 L8 21 L10.6 19 L9.8 13.5 L2 15.5 L2 13.5 L9.8 10 Z\" fill=\"#fde047\" stroke=\"#1f2937\" stroke-width=\"0.7\" stroke-linejoin=\"round\"/></svg></span>', label: 'Aircraft (latest)' },
+            { key: 'searctr', sym: '<span style="color:#ec4899;font-size:14px;line-height:13px;font-weight:600;">×</span>', label: '<span data-lab="searctr">SEAR pass center · dotted = center track</span>' },
+            { key: 'searpk', sym: '<span style="color:#ec4899;font-size:13px;line-height:13px;">○</span>', label: 'SEAR peak 10-m est (exp) · kt + sector, radial to center' }
         ];
         var html = rows.map(function (r) {
-            return '<div class="recon-hdob-legend-row">' +
+            return '<div class="recon-hdob-legend-row" data-key="' + r.key + '" style="display:none">' +
                    '<span class="recon-hdob-legend-sym">' + r.sym + '</span>' +
                    '<span>' + r.label + '</span></div>';
         }).join('');
         var box = document.createElement('div');
         box.className = 'recon-hdob-mapkey';
+        box.style.display = 'none';
         box.innerHTML = html;
         mapEl.appendChild(box);
+    }
+
+    /** Show only the key rows for symbols actually on the map. A static key
+     *  listed SEAR centers/peaks and VDM fixes over a training flight that had
+     *  none of them (2026-11-19), which read as layers failing to draw. */
+    function _hdobSyncLegend(drawn) {
+        _hdobLegendDrawn = drawn;
+        var box = _hdobMap && _hdobMap.getContainer && _hdobMap.getContainer().querySelector('.recon-hdob-mapkey');
+        if (!box) return;
+        drawn = Object.assign({}, drawn, { sat: !!_hdobSatStamp });
+        var sl = box.querySelector('[data-lab="sat"]');
+        if (sl) sl.textContent = _hdobSatStamp || '';
+        var any = false;
+        Array.prototype.forEach.call(box.querySelectorAll('.recon-hdob-legend-row'), function (row) {
+            var on = !!drawn[row.getAttribute('data-key')];
+            row.style.display = on ? '' : 'none';
+            if (on) any = true;
+        });
+        var lab = box.querySelector('[data-lab="searctr"]');
+        if (lab) lab.textContent = 'SEAR pass center' + (drawn.searPrelim ? ' (VDM or prelim)' : '') + ' · dotted = center track';
+        box.style.display = any ? '' : 'none';
     }
 
     /** Add/replace the GIBS satellite layer (z2) for the current product +
@@ -1396,12 +1424,16 @@
         var prev = document.createElement('button'); prev.textContent = '◀\uFE0E'; prev.title = 'Previous center pass';
         var cur = document.createElement('span'); cur.className = 'cur';
         var next = document.createElement('button'); next.textContent = '▶\uFE0E'; next.title = 'Next center pass';
-        var auto = document.createElement('button'); auto.textContent = _hdobFrozenAt ? 'Center pass' : 'Latest';
-        auto.title = _hdobFrozenAt ? 'Frame nearest the median center-pass time' : 'Live imagery (latest frame)';
+        var wk = _hdobSatWhy ? _hdobSatWhy.kind : null;
+        var auto = document.createElement('button');
+        auto.textContent = wk === 'replay' ? 'Replay clock' : (wk === 'fix' ? 'Newest fix' : (_hdobFrozenAt ? 'Center pass' : 'Latest'));
+        auto.title = wk === 'replay' ? 'Frame nearest the replay clock'
+            : (wk === 'fix' ? 'Frame nearest the newest center fix on the map' : (_hdobFrozenAt ? 'Frame for this flight' : 'Live imagery (latest frame)'));
         auto.className = (_hdobPassSel == null) ? 'on' : '';
         var i = _hdobPassSel;
         if (i == null) {
-            cur.textContent = _hdobFrozenAt ? 'mission center pass' : 'live';
+            cur.textContent = wk === 'replay' ? 'replay clock' : (wk === 'fix' ? 'newest fix ' + TCTime.utc(_hdobSatWhy.t, { date: false })
+                : (_hdobFrozenAt ? 'this flight' : 'live'));
         } else {
             var p = pl[i];
             cur.textContent = 'pass ' + (i + 1) + '/' + pl.length + ' · ' + TCTime.utc(p.t, { date: false }) + ' ' + _hdobTailDisplay(p.tail);
@@ -1542,23 +1574,28 @@
         if (!_hdobMosaic) _hdobMosaic = kit.reconMosaicLayer(_hdobMap);
         var product = _hdobSatProduct;
         _hdobSatTarget = frozenIso || null;
+        var tok = ++_hdobSatTok;   // a superseded call's promise must not touch the map stamp
         if (product === 'off') {
             _hdobMosaic.remove(); _hdobDropGibsFrozen();
             if (_hdobSatNote) { _hdobSatNote = ''; _hdobBuildSourceNote(); }
+            _hdobSetSatStamp(product, null);
             return;
         }
-        var ctx = passInfo
-            ? 'center pass ' + TCTime.utc(passInfo.t, { date: false }) + ' ' + _hdobTailDisplay(passInfo.tail) +
-              (passInfo.src === 'hdob' ? ' (preliminary fix)' : '')
-            : (_hdobArchive ? 'the replay clock (archive)' : 'this mission\u2019s center pass (flight ended \u2014 imagery is not updating)');
+        var why = _hdobSatWhyText(passInfo), w = _hdobSatWhy;
+        var fixDesc = (w && w.kind === 'fix') ? TCTime.utc(w.t, { date: false }) + ' ' + w.src + (w.tail ? ', ' + _hdobTailDisplay(w.tail) : '') : '';
+        var ctx = passInfo ? why
+            : (fixDesc ? 'the newest center fix on the map (' + fixDesc + ')' +
+                         (_hdobArchive ? ', the last before the replay clock' : '; no newer fix, so the imagery is not updating')
+               : (_hdobArchive ? 'the replay clock (archive)' : 'this flight (no center fix; the imagery is not updating)'));
         var arch = frozenIso ? _hdobArchivedFrame(product, frozenIso) : null;
         if (arch) {
             var lblA = _HDOB_SAT_LABEL[product] || product;
             var tsA = TCTime.utc(arch.ts, { date: false });
             Promise.resolve(_hdobMosaic.setArchived(product, 0.92, arch)).then(function (ok) {
-                if (frozenIso !== _hdobSatTarget || product !== _hdobSatProduct) return;
-                if (!ok) { _hdobPinFallback(kit, lonHint, frozenIso, product, ctx); return; }
+                if (frozenIso !== _hdobSatTarget || product !== _hdobSatProduct || tok !== _hdobSatTok) return;
+                if (!ok) { _hdobPinFallback(kit, lonHint, frozenIso, product, ctx, why, tok); return; }
                 _hdobDropGibsFrozen();
+                _hdobSetSatStamp(product, _hdobTsMs(arch.ts), 'archived', why);
                 var note = 'Satellite: archived full-resolution ' + lblA + ' frame ' + tsA + ' for ' + ctx + '.';
                 if (note !== _hdobSatNote) { _hdobSatNote = note; _hdobBuildSourceNote(); }
             });
@@ -1572,21 +1609,26 @@
         if (!frozenIso) {
             _hdobDropGibsFrozen();
             if (_hdobSatNote) { _hdobSatNote = ''; _hdobBuildSourceNote(); }
-            _hdobMosaic.setProduct(product, 0.92);
+            Promise.resolve(_hdobMosaic.setProduct(product, 0.92)).then(function (ok) {
+                if (tok !== _hdobSatTok) return;   // superseded
+                _hdobSetSatStamp(product, ok ? _hdobTsMs(_hdobMosaic.frameId()) : null, 'mosaic', why);
+            });
             return;
         }
-        _hdobPinFallback(kit, lonHint, frozenIso, product, ctx);
+        _hdobPinFallback(kit, lonHint, frozenIso, product, ctx, why, tok);
     }
+    var _hdobSatTok = 0;
 
     /** Pinned time without an archived frame: live mosaic if still retained, else GIBS. */
-    function _hdobPinFallback(kit, lonHint, frozenIso, product, ctx) {
+    function _hdobPinFallback(kit, lonHint, frozenIso, product, ctx, why, tok) {
         var hhmm = TCTime.utc(frozenIso, { date: false });
         var lbl = _HDOB_SAT_LABEL[product] || product;
         Promise.resolve(_hdobMosaic.setProduct(product, 0.92, frozenIso)).then(function (ok) {
-            if (frozenIso !== _hdobSatTarget || product !== _hdobSatProduct) return;   // superseded
+            if (frozenIso !== _hdobSatTarget || product !== _hdobSatProduct || tok !== _hdobSatTok) return;   // superseded
             var note;
             if (ok) {
                 _hdobDropGibsFrozen();
+                _hdobSetSatStamp(product, _hdobTsMs(_hdobMosaic.frameId()), 'mosaic', why);
                 note = 'Satellite: ' + lbl + ' frame nearest ' + hhmm + ' for ' + ctx + '.';
             } else {
                 // Older than the ~3 h the mosaic retains: NASA GIBS archive, same slot.
@@ -1605,20 +1647,35 @@
                 note = _hdobGibsFrozen
                     ? 'Satellite: NASA GIBS ' + lbl + ' at ' + hhmm + ' (archive resolution) for ' + ctx + '.'
                     : 'Satellite: no imagery retained for ' + hhmm + ' (' + ctx + ').';
+                // GIBS serves the 10-min slot the time falls in (gibsProductLayer)
+                var slot = Date.parse(frozenIso); slot -= slot % (10 * 60 * 1000);
+                _hdobSetSatStamp(product, _hdobGibsFrozen ? slot : null, 'gibs', why);
             }
             if (note !== _hdobSatNote) { _hdobSatNote = note; _hdobBuildSourceNote(); }
         });
     }
 
-    /** Center-pass time (ISO) to pin the backdrop to, or null while the displayed
-     *  sortie is (or may still be) airborne. Completed = newest ob > 90 min old
-     *  (a plane in the storm posts every 10-30 s). Time = median of the sortie's
-     *  center fixes (VDMs plus SEAR pass fixes, which cover the passes whose VDMs
-     *  never posted), else the min-extrap-SLP ob, else the midpoint of the
-     *  track. Replays are live by construction. */
+    /** Backdrop time (ISO) to pin to, or null for the live latest frame. The map
+     *  labels the NEWEST center fix it draws (the large VDM badge), so the imagery
+     *  must be valid near that fix whenever it is not current:
+     *  - the displayed sortie is still reporting (last ob < 90 min before now, or
+     *    before the replay clock) and the newest fix is < 90 min old, or that
+     *    sortie hasn't fixed the storm yet (enroute) -> live latest frame (archive:
+     *    the replay clock);
+     *  - otherwise -> the frame nearest the newest fix (VDM, else a SEAR pass
+     *    center). Before 2026-11-19 a plane ferrying home kept the LATEST frame,
+     *    a landed sortie took its MEDIAN pass, and an archive at its end took the
+     *    last ob's time, so the labeled fix sat hours off the storm in the IR
+     *    (Isaias AF301 10 Oct 00:45: 22:47 fix on 00:45 IR; Polo archive: 17:54
+     *    fix on 23:50 IR);
+     *  - no fix at all: live -> latest; landed -> the lowest extrapolated-SLP ob,
+     *    else mid-track. _hdobSatWhy records which, for the map stamp and note. */
+    var _hdobSatWhy = null;   // {kind: 'fix'|'replay'|'track', t, src, tail}
     function _hdobFrozenCenterIso(aircraft) {
-        if (_hdobArchive) return new Date(_hdobArchive.cur).toISOString().slice(0, 19) + 'Z';   // pin imagery to the replay clock
+        _hdobSatWhy = null;
         if (_hdobReplay || !_hdobData) return null;
+        var A = _hdobArchive, nowRef = A ? A.cur : Date.now(), LIVE = 90 * 60 * 1000;
+        function iso(ms) { return new Date(ms).toISOString().slice(0, 19) + 'Z'; }
         var lo = Infinity, hi = -Infinity;
         (aircraft || []).forEach(function (ac) {
             var tr = ac.track || [];
@@ -1627,37 +1684,63 @@
             if (!isNaN(a) && a < lo) lo = a;
             if (!isNaN(z) && z > hi) hi = z;
         });
-        if (!isFinite(hi)) return null;
-        if (Date.now() - hi < 90 * 60 * 1000) return null;
-        var pad = 2 * 3600 * 1000;
-        function inWin(ms) { return !isNaN(ms) && ms >= lo - pad && ms <= hi + pad; }
-        var times = [];
-        (_hdobData.vdms || []).forEach(function (v) {
-            var t = Date.parse(_hdobX(v.t)); if (inWin(t)) times.push(t);
+        // the newest fix the map draws: VDMs, else SEAR pass centers
+        var fix = null;
+        (_hdobFilterMarkerBlob(_hdobData).vdms || []).forEach(function (v) {
+            var t = Date.parse(_hdobX(v.t || ''));
+            if (v.lat == null || v.lon == null || isNaN(t) || t > nowRef) return;
+            if (!fix || t > fix.t) fix = { t: t, src: 'VDM', tail: v.aircraft };
         });
-        if (_hdobData.sear && _hdobData.sear.passes) {
+        if (!fix && _hdobLayerVis.sear && _hdobData.sear && _hdobData.sear.passes) {
             _hdobSearPassesInScope(_hdobData.sear.passes).forEach(function (p) {
                 var t = Date.parse(p.fix_t || p.t);
-                if (!inWin(t)) return;
-                // one fix per pass: skip a SEAR fix that duplicates a VDM time
-                for (var k = 0; k < times.length; k++) if (Math.abs(times[k] - t) < 20 * 60 * 1000) return;
-                times.push(t);
+                if (p.clat == null || p.clon == null || isNaN(t) || t > nowRef) return;
+                if (!fix || t > fix.t) fix = { t: t, src: p.fix_source === 'hdob' ? 'preliminary fix' : 'VDM', tail: p.tail };
             });
         }
-        if (!times.length) {
-            var best = null;
-            (aircraft || []).forEach(function (ac) {
-                (ac.track || []).forEach(function (o) {
-                    if (o.extrap_sfc_p_mb != null && (!best || o.extrap_sfc_p_mb < best.v)) {
-                        best = { v: o.extrap_sfc_p_mb, t: Date.parse(_hdobX(o.t)) };
-                    }
-                });
-            });
-            if (best && !isNaN(best.t)) times.push(best.t);
+        var ended = A && A.cur >= A.t1;   // the archive's end: every flight has landed
+        var reporting = !ended && isFinite(hi) && nowRef - hi < LIVE;
+        if (reporting && (!fix || nowRef - fix.t <= LIVE || fix.t < lo - 30 * 60 * 1000)) {
+            if (A) { _hdobSatWhy = { kind: 'replay' }; return iso(nowRef); }
+            return null;
         }
-        if (!times.length) times.push((lo + hi) / 2);
-        times.sort(function (a, b) { return a - b; });
-        return new Date(times[Math.floor((times.length - 1) / 2)]).toISOString();
+        if (fix) { _hdobSatWhy = { kind: 'fix', t: fix.t, src: fix.src, tail: fix.tail }; return iso(fix.t); }
+        if (A) { _hdobSatWhy = { kind: 'replay' }; return iso(nowRef); }
+        if (!isFinite(hi)) return null;
+        var best = null;
+        (aircraft || []).forEach(function (ac) {
+            (ac.track || []).forEach(function (o) {
+                if (o.extrap_sfc_p_mb != null && (!best || o.extrap_sfc_p_mb < best.v)) {
+                    best = { v: o.extrap_sfc_p_mb, t: Date.parse(_hdobX(o.t)) };
+                }
+            });
+        });
+        _hdobSatWhy = { kind: 'track' };
+        return iso((best && !isNaN(best.t)) ? best.t : (lo + hi) / 2);
+    }
+
+    /** What the backdrop is pinned to, in words (map stamp + source note). */
+    function _hdobSatWhyText(passInfo) {
+        if (passInfo) return 'center pass ' + TCTime.utc(passInfo.t, { date: false }) + ' ' + _hdobTailDisplay(passInfo.tail) +
+            (passInfo.src === 'hdob' ? ' (preliminary fix)' : '');
+        var w = _hdobSatWhy;
+        if (!w) return 'latest';
+        if (w.kind === 'replay') return 'replay clock';
+        if (w.kind === 'fix') return 'nearest the ' + TCTime.utc(w.t, { date: false }) + ' ' + w.src + (w.tail ? ' (' + _hdobTailDisplay(w.tail) + ')' : '');
+        return 'this flight (no center fix)';
+    }
+
+    /** IR valid time on the map (first row of the map key, so Save PNG keeps it). */
+    var _hdobSatStamp = null, _hdobLegendDrawn = null;
+    function _hdobTsMs(ts) {
+        ts = String(ts || '');
+        return /^\d{12}$/.test(ts) ? Date.UTC(+ts.slice(0, 4), +ts.slice(4, 6) - 1, +ts.slice(6, 8), +ts.slice(8, 10), +ts.slice(10, 12)) : Date.parse(ts);
+    }
+    function _hdobSetSatStamp(product, frameT, via, why) {
+        var lbl = { ir: 'IR', wv: 'Water vapor', vis: 'Visible' }[product] || product;
+        _hdobSatStamp = (frameT == null || isNaN(frameT)) ? null
+            : lbl + ' ' + TCTime.utc(frameT) + (via === 'gibs' ? ' (NASA GIBS)' : '') + ' \u00b7 ' + why;
+        if (_hdobLegendDrawn) _hdobSyncLegend(_hdobLegendDrawn);
     }
 
     function _hdobLonHint() {
@@ -1703,7 +1786,7 @@
         fetch(url, { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (j) {
-                if (req !== _hdobReqSeq) return;   // superseded by a newer selection
+                if (req !== _hdobReqSeq || _hdobArchive) return;   // superseded by a newer selection / the archive
                 if (!j || j.error) { if (statusEl) statusEl.textContent = 'no data'; return; }
                 _hdobData = j;
                 _hdobResCache[_hdobFl1s ? '1' : '10'] = j;   // keep the toggle instant
@@ -1740,8 +1823,10 @@
                     });
                 }
                 if (statusEl) {
+                    // dated fixes only: undated ones are never drawn (_reconBuildMarkers)
+                    var nV = (j.vdms || []).filter(function (v) { return v.t && !isNaN(Date.parse(_hdobX(v.t))); }).length;
                     statusEl.textContent = (c.obs || 0) + ' obs · ' + (c.dropsondes || 0) +
-                        ' sondes · ' + (c.vdms || 0) + ' VDM';
+                        ' sondes · ' + nV + ' VDM';
                 }
             })
             .catch(function () {
@@ -1750,6 +1835,7 @@
     }
 
     function _hdobShowEmpty(show) {
+        if (show) _hdobEyeHide();
         var e = document.getElementById('recon-hdob-empty');
         var s = document.getElementById('recon-hdob-split');
         if (e) e.style.display = show ? '' : 'none';
@@ -1807,10 +1893,18 @@
         }
         for (var mi = 0; mi < _hdobMarkers.length; mi++) { try { map.removeLayer(_hdobMarkers[mi]); } catch (e) {} }
         // Sonde/VDM markers honour the flight selection too (was: always all).
-        _hdobMarkers = kit.buildMarkers(map, _hdobFilterMarkerBlob(_hdobData));
+        var markerBlob = _hdobFilterMarkerBlob(_hdobData);
+        _hdobMarkers = kit.buildMarkers(map, markerBlob);
         _hdobRenderSearPasses(map, passInfo);
         _hdobRenderTdr(map, passInfo);
         _hdobRenderAircraft(map, _hdobLayerVis.aircraft ? mapAircraft : []);
+        _hdobSyncLegend({
+            sonde: (markerBlob.dropsondes || []).some(function (d) { return d.lat != null && d.lon != null; }),
+            vdm: (markerBlob.vdms || []).some(function (x) { return x.lat != null && x.lon != null && x.t && !isNaN(Date.parse(_hdobX(x.t))); }),
+            aircraft: _hdobAircraftMarkers.length > 0,
+            searctr: _hdobSearDrawn.ctr > 0, searpk: _hdobSearDrawn.pk > 0, searPrelim: _hdobSearDrawn.prelim > 0
+        });
+        _hdobEyeSync();
         if (!_hdobFitDone) {
             // Anchor the initial view on the LATEST aircraft position — where the
             // live action is. Fitting the WHOLE track (takeoff → storm) put its
@@ -2030,9 +2124,46 @@
         ['mousedown', 'dblclick', 'wheel', 'touchstart', 'pointerdown'].forEach(function (ev) {
             el.addEventListener(ev, function (e) { e.stopPropagation(); }, { passive: true });
         });
-        host.appendChild(el); _hdobTdrKeyEl = el;
+        _hdobTrStack(map).appendChild(el); _hdobTdrKeyEl = el;
         return el;
     }
+
+    /** Top-right column inside the map: the eyewall-peaks preview, then the TDR key. */
+    function _hdobTrStack(map) {
+        var host = (map && map.getContainer) ? map.getContainer() : document.getElementById('recon-hdob-map');
+        var st = host.querySelector('.recon-hdob-trstack');
+        if (!st) { st = document.createElement('div'); st.className = 'recon-hdob-trstack'; host.appendChild(st); }
+        return st;
+    }
+
+    /** SEAR eyewall-peaks preview + full view (recon_eye.js): refreshed on every
+     *  render; hidden without SEAR, with the SEAR layer off, or with no eye
+     *  penetrations in the loaded flights. */
+    var _hdobEyeT = 0, _hdobEyeTimer = null;
+    function _hdobEyeSync() {
+        var RE = window.ReconEye;
+        if (!RE || !_hdobMap) return;
+        // archive playback renders 4x a second: refresh the still at most once a second
+        if (_hdobArchive && _hdobArchive.playing) {
+            var wait = 1000 - (Date.now() - _hdobEyeT);
+            if (wait > 0) {
+                if (!_hdobEyeTimer) _hdobEyeTimer = setTimeout(function () { _hdobEyeTimer = null; _hdobEyeSync(); }, wait);
+                return;
+            }
+        }
+        _hdobEyeT = Date.now();
+        try { RE.update({
+            host: _hdobMap.getContainer(), stack: _hdobTrStack(_hdobMap),
+            data: _hdobData, recsat: _hdobRecsat, kit: window._ReconKit,
+            // replay clock; at the end of the data every flight has landed
+            nowMs: (_hdobArchive && _hdobArchive.cur < _hdobArchive.t1) ? _hdobArchive.cur : Date.now(),
+            flightSel: _hdobFlightSel,
+            storm: { atcf: _hdobSearAtcf() || _hdobAtcf, name: _hdobName },
+            tailName: _hdobTailDisplay, sortieKey: _hdobAcId,
+            visible: !!_hdobLayerVis.sear, track: _ga
+        }); } catch (e) { try { console.warn('[recon-eye]', e); } catch (e2) {} }   // never break the map render
+    }
+    function _hdobEyeHide() { try { if (window.ReconEye) window.ReconEye.hide(); } catch (e) {} }
     /** Key for the picked analysis. It describes a field only once that field is on
      *  the map (img decoded); while its PNG loads or after it failed nothing is drawn,
      *  and the key says exactly that. */
@@ -2231,6 +2362,7 @@
     function _hdobRenderSearPasses(map, selPass) {
         for (var i = 0; i < _hdobSearMarkers.length; i++) { try { map.removeLayer(_hdobSearMarkers[i]); } catch (e) {} }
         _hdobSearMarkers = [];
+        _hdobSearDrawn = { pk: 0, ctr: 0, prelim: 0 };
         if (!_hdobLayerVis.sear) return;
         var sp = _hdobData && _hdobData.sear;
         var passes = (sp && sp.passes) || [];
@@ -2279,6 +2411,8 @@
             }
             // Peak: small ring + an always-on "123 kt N" label so the value and
             // its quadrant read off the map without hovering.
+            _hdobSearDrawn.pk++;
+            if (hasC) { _hdobSearDrawn.ctr++; if (prelim) _hdobSearDrawn.prelim++; }
             var mk = L.circleMarker([p.lat, p.lon],
                 { radius: isSel ? 6 : 4, color: PINK, weight: isSel ? 3 : 2, opacity: 0.95, fillColor: '#fff', fillOpacity: 0.9 });
             var rg = _hdobSearRange(p), det = _hdobSearDetail(p);

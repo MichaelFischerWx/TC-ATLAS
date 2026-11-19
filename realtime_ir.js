@@ -34207,6 +34207,12 @@
     function _rtFmtTime(iso) {
         return fmtUTC(iso, { sec: true });
     }
+    /** Recon times arrive with or without a zone ("2026-10-09T18:29:30"); read
+     *  them as UTC, never local. */
+    function _rtReconIso(t) {
+        t = String(t || '');
+        return (/[zZ]|[+-]\d\d:?\d\d$/.test(t)) ? t : t + 'Z';
+    }
     function _rtFmtLatLon(lat, lon) {
         if (lat == null || lon == null) return '—';
         return Math.abs(lat).toFixed(2) + (lat < 0 ? '°S' : '°N') + ' ' +
@@ -34744,14 +34750,27 @@
         // red ⊕ vanished on the red/magenta IR core, 2026-10-07). The newest fix is
         // large and labeled with its pressure + time; older fixes are small and
         // faded, joined in time order by a cased fix track.
-        var vdms = (blob.vdms || []).filter(function (x) { return x.lat != null && x.lon != null; })
+        // An undated fix can't be placed on this flight's timeline: the API once
+        // served weeks-old VDMs from the NHC "latest" slot with t = null, drawn as
+        // a live 958-mb fix track beside a training flight (2026-11-19).
+        var vdms = (blob.vdms || []).filter(function (x) { return x.lat != null && x.lon != null && x.t && !isNaN(Date.parse(_rtReconIso(x.t))); })
             .slice().sort(function (a, b) { return String(a.t || '').localeCompare(String(b.t || '')); });
-        if (vdms.length > 1) {
-            var vll = vdms.map(function (x) { return [x.lat, x.lon]; });
+        // Fix track: join consecutive fixes only within a sortie-scale gap (6 h),
+        // so separate missions or days don't read as one continuous center track.
+        var vruns = [], vrun = [];
+        for (var vi = 0; vi < vdms.length; vi++) {
+            if (vrun.length && Date.parse(_rtReconIso(vdms[vi].t)) - Date.parse(_rtReconIso(vdms[vi - 1].t)) > 6 * 3600000) {
+                vruns.push(vrun); vrun = [];
+            }
+            vrun.push([vdms[vi].lat, vdms[vi].lon]);
+        }
+        if (vrun.length) vruns.push(vrun);
+        vruns.forEach(function (vll) {
+            if (vll.length < 2) return;
             [L.polyline(vll, { color: '#111827', weight: 4.5, opacity: 0.55, interactive: false, pane: 'reconPane' }),
              L.polyline(vll, { color: '#f87171', weight: 2, opacity: 0.95, interactive: false, pane: 'reconPane' })]
                 .forEach(function (ln) { ln.addTo(map); out.push(ln); });
-        }
+        });
         for (var v = 0; v < vdms.length; v++) {
             var x = vdms[v], newest = (v === vdms.length - 1), vs = newest ? 20 : 13;
             var vlab = newest ? ((x.min_slp_hpa != null ? x.min_slp_hpa + ' mb ' : '') + (x.t ? fmtUTC(x.t, { date: false }) : '')).trim() : '';
@@ -35435,6 +35454,42 @@
                 remove: clear,
                 coversLon: function (lon) { return _mosaicCoversLon(lon); }
             };
+        },
+        // One IR frame's raw idx tiles for canvas renderers (the SEAR eyewall
+        // still, recon_eye.js). arch = {root, ts, zmax} from a recon-sat manifest
+        // (packed copy, encoded 160-330 K like every frame since 2026-07-02); else
+        // the live mosaic frame nearest atIso within 40 min. Resolves
+        // {ts, trange:[vmin,vmax], zmax, tile(z,x,y) -> Promise<Blob|null>} or null.
+        // idx 1..255 decodes as Tb = vmax - idx/255 * (vmax - vmin); 0 = no data.
+        irFrame: function (atIso, arch) {
+            function src(root, ts, trange, zmax) {
+                return { ts: ts, trange: trange, zmax: zmax,
+                         tile: function (z, x, y) { return _v3TileBlob(root + '/' + ts + '/' + z + '/' + x + '/' + y + '.png'); } };
+            }
+            if (arch && arch.root && arch.ts) {
+                var pin = {}; pin[arch.ts] = arch.zmax || 6;
+                _pinPackFrames('ir', pin);
+                return Promise.resolve(src(arch.root + '/ir', arch.ts, [160.0, 330.0], arch.zmax || 6));
+            }
+            return _rtFetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (j) {
+                    _irApplyTrange(j, 'ir');
+                    var f = (j && j.frames) || [];
+                    if (!f.length) return null;
+                    var want = atIso ? Date.parse(atIso) : NaN, best = f[f.length - 1], bd = 0;
+                    if (!isNaN(want)) {
+                        bd = Infinity;
+                        f.forEach(function (ts) {
+                            var s = String(ts), ms = Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12));
+                            if (Math.abs(ms - want) < bd) { bd = Math.abs(ms - want); best = ts; }
+                        });
+                    }
+                    if (bd > 40 * 60000) return null;
+                    var tr = (j.ir_trange && j.ir_trange[best]) || _IR_IDX_RANGE_LEGACY;
+                    return src(_ir2aRoot('ir'), String(best), [+tr[0], +tr[1]], _stormZmaxFor('ir', best));
+                })
+                .catch(function () { return null; });
         },
         // Brand watermark (logo + TC-ATLAS + tcatlas.org) for canvas exports —
         // the same helper every figure export on this page uses, so recon saves

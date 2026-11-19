@@ -883,6 +883,12 @@
     box-shadow: var(--shadow-1);
     backdrop-filter: blur(2px);
 }
+/* IR valid-time row of the map key: a small IR-gray swatch */
+.recon-hdob-legend-sat {
+    display: inline-block; width: 12px; height: 10px; border-radius: var(--radius-xs);
+    background: linear-gradient(to right, #f4f4f6, #6b6f78 55%, #121418);
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.35); vertical-align: -1px;
+}
 :root[data-theme="dark"] .recon-hdob-mapkey {
     background: rgba(15, 23, 42, 0.82);
     border-color: rgba(148, 163, 184, 0.28);
@@ -897,6 +903,110 @@
     box-shadow: var(--shadow-1);
 }
 :root[data-theme="dark"] .recon-hdob-tdrkey { background: rgba(15, 23, 42, 0.86); border-color: rgba(148, 163, 184, 0.28); color: #e2e8f0; }
+/* Top-right column inside the Live Flight map: the SEAR eyewall-peaks preview,
+   then the TDR key (static inside the column). */
+.recon-hdob-trstack {
+    position: absolute; right: 8px; top: 8px; z-index: 1050;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+    max-width: calc(100% - 64px); pointer-events: none;
+}
+.recon-hdob-trstack > * { pointer-events: auto; }
+.recon-hdob-trstack .recon-hdob-tdrkey { position: static; }
+
+/* SEAR eyewall peaks (recon_eye.js): map preview + full view. The preview and
+   the map square are always dark (IR); the dialog chrome follows the theme. */
+.recon-eye-preview {
+    display: flex; flex-direction: column; width: 172px; padding: 0; margin: 0;
+    border: 1px solid rgba(236, 72, 153, 0.7); border-radius: var(--radius);
+    overflow: hidden; background: rgba(15, 23, 42, 0.92); color: #e2e8f0;
+    box-shadow: var(--shadow-2); font: inherit; text-align: left; cursor: pointer;
+}
+.recon-eye-preview canvas { display: block; width: 100%; aspect-ratio: 1 / 1; }
+.recon-eye-pv-cap { display: block; padding: 4px 7px 5px; font-size: 10px; line-height: 1.35; }
+.recon-eye-preview:hover, .recon-eye-preview:focus-visible {
+    border-color: #ec4899; outline: none;
+    box-shadow: 0 0 0 2px rgba(236, 72, 153, 0.45), var(--shadow-2);
+}
+.recon-eye-exp {
+    font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    color: #be185d; vertical-align: 1px;
+}
+.recon-eye-preview .recon-eye-exp, :root[data-theme="dark"] .recon-eye-exp { color: #f9a8d4; }
+@media (max-width: 600px) {
+    .recon-eye-preview { width: 118px; }
+    .recon-eye-pv-cap { font-size: 9px; padding: 3px 5px 4px; }
+}
+
+.recon-eye-noscroll, .recon-eye-noscroll body { overflow: hidden; }
+.recon-eye-modal {
+    position: fixed; inset: 0; z-index: 10000; padding: 16px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(2, 6, 23, 0.62);
+}
+.recon-eye-modal[hidden] { display: none; }
+.recon-eye-panel {
+    display: flex; flex-direction: column; width: min(1200px, 100%); max-height: calc(100vh - 32px);
+    overflow: auto; background: var(--surface-raised); color: var(--text);
+    border: 1px solid var(--border-light); border-radius: var(--radius-lg); box-shadow: var(--shadow-3);
+}
+.recon-eye-head {
+    position: sticky; top: 0; z-index: 1; display: flex; align-items: flex-start; gap: 12px;
+    padding: 14px 16px 10px; background: var(--surface-raised); border-bottom: 1px solid var(--border-light);
+}
+.recon-eye-hd { flex: 1 1 auto; min-width: 0; }
+.recon-eye-title { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.3; }
+.recon-eye-status { margin-top: 3px; font-size: 13px; color: var(--text-dim); }
+.recon-eye-close {
+    flex: none; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+    border: 1px solid var(--border-light); border-radius: var(--radius); background: transparent; color: var(--text); cursor: pointer;
+}
+.recon-eye-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; padding: 14px 16px 16px; }
+.recon-eye-mapwrap { min-width: 0; }
+.recon-eye-canvas { display: block; max-width: 100%; border-radius: var(--radius-sm); background: #18202c; }
+.recon-eye-irnote { margin-top: 6px; font-size: 11px; line-height: 1.4; color: var(--text-dim); }
+.recon-eye-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; font-size: 12px; }
+.recon-eye-flights { display: flex; flex-wrap: wrap; gap: 6px; }
+.recon-eye-flights[hidden] { display: none; }
+.recon-eye-chip {
+    padding: 3px 9px; border: 1px solid var(--border-light); border-radius: var(--radius-pill);
+    background: transparent; color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+}
+.recon-eye-chip span { color: var(--text-dim); }
+.recon-eye-chip.on { background: var(--um-green); border-color: var(--um-green); color: #fff; }
+.recon-eye-chip.on span { color: rgba(255, 255, 255, 0.85); }
+.recon-eye-ctrls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.recon-eye-irstep { display: inline-flex; align-items: center; gap: 6px; }
+.recon-eye-irstep button, .recon-eye-save {
+    padding: 4px 9px; border: 1px solid var(--border-light); border-radius: var(--radius);
+    background: var(--surface); color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+}
+.recon-eye-irstep button:disabled { opacity: 0.4; cursor: default; }
+.recon-eye-irtime { min-width: 74px; font-size: 12px; text-align: center; }
+.recon-eye-legend { display: flex; flex-direction: column; gap: 10px; font-size: 12px; color: var(--text-dim); }
+.recon-eye-lrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.recon-eye-dot {
+    flex: none; width: 14px; height: 14px; border-radius: 50%; background: #ec4899;
+    border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.35);
+}
+.recon-eye-bar { display: inline-flex; padding-bottom: 13px; }
+.recon-eye-bar span { position: relative; width: 26px; height: 10px; margin-right: 2px; border-radius: var(--radius-xs); }
+.recon-eye-bar i, .recon-eye-irlab i { font-style: normal; font-size: 9px; color: var(--text-dim); }
+.recon-eye-bar i { position: absolute; top: 12px; left: 0; width: 100%; text-align: center; }
+.recon-eye-irwrap { display: inline-flex; flex-direction: column; gap: 2px; }
+.recon-eye-irbar { display: block; width: 180px; height: 10px; border-radius: var(--radius-xs); }
+.recon-eye-irlab { display: flex; justify-content: space-between; width: 180px; }
+.recon-eye-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.recon-eye-table caption { padding-bottom: 4px; text-align: left; font-size: 12px; font-weight: 600; color: var(--text-dim); }
+.recon-eye-table th, .recon-eye-table td { padding: 3px 6px; text-align: left; border-bottom: 1px solid var(--border-light); }
+.recon-eye-table thead th { font-size: 11px; font-weight: 600; color: var(--text-dim); }
+.recon-eye-table td span { font-size: 11px; color: var(--text-dim); }
+.recon-eye-note { margin: 0; font-size: 11px; line-height: 1.45; color: var(--text-dim); }
+@media (max-width: 860px) {
+    .recon-eye-modal { padding: 0; }
+    .recon-eye-panel { width: 100%; height: 100%; max-height: 100%; border-radius: 0; border: 0; }
+    .recon-eye-body { grid-template-columns: 1fr; padding: 12px 16px 16px; }
+    .recon-eye-title { font-size: 16px; }
+}
 .recon-hdob-tdrkey .tt { font-weight: 600; }
 .recon-hdob-tdrkey .exp { font-weight: 400; color: #db2777; font-size: 9px; }
 .recon-hdob-tdrkey .nav { display: flex; align-items: center; gap: 4px; margin: 3px 0; }

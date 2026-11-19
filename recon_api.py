@@ -1282,12 +1282,15 @@ def _live_blob_name(basin: str, tail: str, last_t: str) -> str:
     return f"{_LIVE_GCS_PREFIX}/{basin}/{last_t[:10]}/{tail}_{last_t.replace('-', '').replace(':', '')}.txt"
 
 
-def _live_gcs_put_async(name: str, text: str):
+def _live_gcs_put_async(name: str, text: str, metadata: dict | None = None):
     def _put():
         try:
             b = _get_recon_gcs_bucket()
             if b is not None:
-                b.blob(name).upload_from_string(text, content_type="text/plain")
+                blob = b.blob(name)
+                if metadata:
+                    blob.metadata = metadata
+                blob.upload_from_string(text, content_type="text/plain")
         except Exception as e:
             logger.warning("recon-live put %s failed: %s", name, e)
     threading.Thread(target=_put, daemon=True).start()
@@ -1398,7 +1401,7 @@ def _fetch_latest_hdob(atcf_id: str, now: datetime, since_iso: str = None) -> li
         return out
 
 
-_LIVE_VDM_KEEP: dict = {}        # GCS-style name -> {"text", "seen"}
+_LIVE_VDM_KEEP: dict = {}        # GCS-style name -> {"text", "lm" (slot Last-Modified epoch)}
 _VDM_KEY_ATCF = re.compile(r"VORTEX DATA MESSAGE\s+([A-Z]{2}\d{6})", re.I)
 _VDM_KEY_FIX = re.compile(r"^\s*A\.\s*(\d{1,2})/(\d{2}):?(\d{2}):?(\d{2})?", re.M)
 _VDM_KEY_U = re.compile(r"^\s*U\.\s*(\S+).*?\bOB\s*(\d+)", re.M | re.I)
@@ -1415,24 +1418,53 @@ def _live_vdm_name(basin: str, text: str, now: datetime):
             f"{a.group(1).upper()}_{fix}_{u.group(1).upper()}_OB{int(u.group(2)):02d}.txt")
 
 
+def _fetch_slot(url: str):
+    """(text, Last-Modified epoch or None) of a tgftp newest-bulletin slot."""
+    try:
+        import requests as _req
+        from email.utils import parsedate_to_datetime
+        r = _req.get(url, timeout=20)
+        r.raise_for_status()
+        lm = r.headers.get("Last-Modified")
+        return r.text, (parsedate_to_datetime(lm).timestamp() if lm else None)
+    except Exception as e:
+        logger.debug("recon slot fetch failed %s: %s", url, e)
+        return None, None
+
+
 def _fetch_latest_vdms(atcf_id: str, now: datetime) -> list:
     """Raw texts of every live VDM retained for this storm's basin: the ones in
     the tgftp slot NOW plus earlier ones (in-process + mirrored to GCS so all
     instances agree — the slot holds only the last VDM issued, so a second
-    aircraft's fix evicts the first long before the archive posts it)."""
+    aircraft's fix evicts the first long before the archive posts it).
+
+    Freshness is the slot file's Last-Modified, never the VDM's own "A." line:
+    the slot keeps the LAST VDM issued for weeks after the storm is gone, and a
+    VDM carries only day-of-month. Keying retention on today's date re-minted
+    Isaias's Oct 9 fixes (958 / 972 mb) as new live VDMs every day, with no
+    resolvable time, and mission mode pinned them to a Keesler training flight
+    (2026-11-19); Trudy's "A. 18/18:47Z" (Oct 18) also read as Nov 18."""
     basin = "EP" if atcf_id[:2].upper() in ("EP", "CP") else "AL"
-    for url, txt in _fetch_texts(_LATEST_VDM_FEEDS.get(basin, [])).items():
-        if not txt:
-            continue
-        name = _live_vdm_name(basin, txt, now)
+    keep_s = _LIVE_KEEP_H * 3600
+    urls = _LATEST_VDM_FEEDS.get(basin, [])
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max(1, len(urls))) as ex:
+            slots = list(ex.map(_fetch_slot, urls))
+    except Exception:
+        slots = [_fetch_slot(u) for u in urls]
+    for txt, lm in slots:
+        if not txt or lm is None or time.time() - lm > keep_s:
+            continue   # empty, undated, or a VDM from a storm long gone
+        name = _live_vdm_name(basin, txt, datetime.fromtimestamp(lm, timezone.utc))
         if not name:
             continue
         with _LIVE_KEEP_LOCK:
             prev = _LIVE_VDM_KEEP.get(name)
             # Same fix re-issued as a correction (CCA): keep the newest text.
             if prev is None or prev["text"] != txt:
-                _LIVE_VDM_KEEP[name] = {"text": txt, "seen": time.time()}
-                _live_gcs_put_async(name, txt)
+                _LIVE_VDM_KEEP[name] = {"text": txt, "lm": lm}
+                _live_gcs_put_async(name, txt, {"slot_lm": f"{lm:.0f}"})
     try:
         b = _get_recon_gcs_bucket()
         if b is not None:
@@ -1440,26 +1472,30 @@ def _fetch_latest_vdms(atcf_id: str, now: datetime) -> list:
             if c and (time.time() - c[0]) < _LIVE_GCS_LIST_TTL:
                 names = c[1]
             else:
-                names = set()
+                names = {}
                 for d in (now, now - timedelta(days=1)):
                     for bl in b.list_blobs(prefix=f"{_LIVE_GCS_PREFIX}/vdm/{basin}/{d.strftime('%Y-%m-%d')}/"):
-                        names.add(bl.name)
+                        try:
+                            names[bl.name] = float((bl.metadata or {}).get("slot_lm"))
+                        except (TypeError, ValueError):
+                            names[bl.name] = None   # pre-fix object: its slot age is unknown
                 _live_gcs_list_cache["vdm:" + basin] = (time.time(), names)
             with _LIVE_KEEP_LOCK:
-                missing = [n for n in names if n not in _LIVE_VDM_KEEP]
+                missing = [n for n, lm in names.items()
+                           if n not in _LIVE_VDM_KEEP and lm is not None and time.time() - lm <= keep_s]
             for n in missing:
                 txt = b.blob(n).download_as_text()
                 with _LIVE_KEEP_LOCK:
-                    _LIVE_VDM_KEEP.setdefault(n, {"text": txt, "seen": time.time()})
+                    _LIVE_VDM_KEEP.setdefault(n, {"text": txt, "lm": names[n]})
     except Exception as e:
         logger.warning("recon-live VDM sync failed: %s", e)
     # Every basin VDM: the caller attributes by ATCF id (or, in mission mode,
     # by proximity to the aircraft track) exactly as it does archive VDMs.
-    cutoff = time.time() - _LIVE_KEEP_H * 3600
+    cutoff = time.time() - keep_s
     out = []
     with _LIVE_KEEP_LOCK:
         for n in list(_LIVE_VDM_KEEP):
-            if _LIVE_VDM_KEEP[n]["seen"] < cutoff:
+            if _LIVE_VDM_KEEP[n]["lm"] < cutoff:
                 del _LIVE_VDM_KEEP[n]
             elif f"/vdm/{basin}/" in n:
                 out.append(_LIVE_VDM_KEEP[n]["text"])
@@ -2079,6 +2115,10 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 if not v:
                     continue
                 v["time"] = _resolve_vdm_time(v, year, sd, ed)
+                # A live fix must date inside this request's window; an unresolved
+                # day-of-month means it is not from these days at all.
+                if not v["time"] or v["time"] < since.strftime("%Y-%m-%dT%H:%M:%S"):
+                    continue
                 if (v.get("time"), (v.get("aircraft") or "").upper()) in _arch_keys:
                     continue   # archive copy already posted — it wins
                 _vdm_parsed.append(("live", v))
