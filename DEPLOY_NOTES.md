@@ -1,3 +1,31 @@
+# TC-ATLAS Site (tcatlas.org) — Deploy Notes
+
+The site is published by GitHub Actions: `.github/workflows/deploy-site.yml`
+runs on every push to `main` that touches the site and takes about a minute.
+It needs repo Settings > Pages > Source set to **GitHub Actions**.
+
+- **What it does.** `tools/site-build/build.mjs` copies the site into `_site/`
+  with comments and whitespace stripped from first-party JS and CSS (45% fewer
+  bytes over the wire) and a source map beside each file, then Pages serves
+  that. Names, file paths and `?v=` tokens are unchanged. Everything else is
+  copied as committed; Python, shell, Dockerfiles, plans and tests are left out.
+- **The repo is still the source.** Edit and commit as before; local
+  `python3 -m http.server` serves the unminified files. To see exactly what
+  will be published: `npm ci --prefix tools/site-build && node tools/site-build/build.mjs`,
+  then serve `_site/`.
+- **Which build is live:** `https://tcatlas.org/build-info.json` (commit + time).
+- **Usage log.** Each run's summary page (Actions tab > the run) ends with a
+  month-to-date table of deploys and the Actions minutes they count for.
+  Standard runners are free and uncapped while the repo is public.
+- **A backend-only push does not deploy.** The workflow's `paths-ignore` and
+  `NOT_SITE_*` in `build.mjs` list the same files; `node --test tools/site-build/`
+  fails if they drift.
+- **If a deploy fails** the site stays on the previous build. Re-run it from the
+  Actions tab, or run it by hand: Actions > Deploy site > Run workflow.
+- **To go back to the old way:** set Pages Source to "Deploy from a branch"
+  (`main`, `/ (root)`). The site is then served straight from the repo again,
+  unminified; nothing else needs to change.
+
 # TC-ATLAS API — Deploy Notes
 
 ## Deploy Script (`deploy.sh`)

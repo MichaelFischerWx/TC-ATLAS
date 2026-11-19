@@ -64,3 +64,8 @@ sear_job_ctx/
 
 # SEAR record v2 local build (bin/build_sear_hist_v2.py writes ~/Data/sear_hist_v2; symlink it here to serve locally)
 sear-hist/
+
+# Site build (tools/site-build/build.mjs): the published copy of the site and
+# the build tool's dependencies. Built fresh by .github/workflows/deploy-site.yml.
+_site/
+node_modules/

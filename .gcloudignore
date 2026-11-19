@@ -73,3 +73,9 @@ ir2a_webgl.html
 ir2a_anim.html
 mosaic_out/
 TC-ATLAS_revenue_model.xlsx
+
+# ── Site build output + its tooling (GitHub Pages only, never in the API image) ──
+_site/
+node_modules/
+tools/
+.github/
