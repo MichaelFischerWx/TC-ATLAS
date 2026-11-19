@@ -63,7 +63,7 @@
          from byte 0. Tokens MUST match the script tags below. -->
     <link rel="preload" as="script" href="tc_radar_app.js?v=20261117tk1">
     <link rel="preload" as="script" href="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0">
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20261104sd1">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20261119dl1">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261104sd1">
 </head>
 <body>
@@ -105,6 +105,8 @@
             <span class="dataset-version" title="TC-RADAR dataset version 4.0: post-processed merged and swath analyses, 1997&ndash;2025">Dataset v4.0</span>
             <!-- Composites left the top nav (it is a TC-RADAR mode); this is its entry point on the page. -->
             <button type="button" class="dataset-composites-btn" id="composites-btn" onclick="toggleCompositePanel()" title="Composite analyses across cases: filter by intensity, shear, tilt, motion and more"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>Composites</button>
+            <!-- The dataset's front door: files, checksums, examples, variable list. -->
+            <a class="dataset-download-btn" href="tc_radar_readme.html" title="Download the TC-RADAR v4.0 netCDF files and read the documentation"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>Download data &amp; docs</a>
         </div>
         <div class="map-toolbar" role="toolbar" aria-label="Case selection and filters">
             <div class="toolbar-group">
@@ -256,7 +258,7 @@
                 <div class="file-card"><h3>Merged Data</h3><p class="file-period">474 flights, 1997&ndash;2025</p><div class="file-size">7.1 GB</div><a href="https://cdn.tcatlas.org/tc-radar/v4.0/tc_radar_v4.0_xy_rel_merge.nc" class="download-btn" download>Download</a></div>
                 <div class="file-card"><h3>Swath Data</h3><p class="file-period">1,640 center passes, 1997&ndash;2025</p><div class="file-size">10.6 GB</div><a href="https://cdn.tcatlas.org/tc-radar/v4.0/tc_radar_v4.0_xy_rel_swath.nc" class="download-btn" download>Download</a></div>
             </div>
-            <p style="margin-top:1rem;text-align:center;font-size:0.875rem;color:var(--slate);">The previous release, v3m (1997&ndash;2024), remains at <a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/" target="_blank" rel="noopener" style="color:var(--blue-light);">NOAA AOML</a>.</p>
+            <p style="margin-top:1rem;text-align:center;font-size:0.875rem;color:var(--slate);">Earlier releases, such as v3m (1997&ndash;2024), are available on request.</p>
             <div class="usage-policy">
                 <h3>Usage Policy</h3>
                 <p>Users are free to download TC-RADAR. However, we request that you notify <strong>Dr. Michael Fischer</strong> (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu</a>) and NOAA's Hurricane Research Division radar team lead, <strong>Dr. Paul Reasor</strong> (<a href="mailto:paul.reasor@noaa.gov">paul.reasor@noaa.gov</a>), of the nature of your research project to ensure proper usage. Users should carefully examine data and apply additional QC consistent with their objectives.</p>

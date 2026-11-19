@@ -33,7 +33,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20261104sd1">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20261119dl1">
     <link rel="stylesheet" href="site_pages.css?v=20261031p6">
     <link rel="stylesheet" href="tc_radar_readme.css?v=20261119rd1">
 </head>
@@ -168,13 +168,13 @@ wget -c https://cdn.tcatlas.org/tc-radar/v4.0/tc_radar_v4.0_xy_rel_swath.nc
 <span class="c"># check both files against the published checksums</span>
 curl -O https://cdn.tcatlas.org/tc-radar/v4.0/SHA256SUMS.txt
 shasum -a 256 -c SHA256SUMS.txt      <span class="c"># Linux: sha256sum -c SHA256SUMS.txt</span></pre></div>
-            <p class="rd-small rd-muted" style="margin-top:8px;">Downloading from a script? Use <code>wget</code>, <code>curl</code>, or Python's <code>requests</code>. The site's bot protection rejects Python's built-in <code>urllib</code> unless you set a <code>User-Agent</code> header.</p>
+            <p class="rd-small rd-muted" style="margin-top:8px;">Downloading from a script? Use <code>wget</code>, <code>curl</code>, or Python's <code>requests</code>. The site's bot protection rejects Python's built-in <code>urllib</code> unless you set a <code>User-Agent</code> header, for example <code>urllib.request.Request(url, headers={"User-Agent": "tcradar-download"})</code>.</p>
 
             <div class="usage-policy">
                 <h3>Usage policy</h3>
                 <p>Users are free to download TC-RADAR. We ask that you tell <strong>Dr. Michael Fischer</strong> (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu</a>) and NOAA's Hurricane Research Division radar team lead, <strong>Dr. Paul Reasor</strong> (<a href="mailto:paul.reasor@noaa.gov">paul.reasor@noaa.gov</a>), about your research project so the data are used appropriately. Examine the analyses carefully and apply any additional quality control your work needs; see <a href="#issues">Known issues</a>.</p>
             </div>
-            <p class="rd-prev">The previous release, v3m (1997&ndash;2024), remains at <a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/" target="_blank" rel="noopener">NOAA AOML</a> with its <a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/TC_RADAR_README.pdf" target="_blank" rel="noopener">PDF README</a>.</p>
+            <p class="rd-prev">Earlier releases, such as v3m (1997&ndash;2024), are available on request from Michael Fischer (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu</a>).</p>
         </div>
     </section>
 
@@ -224,9 +224,9 @@ ncdump -h tc_radar_v4.0_xy_rel_merge.nc
 <span class="c"># the mission ID of every merged analysis</span>
 ncdump -v mission_ID tc_radar_v4.0_xy_rel_merge.nc</pre></div>
             <ul class="rd-notes">
-                <li>Gridded fields are stored as 16-bit integers with a <code>scale_factor</code>. xarray, netCDF4-python, and MATLAB's <code>ncread</code> unpack them and return missing values as NaN.</li>
+                <li>Gridded fields are stored as 16-bit integers with a <code>scale_factor</code>. xarray, netCDF4-python, and MATLAB's <code>ncread</code> all unpack them on read. xarray and <code>ncread</code> return missing values as NaN; netCDF4-python returns a masked array.</li>
                 <li>Find analyses by <code>mission_ID</code> and <code>time</code>, not by index. Case indices change between versions as analyses are added.</li>
-                <li>Identify storms by <code>tcid_ships</code> (the best-track ID). Some <code>storm_name</code> values are placeholders from the original analysis files, such as <code>TDR</code>, <code>CYCLONE</code>, or <code>INVEST</code>.</li>
+                <li>Identify storms by <code>tcid_ships</code> (the best-track ID, such as <code>AL162019</code>). Some <code>storm_name</code> values are placeholders from the original analysis files, such as <code>TDR</code>, <code>CYCLONE</code>, or <code>INVEST</code>. Flights into disturbances before they became tropical cyclones have <code>tcid_ships</code> set to <code>NAN</code>; see <a href="#issues">Known issues</a>.</li>
             </ul>
         </div>
     </section>
@@ -290,7 +290,7 @@ ncdump -v mission_ID tc_radar_v4.0_xy_rel_merge.nc</pre></div>
                     <p>ERA5 diagnostics from TC-PRIMED: profiles on 23 pressure levels (1000&ndash;50 hPa), area averages over four regions (0&ndash;300, 0&ndash;500, 0&ndash;800, and 200&ndash;800 km), sector means in 15&deg; azimuth sectors and 200-km radial bands, layer shear and helicity, cyclone phase space parameters, empirical and theoretical potential intensity, eddy flux convergence, and precipitable water in radial bins.</p>
                 </div>
             </div>
-            <div class="rd-callout">Because the sources changed, v4.0 environmental values differ from the SHIPS values in v3m. Don't mix the two versions in one analysis.</div>
+            <div class="rd-callout">Because the sources changed, v4.0 environmental values differ from v3m. For the same flights, <code>mpi_ships</code> is 8.6 kt higher on average and <code>shdc_ships</code> 0.8 kt higher, while best-track intensity is unchanged. Don't mix the two versions in one analysis.</div>
             <h3 class="rd-h3">Units and angle conventions</h3>
             <div class="rd-table-wrap">
                 <table class="rd-deftable">
@@ -301,7 +301,8 @@ ncdump -v mission_ID tc_radar_v4.0_xy_rel_merge.nc</pre></div>
                         <tr><td><code>sddc_ships</code>, <code>era5_shear_direction</code></td><td>Degrees, compass heading toward which the shear vector points: westerly shear = 90&deg;.</td></tr>
                         <tr><td><code>era5_azimuth</code></td><td>Degrees, mathematical convention: 0 = due east of the TC center, increasing counterclockwise.</td></tr>
                         <tr><td><code>vmax_ships</code>, <code>shdc_ships</code>, <code>mpi_ships</code></td><td>Knots. Gridded radar winds are in m s<sup>&minus;1</sup>.</td></tr>
-                        <tr><td><code>tc_tilt_*</code></td><td>Kilometers, relative to the 2-km TC center.</td></tr>
+                        <tr><td><code>tc_tilt_magnitude</code>, <code>tc_eastward_tilt</code>, <code>tc_northward_tilt</code></td><td>Kilometers, relative to the 2-km TC center.</td></tr>
+                        <tr><td><code>mpi_ships</code></td><td>The empirical, SHIPS-style potential intensity: identical to <code>era5_potential_intensity_empirical</code>, although its description in the file says theoretical. The Emanuel value is <code>era5_potential_intensity_theoretical</code>.</td></tr>
                         <tr><td><code>ohc_ships</code></td><td>kJ cm<sup>&minus;2</sup>, relative to the 26 &deg;C isotherm; 0 where the surface is cooler than 26 &deg;C.</td></tr>
                     </tbody>
                 </table>
@@ -315,11 +316,11 @@ ncdump -v mission_ID tc_radar_v4.0_xy_rel_merge.nc</pre></div>
             <h3 class="rd-h3">Grids</h3>
             <p>Analyses use Cartesian grids with 2-km horizontal and 0.5-km vertical spacing from 0 to 18 km height (37 levels). The recentered grids span &plusmn;200 km (201 &times; 201 points) about the TC center. The 0-km level is kept for grid continuity only; it is missing everywhere because the Doppler analyses contain no valid data at the surface.</p>
             <h3 class="rd-h3">Finding the center</h3>
-            <p>The TC center is found with a weighted circulation maximization (WCM) method (Fischer et al. 2024). For a series of trial centers, the storm-relative wind direction at each grid point is compared with purely tangential flow about that trial center. The best center is the one with the smallest mean difference. Each point's mismatch is weighted by wind speed and by distance from the trial center, so strong winds near the center count most. The search runs for every swath and merged analysis, at every height, which gives the center profile (<code>tc_center_latitudes</code>, <code>tc_center_longitudes</code>), the radius of maximum wind profile (<code>tc_rmw</code>), and the vortex tilt relative to the 2-km center (<code>tc_tilt_*</code>). Where coverage is too sparse to fix a center, these values are missing.</p>
+            <p>The TC center is found with a weighted circulation maximization (WCM) method (Fischer et al. 2024). For a series of trial centers, the storm-relative wind direction at each grid point is compared with purely tangential flow about that trial center. The best center is the one with the smallest mean difference. Each point's mismatch is weighted by wind speed and by distance from the trial center, so strong winds near the center count most. The search runs for every swath and merged analysis, at every height, which gives the center profile (<code>tc_center_latitudes</code>, <code>tc_center_longitudes</code>), the radius of maximum wind profile (<code>tc_rmw</code>), and the vortex tilt relative to the 2-km center (<code>tc_tilt_magnitude</code>, <code>tc_tilt_direction</code>, <code>tc_eastward_tilt</code>, <code>tc_northward_tilt</code>). Where coverage is too sparse to fix a center, these values are missing.</p>
             <h3 class="rd-h3">Building merged analyses</h3>
             <p>Each swath from a flight is first recentered on its own 2-km center, and the recentered swaths are averaged into the merged analysis. A revised center is then estimated from the merged tangential wind field; its greater azimuthal coverage should give a more accurate center than any single swath.</p>
             <h3 class="rd-h3">Core-averaged wind and shear</h3>
-            <p>The merged file holds vertical profiles of the wind averaged over the TC core and of its vertical shear (<code>core_*</code>; earlier versions called this local shear). Averaging radii run from 25 to 100 km in 5-km steps (<code>core_radii</code>). A value is computed only where at least half of the points in every geographic quadrant (northwest, southwest, southeast, northeast) hold valid data, so small radii have values more often than large ones. The mean and minimum quadrant coverage are stored alongside (<code>core_mean_quadrant_coverage</code>, <code>core_minimum_quadrant_coverage</code>). Use these profiles with great caution.</p>
+            <p>The merged file holds vertical profiles of the wind averaged over the TC core and of its vertical shear (<code>core_*</code>; the v3 README called this local shear). Averaging radii run from 25 to 100 km in 5-km steps (<code>core_radii</code>). A value is computed only where at least half of the points in every geographic quadrant (northwest, southwest, southeast, northeast) hold valid data, so small radii have values more often than large ones. The mean and minimum quadrant coverage are stored alongside (<code>core_mean_quadrant_coverage</code>, <code>core_minimum_quadrant_coverage</code>). Use these profiles with great caution.</p>
             <h3 class="rd-h3">Quality control</h3>
             <p>Quality control of the raw radar data (Level 1a) balances keeping as much meteorological signal as possible against removing non-meteorological artifacts; removing all artifacts would also remove real data. Because coverage matters for most research uses, the QC behind the Level 2 analyses in TC-RADAR does not aim to remove every artifact. The production of the Level 2 analyses since 2020 is described in the <a href="https://www.aoml.noaa.gov/wp-content/uploads/2023/04/README_radar_dataset.pdf" target="_blank" rel="noopener">HRD radar data README</a>.</p>
         </div>
@@ -344,6 +345,10 @@ ncdump -v mission_ID tc_radar_v4.0_xy_rel_merge.nc</pre></div>
                 <div class="rd-callout-title">Placeholder storm names</div>
                 Some <code>storm_name</code> values come straight from the original analysis files and are not names, for example <code>TDR</code>, <code>CYCLONE</code>, <code>INVEST</code>, or <code>PTC09</code>. Use <code>tcid_ships</code> to identify the storm.
             </div>
+            <div class="rd-callout">
+                <div class="rd-callout-title">Pre-genesis flights have no track or environment data</div>
+                Flights into disturbances before they became tropical cyclones (15 merged and 48 swath analyses, for example the precursor of Fay on 14 August 2008) have <code>tcid_ships</code> set to <code>NAN</code> and no best-track or environmental values at any lag.
+            </div>
         </div>
     </section>
 
@@ -355,13 +360,13 @@ ncdump -v mission_ID tc_radar_v4.0_xy_rel_merge.nc</pre></div>
                     <div class="changelog-date">v4.0 &middot; Nov 2026</div>
                     <div class="changelog-text">
                         <ul>
-                            <li>Adds the 2025 season and a few earlier flights: 1,640 swath and 474 merged analyses (v3m had 1,510 and 436).</li>
+                            <li>Adds the 2025 season (37 flights) and one 2019 flight, Tropical Storm Nestor (<code>191018I1</code>): 1,640 swath and 474 merged analyses (v3m had 1,510 and 436). No analyses were removed.</li>
                             <li>One file per analysis type; v3m split each type into two year ranges.</li>
                             <li>Track values now come from IBTrACS and environmental values from ERA5 via TC-PRIMED, replacing the SHIPS developmental data. The <code>*_ships</code> names are kept.</li>
-                            <li>Adds 44 ERA5 environmental variables (<code>era5_*</code>), storm type (<code>stype_ships</code>), and land masks (<code>land_mask</code>, <code>recentered_land_mask</code>, <code>land_fraction</code>).</li>
-                            <li>Ocean heat content from GLORYS12V1, in kJ cm<sup>&minus;2</sup>.</li>
+                            <li>Adds 44 ERA5 environmental variables (<code>era5_*</code>), a CF <code>time</code> variable, and land masks (<code>land_mask</code>, <code>recentered_land_mask</code>, <code>land_fraction</code>).</li>
+                            <li><code>mpi_ships</code> is now the ERA5 empirical potential intensity, 8.6 kt higher on average than in v3m. Ocean heat content now comes from GLORYS12V1, in kJ cm<sup>&minus;2</sup>.</li>
                             <li>The 0-km level is set to missing; the analyses contain no valid surface data.</li>
-                            <li>Case indices differ from v3m. Match analyses by mission ID and time.</li>
+                            <li>Case indices match v3m through 2019 (the first 710 swath and 215 merged analyses) and shift after the added 2019 flight. Match analyses by mission ID and time.</li>
                         </ul>
                     </div>
                 </div>

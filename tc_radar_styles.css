@@ -1963,6 +1963,25 @@ footer a:hover { text-decoration: underline; }
     cursor: pointer;
 }
 .dataset-stats-strip .dataset-composites-btn:hover { border-color: var(--um-green); }
+/* The dataset's download / documentation entry point: the one filled button
+   in the strip, so it reads as the way to get the data. */
+.dataset-stats-strip .dataset-download-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 16px;
+    font: 600 0.875rem 'DM Sans', sans-serif;
+    color: #ffffff;
+    background: var(--um-green);
+    border: 1px solid var(--um-green);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-1);
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+}
+.dataset-stats-strip .dataset-download-btn:hover { background: var(--um-green-deep); border-color: var(--um-green-deep); }
+.dataset-stats-strip .dataset-download-btn:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .dataset-stats-strip .dataset-version {
     margin-left: auto;
     background: rgba(0, 229, 255, 0.15);
@@ -1975,6 +1994,7 @@ footer a:hover { text-decoration: underline; }
 }
 @media (max-width: 600px) {
     .dataset-stats-strip { padding: 4px 14px; font-size: 0.6875rem; gap: 6px; }
+    .dataset-stats-strip .dataset-download-btn { padding: 5px 12px; font-size: 0.8125rem; }
 }
 
 /* ── Mobile nav: hamburger menu ──────────────────────────── */
