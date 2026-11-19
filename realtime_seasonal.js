@@ -6031,50 +6031,67 @@
         var xPlot = xs.map(function (d) { return d + '-15'; });
         var prelimSlice = slice(prelim);
 
-        // Mark preliminary points distinctly on each trace
-        function styledTrace(name, color, ys, dashed) {
+        // Two decimals everywhere the values surface (hover, end labels,
+        // saved data). Signed text is built here, not with %{y:+.2f}:
+        // Plotly 2.27 drops a format with the "+" flag and prints the raw
+        // float (-0.44330000000000036).
+        function r2(val) {
+            return (val === null || val === undefined || !isFinite(val))
+                ? null : Math.round(val * 100) / 100;
+        }
+        function signed(val) {
+            if (val === null) return '';
+            var s = Math.abs(val).toFixed(2);
+            return (val > 0.004 ? '+' : val < -0.004 ? '−' : '') + s;
+        }
+
+        // One legend entry per index. The preliminary (month-to-date)
+        // value joins its line with a dotted link and an open circle, in
+        // the same legend group so toggling the index hides both.
+        var endPts = [];
+        function styledTrace(name, color, ysRaw) {
+            var ys = ysRaw.map(r2);
             var solidX = [], solidY = [], prelimX = [], prelimY = [];
             for (var i = 0; i < ys.length; i++) {
                 if (prelimSlice[i]) { prelimX.push(xPlot[i]); prelimY.push(ys[i]); }
                 else { solidX.push(xPlot[i]); solidY.push(ys[i]); }
             }
             var out = [{
-                type: 'scatter', mode: 'lines+markers',
-                x: solidX, y: solidY,
-                line: { color: color, width: 2, dash: dashed ? 'dot' : 'solid' },
-                marker: { size: 4, color: color },
-                name: name,
-                hovertemplate: name + ' · %{x|%Y-%m}: %{y:+.2f} °C<extra></extra>',
+                type: 'scatter', mode: 'lines',
+                x: solidX, y: solidY, customdata: solidY.map(signed),
+                line: { color: color, width: 2 },
+                name: name, legendgroup: name,
+                hovertemplate: name + '  <b>%{customdata} °C</b><extra></extra>',
             }];
-            if (prelimX.length) {
-                // Dotted link from the last finalized month to the
-                // preliminary star(s), so the star reads as the line's
-                // next point instead of a marker floating beside it.
-                var lastX = solidX.length ? solidX[solidX.length - 1] : null;
-                var lastY = solidY.length ? solidY[solidY.length - 1] : null;
-                if (lastX !== null && lastY !== null && prelimY[0] !== null) {
+            var lastX = null, lastY = null;
+            for (var j = solidY.length - 1; j >= 0; j--) {
+                if (solidY[j] !== null) { lastX = solidX[j]; lastY = solidY[j]; break; }
+            }
+            var end = { name: name, color: color, x: lastX, y: lastY, prelim: false };
+            if (prelimX.length && prelimY[prelimY.length - 1] !== null) {
+                if (lastX !== null) {
                     out.push({
                         type: 'scatter', mode: 'lines',
-                        x: [lastX].concat(prelimX),
-                        y: [lastY].concat(prelimY),
+                        x: [lastX].concat(prelimX), y: [lastY].concat(prelimY),
                         line: { color: color, width: 1.5, dash: 'dot' },
-                        legendgroup: name + ' (P)',
-                        showlegend: false, hoverinfo: 'skip',
+                        legendgroup: name, showlegend: false, hoverinfo: 'skip',
                     });
                 }
                 out.push({
                     type: 'scatter', mode: 'markers',
-                    x: prelimX, y: prelimY,
-                    marker: {
-                        symbol: 'star-open', size: 12,
-                        color: color, line: { color: color, width: 2 },
-                    },
-                    legendgroup: name + ' (P)',
-                    name: name + ' (P)',
+                    x: prelimX, y: prelimY, customdata: prelimY.map(signed),
+                    cliponaxis: false,
+                    marker: { symbol: 'circle-open', size: 8,
+                              color: color, line: { color: color, width: 2 } },
+                    legendgroup: name, showlegend: false, name: name,
                     hovertemplate: name +
-                        ' · %{x|%Y-%m}: %{y:+.2f} °C (preliminary)<extra></extra>',
+                        '  <b>%{customdata} °C</b> (month to date)<extra></extra>',
                 });
+                end = { name: name, color: color, prelim: true,
+                        x: prelimX[prelimX.length - 1],
+                        y: prelimY[prelimY.length - 1] };
             }
+            if (end.y !== null) endPts.push(end);
             return out;
         }
 
@@ -6089,18 +6106,72 @@
         var titleTag = (v === 'sst_dt') ? ' — detrended'
                      : (v === 'sst_rel') ? ' — relative SST'
                      : '';
-        // ENSO ±0.5 °C reference lines stay in every mode. The tab defines
-        // ENSO on the RELATIVE anomaly (the default here); in Raw and
-        // Detrended they are eyeballing guides.
         var idxNarrow = _seasNarrow();
         var idxTitle = 'Atlantic + Pacific climate indices' + titleTag;
+
+        // Latest value of each index, printed just right of the plot (the
+        // lines end at its right edge) in the line's color. Paper x, not
+        // data x: a data-anchored annotation widens the x autorange.
+        // Labels closer than one text line apart are pushed apart (they
+        // still point at their own line by color).
+        var yLo = 0.5 * -1, yHi = 0.5;
+        traces.forEach(function (t) {
+            (t.y || []).forEach(function (yy) {
+                if (yy === null) return;
+                if (yy < yLo) yLo = yy;
+                if (yy > yHi) yHi = yy;
+            });
+        });
+        var plotPx = Math.max(160, (el.clientHeight || 440) - 150);
+        var minSep = (yHi - yLo) * 1.1 * 15 / plotPx;
+        endPts.sort(function (a, b) { return a.y - b.y; });
+        var placed = endPts.map(function (p) { return p.y; });
+        for (var pass = 0; pass < 4; pass++) {
+            for (var k = 1; k < placed.length; k++) {
+                var gap = placed[k] - placed[k - 1];
+                if (gap < minSep) {
+                    var push = (minSep - gap) / 2;
+                    placed[k] += push; placed[k - 1] -= push;
+                }
+            }
+        }
+        var endLabels = endPts.map(function (p, k) {
+            return {
+                xref: 'paper', yref: 'y', x: 1, y: placed[k],
+                text: '<b>' + signed(p.y) + '</b>', showarrow: false,
+                xanchor: 'left', yanchor: 'middle', xshift: 8,
+                font: { color: p.color, size: 12 },
+            };
+        });
+
+        // ENSO ±0.5 °C thresholds stay in every mode, labeled in place.
+        // The tab defines ENSO on the RELATIVE anomaly (the default here);
+        // in Raw and Detrended they are eyeballing guides.
+        function ensoLabel(y, text, color, anchor) {
+            return { xref: 'paper', yref: 'y', x: 0.005, y: y, text: text,
+                     showarrow: false, xanchor: 'left', yanchor: anchor,
+                     bgcolor: BRAND.hoverBg, borderpad: 1,
+                     font: { color: color, size: 11 } };
+        }
         var layout = {
             title: { text: idxNarrow ? 'Climate indices' + titleTag : idxTitle,
                      font: { size: idxNarrow ? 13 : 14 } },
-            xaxis: { zeroline: false },
-            yaxis: { title: 'SST ' + vLabel, zeroline: true,
-                     zerolinecolor: BRAND.gridZero },
-            margin: { l: 64, r: 18, t: 52, b: 60 },
+            // Pinned to the data: a markers trace makes Plotly pad the
+            // autorange by 5%, which left most of a year blank on the
+            // right of a 10-year window.
+            xaxis: { zeroline: false, showgrid: false,
+                     range: [xPlot[0], xPlot[xPlot.length - 1]],
+                     hoverformat: '%b %Y',
+                     showspikes: true, spikemode: 'across', spikesnap: 'cursor',
+                     spikethickness: 1, spikedash: 'dot',
+                     spikecolor: BRAND.gridZero,
+                     showline: true, linecolor: BRAND.grid, ticks: 'outside',
+                     tickcolor: BRAND.grid, ticklen: 4 },
+            yaxis: { title: { text: 'SST ' + vLabel, standoff: 8 },
+                     zeroline: true, zerolinecolor: BRAND.gridZero,
+                     zerolinewidth: 1, gridcolor: BRAND.grid,
+                     tickformat: '.1f', ticksuffix: ' ' },
+            margin: { l: 64, r: 52, t: 52, b: idxNarrow ? 96 : 44 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: BRAND.plotBg,
             font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
@@ -6113,30 +6184,38 @@
                 bordercolor: BRAND.hoverBorder,
                 font: { color: BRAND.hoverText,
                         family: 'DM Sans, system-ui, sans-serif',
-                        size: 11 },
+                        size: 12 },
             },
-            legend: { font: { size: 13 }, orientation: 'h',
-                      yanchor: 'top', y: -0.18,
+            // On a phone the legend wraps to two rows; start it below the
+            // tcatlas.org mark (30 px under the plot) instead of on it.
+            legend: { font: { size: 12 }, orientation: 'h',
+                      x: 0, xanchor: 'left', yanchor: 'top',
+                      y: idxNarrow ? -46 / Math.max(120, (el.clientHeight || 340) - 52 - 96)
+                                   : -0.1,
+                      itemclick: 'toggle', itemdoubleclick: 'toggleothers',
                       bgcolor: 'rgba(0,0,0,0)' },
             shapes: [
                 {type: 'line', xref: 'paper', x0: 0, x1: 1,
-                 yref: 'y', y0: 0.5, y1: 0.5,
-                 line: {color: 'rgba(233,85,79,0.35)', width: 1, dash: 'dot'}},
+                 yref: 'y', y0: 0.5, y1: 0.5, layer: 'below',
+                 line: {color: 'rgba(233,85,79,0.45)', width: 1, dash: 'dash'}},
                 {type: 'line', xref: 'paper', x0: 0, x1: 1,
-                 yref: 'y', y0: -0.5, y1: -0.5,
-                 line: {color: 'rgba(80,140,210,0.35)', width: 1, dash: 'dot'}},
+                 yref: 'y', y0: -0.5, y1: -0.5, layer: 'below',
+                 line: {color: 'rgba(58,141,222,0.45)', width: 1, dash: 'dash'}},
             ],
-            annotations: _watermarkAnnotations(),
+            annotations: _watermarkAnnotations()
+                .concat([ensoLabel(0.5, 'El Niño +0.5', 'rgba(233,85,79,0.85)', 'bottom'),
+                         ensoLabel(-0.5, 'La Niña −0.5', 'rgba(58,141,222,0.9)', 'top')])
+                .concat(endLabels),
         };
-        // Say what the anomalies are relative to and what the dotted lines
-        // mean, so a saved PNG stands on its own. A phone shows the title
-        // alone (seven wrapped credit lines left no room for the plot); its
-        // saves still get the full lines.
+        // Say what the anomalies are relative to and what the open circle
+        // means, so a saved PNG stands on its own (one status line). A
+        // phone shows the title alone; its saves still get the line.
         var idxCredit = [
-            (v === 'sst_dt') ? 'OISST departures from each month\'s linear trend'
+            ((v === 'sst_dt') ? 'OISST departures from each month\'s linear trend'
             : (v === 'sst_rel') ? 'OISST anomalies vs 1991-2020, ' + _relativeSstShort()
-            : 'OISST anomalies vs 1991-2020',
-            'dotted: ±0.5 °C ENSO thresholds · (P) preliminary'];
+            : 'OISST anomalies vs 1991-2020') +
+            (endPts.some(function (p) { return p.prelim; })
+                ? ' · open circle: month to date' : '')];
         if (!idxNarrow) _applyDataCredit(layout, idxCredit, el);
         seasReact(el, traces, layout,
                      { responsive: true, displaylogo: false });
