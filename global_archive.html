@@ -89,7 +89,7 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20261117tk1">
+    <link rel="preload" as="script" href="global_archive.js?v=20261124png1">
     <link rel="preload" as="script" href="assets/vendor/maplibre5/maplibre-gl.js?v=5.24.0">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261119dl1">
@@ -605,7 +605,7 @@
                                 <button id="ir-follow-btn" class="ga-btn ga-btn-sm ir-follow-btn active" onclick="toggleIRFollow()" title="Lock to storm center">&#8982;</button>
                                 <button id="ir-track-toggle-btn" class="ga-btn ga-btn-sm ir-follow-btn active" onclick="toggleTrackOverlay()" title="Show/hide track" aria-label="Show or hide the track"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg></button>
                                 <button id="ir-gif-btn" class="ga-btn ga-btn-sm ir-follow-btn" onclick="openGifSettings()" title="Export GIF">GIF</button>
-                                <button id="ir-png-btn" class="ga-btn ga-btn-sm ir-follow-btn" onclick="saveCurrentFramePng()" title="Save current frame as PNG (IR + radar + watermark)">PNG</button>
+                                <button id="ir-png-btn" class="ga-btn ga-btn-sm ir-follow-btn" onclick="saveCurrentFramePng()" title="Save current frame as PNG (IR + every overlay on the map + watermark)">PNG</button>
                             </div>
                             <div class="ir-bar-row2">
                                 <span class="ir-cmap-label">IR Colormaps:</span>
@@ -1830,7 +1830,7 @@
     <script defer src="pardig_total.js?v=20261116rr1"></script>
     <!-- Best-track loader: reads the packed IBTrACS chunks (a quarter of the bytes). -->
     <script defer src="tc_tracks.js?v=20261117tk1"></script>
-    <script defer src="global_archive.js?v=20261117tk1"></script>
+    <script defer src="global_archive.js?v=20261124png1"></script>
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
