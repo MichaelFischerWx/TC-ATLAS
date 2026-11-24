@@ -9934,13 +9934,610 @@ function _gifCleanup() {
 }
 
 
-// ── STATIC PNG EXPORT (current frame, IR + radar + watermark) ──────
+// ── LIVE-MAP OVERLAY REPLAY (for the static PNG) ───────────────────
 //
-// Mirrors the GIF composer's per-frame layout for a single frame, with
-// two additions: the live NEXRAD overlay (if active) drawn on top of the
-// IR base, and a prominent TC-ATLAS watermark. Inherits the toggle state
-// of the GIF settings panel for intensity-chart/coastlines/models so the
-// PNG matches whatever the user has set up for animated export.
+// The detail map is MapLibre behind the lflet_gl facade. What the user sees
+// is the GL layers (vectors and image overlays) in MapLibre's draw order,
+// then the DOM panes (custom canvas layers such as the recon barbs) and the
+// DOM markers (circle markers, divIcons) above them. _pngLiveOverlays
+// replays all of that into the PNG's lat/lon frame, so whatever overlay is
+// switched on (model forecasts, recon, sondes, VDM fixes, wind radii,
+// microwave, radar, rain, the IR context) is saved without the export
+// knowing about each one. Paint (colour, width, opacity, dashes), draw order
+// and visibility are read back from MapLibre itself, so the PNG follows
+// filter toggles and restyles with no extra wiring.
+
+var _PNG_MERC_LAT = 85.05112878;
+function _pngMercY(lat) {
+    var r = Math.max(-_PNG_MERC_LAT, Math.min(_PNG_MERC_LAT, lat)) * Math.PI / 180;
+    return Math.log(Math.tan(Math.PI / 4 + r / 2));
+}
+
+/** Evaluate the slice of MapLibre's expression language the facade writes
+ *  (get / has / coalesce / == / != / ! / all / any / literal) against a
+ *  feature's properties. Plain values (numbers, colours, a numeric dash
+ *  array) pass through; an expression we don't model gives undefined, so
+ *  the caller falls back to MapLibre's default. */
+function _pngExpr(v, props) {
+    if (!Array.isArray(v) || typeof v[0] !== 'string') return v;
+    var arg = function (k) { return typeof k === 'string' ? (props ? props[k] : undefined) : _pngExpr(k, props); };
+    var i;
+    switch (v[0]) {
+        case 'get': return props ? props[v[1]] : undefined;
+        case 'has': return !!props && props[v[1]] !== undefined;
+        case 'literal': return v[1];
+        case 'coalesce':
+            for (i = 1; i < v.length; i++) { var r = _pngExpr(v[i], props); if (r != null) return r; }
+            return null;
+        case '==': return arg(v[1]) === _pngExpr(v[2], props);
+        case '!=': return arg(v[1]) !== _pngExpr(v[2], props);
+        case '!': return !_pngExpr(v[1], props);
+        case 'all': for (i = 1; i < v.length; i++) { if (!_pngExpr(v[i], props)) return false; } return true;
+        case 'any': for (i = 1; i < v.length; i++) { if (_pngExpr(v[i], props)) return true; } return false;
+    }
+    return undefined;
+}
+
+/** GeoJSON geometry → coordinate runs a line layer strokes (polygon rings included). */
+function _pngLines(g) {
+    if (!g) return [];
+    switch (g.type) {
+        case 'LineString': return [g.coordinates];
+        case 'MultiLineString': case 'Polygon': return g.coordinates;
+        case 'MultiPolygon': return [].concat.apply([], g.coordinates);
+        case 'GeometryCollection': return [].concat.apply([], g.geometries.map(_pngLines));
+    }
+    return [];
+}
+/** GeoJSON geometry → polygons (each a list of rings) a fill layer paints. */
+function _pngPolys(g) {
+    if (!g) return [];
+    if (g.type === 'Polygon') return [g.coordinates];
+    if (g.type === 'MultiPolygon') return g.coordinates;
+    if (g.type === 'GeometryCollection') return [].concat.apply([], g.geometries.map(_pngPolys));
+    return [];
+}
+/** GeoJSON geometry → positions a circle layer draws. */
+function _pngPoints(g) {
+    if (!g) return [];
+    if (g.type === 'Point') return [g.coordinates];
+    if (g.type === 'MultiPoint') return g.coordinates;
+    return [];
+}
+
+/** Alpha of a computed CSS colour (0 for 'transparent'). */
+function _pngAlpha(c) {
+    if (!c || c === 'transparent') return 0;
+    var m = /rgba?\(([^)]*)\)/.exec(c);
+    if (!m) return 1;
+    var p = m[1].split(/[\s,/]+/).filter(Boolean);
+    return p.length > 3 ? parseFloat(p[3]) : 1;
+}
+
+/** First outset box-shadow with no offset or blur and a positive spread,
+ *  i.e. the solid outline ring markers use ("0 0 0 1.5px #111827"). */
+function _pngSpreadShadow(v) {
+    if (!v || v === 'none') return null;
+    var parts = v.split(/,(?![^(]*\))/);
+    for (var i = 0; i < parts.length; i++) {
+        var p = parts[i].trim();
+        if (/\binset\b/.test(p)) continue;
+        var n = (p.match(/-?[\d.]+px/g) || []).map(parseFloat);
+        var col = (/rgba?\([^)]*\)|#[0-9a-f]{3,8}\b/i.exec(p) || [])[0];
+        if (col && n.length >= 4 && !n[0] && !n[1] && !n[2] && n[3] > 0) return { c: col, s: n[3] };
+    }
+    return null;
+}
+
+function _pngRoundRect(ctx, x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, w / 2, h / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+}
+
+/** True if drawing `src` would taint a canvas (cross-origin, no CORS). One
+ *  tainted draw makes the whole PNG unsaveable, so such a layer is left out. */
+function _pngTaints(src) {
+    try {
+        var c = document.createElement('canvas');
+        c.width = c.height = 1;
+        var x = c.getContext('2d');
+        x.drawImage(src, 0, 0, 1, 1);
+        x.getImageData(0, 0, 1, 1);
+        return false;
+    } catch (e) { return true; }
+}
+function _pngLoadImage(url) {
+    return new Promise(function (resolve, reject) {
+        var img = new Image();
+        if (!/^(data|blob):/i.test(url)) img.crossOrigin = 'anonymous';
+        img.onload = function () {
+            if (_pngTaints(img)) reject(new Error('cross-origin image')); else resolve(img);
+        };
+        img.onerror = function () { reject(new Error('image failed to load')); };
+        img.src = url;
+    });
+}
+
+/** Draw an image whose rows are linear in Web Mercator y between n and s
+ *  (every image overlay on the GL map is shown that way) into the PNG's
+ *  linear-latitude frame, one output row at a time. */
+function _pngMercRaster(ctx, src, sw, sh, n, s, w, e, alpha, crisp, o) {
+    var x0 = o.geoToPx(n, w).x, x1 = o.geoToPx(n, e).x;
+    var dx0 = Math.max(o.rect.x, x0), dx1 = Math.min(o.rect.x + o.rect.w, x1);
+    if (!(dx1 > dx0) || !sw || !sh) return;
+    var sx0 = (dx0 - x0) / (x1 - x0) * sw, sxw = (dx1 - dx0) / (x1 - x0) * sw;
+    var yTop = Math.max(o.rect.y, Math.floor(o.geoToPx(n, w).y));
+    var yBot = Math.min(o.rect.y + o.rect.h, Math.ceil(o.geoToPx(s, w).y));
+    var mN = _pngMercY(n), mS = _pngMercY(s);
+    ctx.globalAlpha = alpha;
+    ctx.imageSmoothingEnabled = !crisp;
+    for (var y = yTop; y < yBot; y++) {
+        var f = (mN - _pngMercY(o.latAt(y + 0.5))) / (mN - mS);
+        if (!(f >= 0 && f < 1)) continue;
+        ctx.drawImage(src, sx0, Math.floor(f * sh), sxw, 1, dx0, y, dx1 - dx0, 1);
+    }
+}
+
+/** Snapshot a DOM marker's visible boxes, text and images (client coords),
+ *  enough to redraw circle markers, divIcon pills, diamonds and inline-SVG
+ *  crosshairs without a general HTML renderer. */
+function _pngDomItems(root) {
+    var items = [];
+    (function walk(el, alpha, rot, scl) {
+        var cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return;
+        alpha *= parseFloat(cs.opacity);
+        if (!(alpha > 0.02)) return;
+        // The root's transform is MapLibre's positioning translate; below it,
+        // pick up rotation/scale (the sonde diamond is a rotated square).
+        if (el !== root && cs.transform && cs.transform !== 'none') {
+            var m = /matrix\(([^)]+)\)/.exec(cs.transform);
+            if (m) {
+                var v = m[1].split(',').map(parseFloat);
+                rot += Math.atan2(v[1], v[0]);
+                scl *= Math.sqrt(v[0] * v[0] + v[1] * v[1]);
+            }
+        }
+        var r = el.getBoundingClientRect();
+        var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        var tag = el.tagName.toLowerCase();
+        if (tag === 'svg' || tag === 'img') {
+            if (r.width && r.height) items.push({ kind: tag, el: el, cx: cx, cy: cy, w: r.width, h: r.height, a: alpha });
+            return;
+        }
+        // offsetWidth/Height is the untransformed box (a rotated box's
+        // bounding rect is larger than the box itself).
+        var w = el.offsetWidth * scl, h = el.offsetHeight * scl;
+        var bw = parseFloat(cs.borderTopWidth) || 0;
+        var bg = _pngAlpha(cs.backgroundColor) > 0 ? cs.backgroundColor : null;
+        if (!(bw > 0 && cs.borderTopStyle !== 'none' && _pngAlpha(cs.borderTopColor) > 0)) bw = 0;
+        var sh = _pngSpreadShadow(cs.boxShadow);
+        if (w > 0 && h > 0 && (bg || bw || sh)) {
+            var rad = cs.borderTopLeftRadius || '0';
+            var rv = parseFloat(rad) || 0;
+            rv = /%/.test(rad.split(' ')[0]) ? rv / 100 * Math.min(w, h) : rv * scl;
+            items.push({ kind: 'box', cx: cx, cy: cy, w: w, h: h, rot: rot, a: alpha,
+                         bg: bg, bw: bw * scl, bc: cs.borderTopColor, rad: rv, sh: sh });
+        }
+        for (var c = el.firstChild; c; c = c.nextSibling) {
+            if (c.nodeType === 1) { walk(c, alpha, rot, scl); continue; }
+            if (c.nodeType !== 3) continue;
+            var txt = c.nodeValue.replace(/\s+/g, ' ').trim();
+            if (!txt) continue;
+            var rg = document.createRange();
+            rg.selectNodeContents(c);
+            var tr = rg.getBoundingClientRect();
+            if (!tr.width) continue;
+            items.push({ kind: 'text', txt: txt, cx: tr.left, cy: tr.top + tr.height / 2, a: alpha,
+                         color: cs.color, size: parseFloat(cs.fontSize) * scl,
+                         font: [cs.fontStyle, cs.fontWeight].join(' '), family: cs.fontFamily });
+        }
+    })(root, 1, 0, 1);
+    return items;
+}
+
+var _pngSnapCss = false;
+/** While reading markers, freeze CSS animations and transitions so a
+ *  pulsing ring is captured at rest rather than mid-fade. */
+function _pngFreezeMarkers(cont, on) {
+    if (!_pngSnapCss) {
+        _pngSnapCss = true;
+        var st = document.createElement('style');
+        st.textContent = '.ga-png-snap .maplibregl-marker, .ga-png-snap .maplibregl-marker * '
+                       + '{ animation: none !important; transition: none !important; }';
+        document.head.appendChild(st);
+    }
+    cont.classList.toggle('ga-png-snap', on);
+    if (on) void cont.offsetWidth;   // apply before reading computed styles
+}
+
+/**
+ * Collect what `map` is drawing as PNG draw ops, back to front.
+ *   o.geoToPx(lat, lon) → {x, y}     PNG pixel of a position
+ *   o.latAt(y)                        latitude of PNG row y
+ *   o.rect {x, y, w, h}               the map area of the PNG
+ *   o.bounds {south, north, west, east} its geographic extent
+ *   o.scale                           PNG px per screen px
+ *   o.skip                            facade layers not to replay
+ *   o.builtins [{ id, z, draw(ctx) }] the caller's own renderings, slotted
+ *       where GL layer `id` sits, or where a layer of pane-z `z` would
+ * Returns { ops: [{ key, draw }], ready: Promise }. Everything that reads
+ * the live map runs now, so a frame advancing while images decode can't
+ * skew the result; `ready` resolves once image overlays have loaded.
+ */
+function _pngLiveOverlays(map, o) {
+    var ops = [], loads = [];
+    var S = o.scale, skip = o.skip || [], px = o.geoToPx;
+    var gl = (map && typeof map.getGL === 'function') ? map.getGL() : null;
+    function result() {
+        ops.sort(function (a, b) { return a.key - b.key; });
+        return { ops: ops, ready: Promise.all(loads) };
+    }
+    if (!gl || !gl.getStyle || !gl.getStyle()) {
+        (o.builtins || []).forEach(function (b) { ops.push({ key: b.z, draw: b.draw }); });
+        return result();
+    }
+
+    var order = (typeof gl.getLayersOrder === 'function') ? gl.getLayersOrder()
+              : gl.getStyle().layers.map(function (l) { return l.id; });
+    var pos = {}, glz = map._glz || {}, nGL = order.length;
+    order.forEach(function (id, i) { pos[id] = i; });
+    var viewLon = (o.bounds.west + o.bounds.east) / 2;
+    /** Whole-turn shift that brings lng onto the world copy in view. */
+    function shift(lng) { return Math.round((viewLon - lng) / 360) * 360; }
+    function zSlot(z) {
+        for (var i = 0; i < nGL; i++) {
+            var lz = glz[order[i]];
+            if (lz != null && lz > z) return i - 0.5;
+        }
+        return nGL - 0.5;
+    }
+    function shown(id) {
+        if (pos[id] == null) return false;
+        try { return gl.getLayoutProperty(id, 'visibility') !== 'none'; } catch (e) { return false; }
+    }
+    function paint(id, name) { try { return gl.getPaintProperty(id, name); } catch (e) { return undefined; } }
+    function layout(id, name) { try { return gl.getLayoutProperty(id, name); } catch (e) { return undefined; } }
+    function filterOf(id) { try { return gl.getFilter(id); } catch (e) { return null; } }
+    function num(v, d) { return (typeof v === 'number' && isFinite(v)) ? v : d; }
+    function keep(flt, pr) { return !flt || !!_pngExpr(flt, pr); }
+    function trace(ctx, run, close) {
+        if (!run || !run.length) return;
+        var k = shift(run[0][0]);
+        for (var i = 0; i < run.length; i++) {
+            var p = px(run[i][1], run[i][0] + k);
+            if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+        }
+        if (close) ctx.closePath();
+    }
+
+    function addLines(id, feats) {
+        if (!shown(id)) return;
+        var pc = paint(id, 'line-color'), pw = paint(id, 'line-width'),
+            po = paint(id, 'line-opacity'), pd = paint(id, 'line-dasharray'), flt = filterOf(id);
+        var runs = [];
+        feats.forEach(function (f) {
+            var pr = (f && f.properties) || {};
+            if (!f || !keep(flt, pr)) return;
+            var w = num(_pngExpr(pw, pr), 1), a = num(_pngExpr(po, pr), 1), d = _pngExpr(pd, pr);
+            if (!(w > 0 && a > 0)) return;
+            runs.push({ lines: _pngLines(f.geometry), w: w, a: a, c: _pngExpr(pc, pr) || '#000000',
+                        d: (Array.isArray(d) && d.length) ? d : null });
+        });
+        if (!runs.length) return;
+        var cap = layout(id, 'line-cap') || 'butt', join = layout(id, 'line-join') || 'miter';
+        ops.push({ key: pos[id], draw: function (ctx) {
+            ctx.lineCap = cap; ctx.lineJoin = join;
+            runs.forEach(function (r) {
+                ctx.globalAlpha = r.a;
+                ctx.strokeStyle = r.c;
+                ctx.lineWidth = r.w * S;
+                // MapLibre dash lengths are in line widths
+                ctx.setLineDash(r.d ? r.d.map(function (v) { return v * r.w * S; }) : []);
+                ctx.beginPath();
+                r.lines.forEach(function (run) { trace(ctx, run, false); });
+                ctx.stroke();
+            });
+            ctx.setLineDash([]);
+        }});
+    }
+
+    function addFills(id, feats) {
+        if (!shown(id)) return;
+        var pc = paint(id, 'fill-color'), po = paint(id, 'fill-opacity'), flt = filterOf(id);
+        var fills = [];
+        feats.forEach(function (f) {
+            var pr = (f && f.properties) || {};
+            if (!f || !keep(flt, pr)) return;
+            var a = num(_pngExpr(po, pr), 1), polys = _pngPolys(f.geometry);
+            if (!(a > 0) || !polys.length) return;
+            fills.push({ polys: polys, a: a, c: _pngExpr(pc, pr) || '#000000' });
+        });
+        if (!fills.length) return;
+        ops.push({ key: pos[id], draw: function (ctx) {
+            fills.forEach(function (f) {
+                ctx.globalAlpha = f.a;
+                ctx.fillStyle = f.c;
+                ctx.beginPath();
+                f.polys.forEach(function (rings) { rings.forEach(function (ring) { trace(ctx, ring, true); }); });
+                ctx.fill('evenodd');
+            });
+        }});
+    }
+
+    function addCircles(id, feats) {
+        if (!shown(id)) return;
+        var pc = paint(id, 'circle-color'), pr0 = paint(id, 'circle-radius'), po = paint(id, 'circle-opacity'),
+            psw = paint(id, 'circle-stroke-width'), psc = paint(id, 'circle-stroke-color'),
+            pso = paint(id, 'circle-stroke-opacity'), flt = filterOf(id);
+        var dots = [];
+        feats.forEach(function (f) {
+            var pr = (f && f.properties) || {};
+            if (!f || !keep(flt, pr)) return;
+            var d = { r: num(_pngExpr(pr0, pr), 5), c: _pngExpr(pc, pr) || '#000000', a: num(_pngExpr(po, pr), 1),
+                      sw: num(_pngExpr(psw, pr), 0), sc: _pngExpr(psc, pr) || '#000000', sa: num(_pngExpr(pso, pr), 1) };
+            _pngPoints(f.geometry).forEach(function (c) {
+                var p = px(c[1], c[0] + shift(c[0]));
+                dots.push({ x: p.x, y: p.y, d: d });
+            });
+        });
+        if (!dots.length) return;
+        ops.push({ key: pos[id], draw: function (ctx) {
+            dots.forEach(function (t) {
+                var d = t.d;
+                if (d.a > 0) {
+                    ctx.globalAlpha = d.a; ctx.fillStyle = d.c;
+                    ctx.beginPath(); ctx.arc(t.x, t.y, d.r * S, 0, Math.PI * 2); ctx.fill();
+                }
+                if (d.sw > 0 && d.sa > 0) {   // MapLibre strokes outside the radius
+                    ctx.globalAlpha = d.sa; ctx.strokeStyle = d.sc; ctx.lineWidth = d.sw * S;
+                    ctx.beginPath(); ctx.arc(t.x, t.y, (d.r + d.sw / 2) * S, 0, Math.PI * 2); ctx.stroke();
+                }
+            });
+        }});
+    }
+
+    function addRaster(id, lyr) {
+        if (!shown(id) || !lyr._url || typeof lyr._coords !== 'function') return;
+        var a = num(paint(id, 'raster-opacity'), 1);
+        if (!(a > 0)) return;
+        var c = lyr._coords();   // [[w,n],[e,n],[e,s],[w,s]], exactly as MapLibre has it
+        var w = c[0][0], n = c[0][1], e = c[1][0], s = c[2][1];
+        if (!(n > s && e > w)) return;
+        var k = shift((w + e) / 2), crisp = paint(id, 'raster-resampling') === 'nearest';
+        var op = { key: pos[id], draw: null };
+        ops.push(op);
+        loads.push(_pngLoadImage(lyr._url).then(function (img) {
+            op.draw = function (ctx) {
+                _pngMercRaster(ctx, img, img.naturalWidth, img.naturalHeight, n, s, w + k, e + k, a, crisp, o);
+            };
+        }, function (err) { console.warn('PNG export: left out an image overlay (' + err.message + ')'); }));
+    }
+
+    // GL-backed facade layers, plus the batch renderers some of them route to.
+    var batches = [];
+    map.eachLayer(function (l) {
+        if (!l || skip.indexOf(l) >= 0) return;
+        try {
+            if (l._batch) { if (batches.indexOf(l._batch) < 0) batches.push(l._batch); return; }
+            if (l instanceof L.TileLayer) return;   // basemap: the PNG keeps its dark ground
+            if (l instanceof L.ImageOverlay) { addRaster(l._id, l); return; }
+            if (l instanceof L.GeoJSON) {
+                var fs = (l._data && l._data.features) || [];
+                addFills(l._id + '-f', fs); addLines(l._id + '-l', fs);
+                return;
+            }
+            if (l instanceof L.Circle || l instanceof L.Rectangle) {
+                var g = [l._geo()];
+                addFills(l._id + '-f', g); addLines(l._id, g);
+                return;
+            }
+            if (l instanceof L.Polyline) { addLines(l._id, [l._geo()]); return; }
+            // DOM markers and custom canvas layers are read off the DOM below.
+        } catch (e) { console.warn('PNG export: left out a map layer', e); }
+    });
+    batches.forEach(function (b) {
+        try {
+            var lf = b._lineFC().features;
+            addLines(b._id + '-ls', lf);
+            addLines(b._id + '-ld', lf);
+            addCircles(b._id + '-cm', b._circFC().features);
+        } catch (e) { console.warn('PNG export: left out a batched layer', e); }
+    });
+    (o.builtins || []).forEach(function (b) {
+        ops.push({ key: (b.id && pos[b.id] != null) ? pos[b.id] : zSlot(b.z), draw: b.draw });
+    });
+
+    // DOM panes and markers sit above every GL layer, ordered by their z.
+    var cont = map.getContainer(), cr = cont.getBoundingClientRect();
+    function toPng(clientX, clientY) {
+        var ll = map.containerPointToLatLng([clientX - cr.left, clientY - cr.top]);
+        return px(ll.lat, ll.lng + shift(ll.lng));
+    }
+
+    // Custom canvas layers (recon barbs, ...) draw in screen space; remap
+    // their rows through latitude. Skipped on a tilted/rotated (3D) view.
+    var flat = !(gl.getPitch && gl.getPitch()) && !(gl.getBearing && gl.getBearing());
+    var panes = map._panes || {};
+    if (flat) Object.keys(panes).forEach(function (name) {
+        var pane = panes[name];
+        if (!pane || getComputedStyle(pane).display === 'none') return;
+        var z = parseInt(pane.style.zIndex, 10) || 0;
+        var cvs = pane.querySelectorAll('canvas');
+        for (var i = 0; i < cvs.length; i++) {
+            var cv = cvs[i], r = cv.getBoundingClientRect(), cs = getComputedStyle(cv);
+            if (!cv.width || !cv.height || !r.width || !r.height) continue;
+            if (cs.display === 'none' || cs.visibility === 'hidden' || !(parseFloat(cs.opacity) > 0)) continue;
+            var snap = document.createElement('canvas');
+            snap.width = cv.width; snap.height = cv.height;
+            try { snap.getContext('2d').drawImage(cv, 0, 0); } catch (e) { continue; }
+            if (_pngTaints(snap)) continue;
+            var top = r.top - cr.top, rows = [];
+            for (var y = o.rect.y; y < o.rect.y + o.rect.h; y++) {
+                var sy = map.latLngToContainerPoint([o.latAt(y + 0.5), viewLon]).y;
+                var sr = Math.floor((sy - top) / r.height * cv.height);
+                rows.push(sr >= 0 && sr < cv.height ? sr : -1);
+            }
+            var xW = map.latLngToContainerPoint([0, o.bounds.west]).x;
+            var xE = map.latLngToContainerPoint([0, o.bounds.east]).x;
+            if (!(xE > xW)) continue;
+            var dx = o.rect.x + (r.left - cr.left - xW) / (xE - xW) * o.rect.w;
+            var dw = r.width / (xE - xW) * o.rect.w;
+            ops.push({ key: nGL + z + i * 1e-3, draw: (function (snap, rows, dx, dw, a) {
+                return function (ctx) {
+                    ctx.globalAlpha = a;
+                    for (var j = 0; j < rows.length; j++) {
+                        if (rows[j] >= 0) ctx.drawImage(snap, 0, rows[j], snap.width, 1, dx, o.rect.y + j, dw, 1);
+                    }
+                };
+            })(snap, rows, dx, dw, parseFloat(cs.opacity)) });
+        }
+    });
+
+    // DOM markers: circle markers, divIcons, inline-SVG fixes.
+    var skipEls = skip.map(function (l) { return l && l._m && l._m.getElement && l._m.getElement(); });
+    var els = cont.querySelectorAll('.maplibregl-marker');
+    _pngFreezeMarkers(cont, true);
+    try {
+        for (var mi = 0; mi < els.length; mi++) {
+            var el = els[mi];
+            if (skipEls.indexOf(el) >= 0) continue;
+            var br = el.getBoundingClientRect();
+            if (br.right < cr.left || br.left > cr.right || br.bottom < cr.top || br.top > cr.bottom) continue;
+            var items = _pngDomItems(el);
+            if (!items.length) continue;
+            items.forEach(function (it) {
+                it.p = toPng(it.cx, it.cy);
+                if (it.kind !== 'svg' && it.kind !== 'img') return;
+                var url;
+                if (it.kind === 'img') url = it.el.currentSrc || it.el.src;
+                else {
+                    var svg = it.el.cloneNode(true);
+                    svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+                    if (!svg.getAttribute('width')) svg.setAttribute('width', it.w);
+                    if (!svg.getAttribute('height')) svg.setAttribute('height', it.h);
+                    url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+                }
+                it.el = null;
+                if (url) loads.push(_pngLoadImage(url).then(function (img) { it.img = img; }, function () {}));
+            });
+            var z = parseInt(getComputedStyle(el).zIndex, 10);
+            ops.push({ key: nGL + (isFinite(z) ? z : 600) + mi * 1e-6, draw: (function (items) {
+                return function (ctx) { _pngDrawDomItems(ctx, items, S); };
+            })(items) });
+        }
+    } finally {
+        _pngFreezeMarkers(cont, false);
+    }
+    return result();
+}
+
+function _pngDrawDomItems(ctx, items, S) {
+    items.forEach(function (it) {
+        ctx.save();
+        ctx.globalAlpha = it.a;
+        if (it.kind === 'box') {
+            var w = it.w * S, h = it.h * S, r = it.rad * S, bw = it.bw * S;
+            ctx.translate(it.p.x, it.p.y);
+            ctx.rotate(it.rot);
+            if (it.sh) {   // solid outline ring just outside the border box
+                var s = it.sh.s * S;
+                ctx.strokeStyle = it.sh.c; ctx.lineWidth = s;
+                _pngRoundRect(ctx, -w / 2 - s / 2, -h / 2 - s / 2, w + s, h + s, r + s / 2);
+                ctx.stroke();
+            }
+            if (it.bg) { ctx.fillStyle = it.bg; _pngRoundRect(ctx, -w / 2, -h / 2, w, h, r); ctx.fill(); }
+            if (bw > 0) {
+                ctx.strokeStyle = it.bc; ctx.lineWidth = bw;
+                _pngRoundRect(ctx, -w / 2 + bw / 2, -h / 2 + bw / 2, w - bw, h - bw, Math.max(0, r - bw / 2));
+                ctx.stroke();
+            }
+        } else if (it.kind === 'text') {
+            ctx.fillStyle = it.color;
+            ctx.font = it.font + ' ' + (it.size * S) + 'px ' + it.family;
+            ctx.textBaseline = 'middle';
+            ctx.fillText(it.txt, it.p.x, it.p.y);
+        } else if (it.img) {
+            ctx.drawImage(it.img, it.p.x - it.w * S / 2, it.p.y - it.h * S / 2, it.w * S, it.h * S);
+        }
+        ctx.restore();
+    });
+}
+
+/** Legend for the model forecast overlay (the cycle on the map, with the
+ *  live map's type and late-cycle filters), top-left of the map area.
+ *  Returns true if one was drawn. */
+function _pngModelLegend(ctx, rect, S) {
+    if (!_modelVisible || !_modelData || !_modelData.cycles || !_modelActiveCycle) return false;
+    var cycle = _modelData.cycles[_modelActiveCycle];
+    if (!cycle) return false;
+    var seen = {}, items = [];
+    Object.keys(cycle).sort().forEach(function (tech) {
+        var f = cycle[tech];
+        if (!_modelTypeFilters[f.type]) return;
+        if (_modelShowInterp && f.interp === false) return;
+        if ((f.points || []).filter(_adeckHasPos).length < 2) return;
+        var color = f.color || MODEL_COLORS[tech] || '#888', name = f.name || tech;
+        if (seen[name + '|' + color]) return;
+        seen[name + '|' + color] = true;
+        var rank = f.type === 'official' ? 0 : (f.type === 'consensus' ? 1 : 2);
+        items.push({ name: name, color: color, rank: rank });
+    });
+    if (!items.length) return false;
+    items.sort(function (a, b) { return a.rank - b.rank || (a.name < b.name ? -1 : (a.name > b.name ? 1 : 0)); });
+
+    var title = 'Forecasts';
+    try { title += ' · ' + TCTime.cycle(_modelActiveCycle, { year: true }); }
+    catch (e) { title += ' · ' + _modelActiveCycle; }
+    var fs = 9 * S, rowH = 12 * S, pad = 5 * S, sw = 12 * S, gap = 4 * S, colGap = 10 * S;
+    var maxRows = Math.max(3, Math.floor((rect.h * 0.55 - 2 * pad - rowH) / rowH));
+    var ncol = Math.ceil(items.length / maxRows), nrow = Math.ceil(items.length / ncol);
+    ctx.font = fs + 'px sans-serif';
+    var nameW = 0;
+    items.forEach(function (it) { nameW = Math.max(nameW, ctx.measureText(it.name).width); });
+    var colW = sw + gap + nameW;
+    ctx.font = 'bold ' + fs + 'px sans-serif';
+    var boxW = Math.max(ctx.measureText(title).width, ncol * colW + (ncol - 1) * colGap) + 2 * pad;
+    var boxH = 2 * pad + rowH * (nrow + 1);
+    var x0 = rect.x + 6 * S, y0 = rect.y + 6 * S;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(10,22,40,0.78)';
+    ctx.fillRect(x0, y0, boxW, boxH);
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#c8d6e5';
+    ctx.fillText(title, x0 + pad, y0 + pad + rowH / 2);
+    ctx.font = fs + 'px sans-serif';
+    items.forEach(function (it, i) {
+        var col = Math.floor(i / nrow), row = i % nrow;
+        var ix = x0 + pad + col * (colW + colGap), iy = y0 + pad + rowH * (row + 1.5);
+        ctx.strokeStyle = it.color;
+        ctx.lineWidth = (it.rank === 0 ? 3 : 2) * S;
+        ctx.setLineDash(it.rank === 2 ? [3 * S, 2 * S] : []);
+        ctx.beginPath(); ctx.moveTo(ix, iy); ctx.lineTo(ix + sw, iy); ctx.stroke();
+        ctx.fillStyle = '#c8d6e5';
+        ctx.fillText(it.name, ix + sw + gap, iy);
+    });
+    ctx.restore();
+    return true;
+}
+
+
+// ── STATIC PNG EXPORT (current frame, IR + live overlays + watermark) ──
+//
+// Mirrors the GIF composer's per-frame layout for a single frame, with the
+// map area replayed from the live detail map (see _pngLiveOverlays above):
+// every overlay that is switched on (model forecasts, radar, microwave,
+// recon, sondes, wind radii, rain, ...) lands in the PNG in the same order
+// as on screen, with the IR frame drawn from its raw Tb at export scale and
+// a prominent TC-ATLAS watermark. The intensity-chart and coastline toggles
+// come from the GIF settings panel so the PNG matches animated export.
 window.saveCurrentFramePng = function () {
     if (!irMeta || !selectedStorm) { showToast('No storm loaded'); return; }
     var fIdx = irFrameIdx;
@@ -9963,6 +10560,7 @@ window.saveCurrentFramePng = function () {
 
     var btn = document.getElementById('ir-png-btn');
     if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; }
+    function release() { if (btn) { btn.disabled = false; btn.style.opacity = ''; } }
 
     function isCk(id, def) {
         var e = document.getElementById(id);
@@ -9970,21 +10568,20 @@ window.saveCurrentFramePng = function () {
     }
     var showIntensity   = isCk('gif-show-intensity', true);
     var showCoastlines  = isCk('gif-show-coastlines', true);
-    var showModels      = isCk('gif-show-models', false);
     // Per-layer visibility — the PNG must reflect what's ACTUALLY on
     // the map, not just "everything that exists." Previously the IR
     // layer was drawn unconditionally even when the user had toggled
     // "Hide IR", so a ground-radar-only view exported a bizarre PNG
-    // that still showed IR underneath the radar.
+    // that still showed IR underneath the radar. Every other overlay
+    // is replayed from the live map, so it is in the PNG exactly when
+    // it is on screen.
     var includeIR       = !!(irOverlayVisible && frameData && frameData.tb_data);
-    var includeRadar    = !!(_gaNexradVisible && _gaNexradMapOverlay && _gaNexradBounds);
-    var includeMW       = !!(typeof _gaMwVisible !== 'undefined' && _gaMwVisible);
     var includeTrack    = (typeof irTrackVisible === 'undefined') ? true : !!irTrackVisible;
 
     var irCols = frameData.tb_cols || 200;
     var irRows = frameData.tb_rows || 200;
 
-    // Output sizing: prefer the live Leaflet viewport at 2× upscale (WYSIWYG
+    // Output sizing: prefer the live map viewport at 2× upscale (WYSIWYG
     // + crisp for sharing). Fall back to full-storm GIF-style sizing if the
     // map isn't available for some reason.
     var EXPORT_SCALE = 2;
@@ -10059,24 +10656,33 @@ window.saveCurrentFramePng = function () {
     var dtW = compCtx.measureText(dtLbl).width;
     compCtx.fillText(dtLbl, outW - dtW - 8 * EXPORT_SCALE, H_HEADER / 2);
 
-    // geoToPx is shared by IR, radar, coastlines, tracks, and the storm
-    // marker — all draw into the rectangle [0, H_HEADER, outW, irImageH]
-    // using the same lat/lon → pixel projection so they stay co-registered.
+    // geoToPx is shared by IR, coastlines, every replayed overlay and the
+    // storm marker — all draw into the rectangle [0, H_HEADER, outW,
+    // irImageH] using the same lat/lon → pixel projection so they stay
+    // co-registered. latAt is its inverse in y.
     function geoToPx(lat, lon) {
         var xF = (lon - frameBounds.west) / (frameBounds.east - frameBounds.west);
         var yF = (frameBounds.north - lat) / (frameBounds.north - frameBounds.south);
         return { x: xF * outW, y: H_HEADER + yF * irImageH };
     }
+    function latAt(y) {
+        return frameBounds.north - (y - H_HEADER) / irImageH * (frameBounds.north - frameBounds.south);
+    }
+
+    var MAP_BOTTOM = H_HEADER + irImageH;
+    var mapRect = { x: 0, y: H_HEADER, w: outW, h: irImageH };
 
     // IR base — render LUT'd Tb to its own canvas at native resolution,
     // then draw it onto the composite with geo-aligned destination rect
     // (driven by frameBounds), so zoom-in users get the right sub-region.
     // Gated on includeIR so the user's "Hide IR" toggle is honored —
     // otherwise we'd export a phantom IR layer underneath their
-    // radar-only or microwave-only view.
+    // radar-only or microwave-only view. Drawn at the IR overlay's slot
+    // in the live map's layer order (above the IR context, under vectors).
+    var irCanvas = null, irNW = null, irSE = null;
     if (includeIR) {
         var tbArr = decodeTbData(frameData.tb_data);
-        var irCanvas = document.createElement('canvas');
+        irCanvas = document.createElement('canvas');
         irCanvas.width = irCols; irCanvas.height = irRows;
         var irCtx = irCanvas.getContext('2d');
         var imgData = irCtx.createImageData(irCols, irRows);
@@ -10098,32 +10704,25 @@ window.saveCurrentFramePng = function () {
             L.latLng(frameBounds.south, frameBounds.west),
             L.latLng(frameBounds.north, frameBounds.east)
         );
-        var irNW = geoToPx(irBoundsForDraw.getNorth(), irBoundsForDraw.getWest());
-        var irSE = geoToPx(irBoundsForDraw.getSouth(), irBoundsForDraw.getEast());
-        compCtx.save();
-        compCtx.beginPath();
-        compCtx.rect(0, H_HEADER, outW, irImageH);
-        compCtx.clip();
-        compCtx.imageSmoothingEnabled = false;
-        compCtx.drawImage(irCanvas, irNW.x, irNW.y, irSE.x - irNW.x, irSE.y - irNW.y);
-        compCtx.restore();
+        irNW = geoToPx(irBoundsForDraw.getNorth(), irBoundsForDraw.getWest());
+        irSE = geoToPx(irBoundsForDraw.getSouth(), irBoundsForDraw.getEast());
     }
-
-    var MAP_BOTTOM = H_HEADER + irImageH;
+    function drawIR(ctx) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(irCanvas, irNW.x, irNW.y, irSE.x - irNW.x, irSE.y - irNW.y);
+    }
 
     // Coastlines — two-pass halo stroke so the line reads on both dark
     // open-ocean Tb (warm gray/black in the enhanced colormap) AND on
     // light cold-cloud regions (white/pink in the same colormap). A
     // single light-only stroke disappears against white cloud tops; a
     // dark halo + light core stays visible everywhere.
+    var _cstPaths = [];
     if (showCoastlines && _coastlineGeoJSON && _coastlineGeoJSON.features) {
-        compCtx.save();
-        compCtx.beginPath(); compCtx.rect(0, H_HEADER, outW, irImageH); compCtx.clip();
         var bS = frameBounds.south, bN = frameBounds.north;
         var bWest = frameBounds.west, bEast = frameBounds.east;
         // Pre-build the visible coastline paths once so we can stroke
         // them twice (halo + core) without re-traversing the GeoJSON.
-        var _cstPaths = [];
         for (var fii = 0; fii < _coastlineGeoJSON.features.length; fii++) {
             var geom = _coastlineGeoJSON.features[fii].geometry;
             if (!geom) continue;
@@ -10142,47 +10741,56 @@ window.saveCurrentFramePng = function () {
                 _cstPaths.push(coords);
             }
         }
-        function _strokeCoastlinePaths() {
+    }
+    function drawCoastlines(ctx) {
+        function strokePaths() {
             for (var pi3 = 0; pi3 < _cstPaths.length; pi3++) {
                 var pCoords = _cstPaths[pi3];
-                compCtx.beginPath();
+                ctx.beginPath();
                 var started = false;
                 for (var ci2 = 0; ci2 < pCoords.length; ci2++) {
                     var pp2 = geoToPx(pCoords[ci2][1], pCoords[ci2][0]);
                     if (pp2.x < -20 || pp2.x > outW + 20 || pp2.y < H_HEADER - 20 || pp2.y > MAP_BOTTOM + 20) {
                         started = false; continue;
                     }
-                    if (!started) { compCtx.moveTo(pp2.x, pp2.y); started = true; }
-                    else compCtx.lineTo(pp2.x, pp2.y);
+                    if (!started) { ctx.moveTo(pp2.x, pp2.y); started = true; }
+                    else ctx.lineTo(pp2.x, pp2.y);
                 }
-                compCtx.stroke();
+                ctx.stroke();
             }
         }
         // Halo (dark, slightly thicker) → core (light, thinner). Round
         // line-join so the halo doesn't create sharp corners at vertex
         // angles in jagged coastlines.
-        compCtx.lineJoin = 'round';
-        compCtx.lineCap = 'round';
-        compCtx.strokeStyle = 'rgba(0,0,0,0.7)';
-        compCtx.lineWidth = 2.2 * EXPORT_SCALE;
-        _strokeCoastlinePaths();
-        compCtx.strokeStyle = 'rgba(255,255,255,0.9)';
-        compCtx.lineWidth = 1.0 * EXPORT_SCALE;
-        _strokeCoastlinePaths();
-        compCtx.restore();
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+        ctx.lineWidth = 2.2 * EXPORT_SCALE;
+        strokePaths();
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.lineWidth = 1.0 * EXPORT_SCALE;
+        strokePaths();
     }
 
-    // Best-track marker — gated on irTrackVisible so the "Hide track"
-    // toggle is honored.
-    if (includeTrack && frameMeta && frameMeta.lat != null) {
-        var sp = geoToPx(frameMeta.lat, frameMeta.lon);
-        if (sp.y >= H_HEADER && sp.y <= MAP_BOTTOM && sp.x >= 0 && sp.x <= outW) {
-            compCtx.beginPath();
-            compCtx.arc(sp.x, sp.y, 3 * EXPORT_SCALE, 0, Math.PI * 2);
-            compCtx.strokeStyle = '#ffffff';
-            compCtx.lineWidth = 1.5 * EXPORT_SCALE;
-            compCtx.stroke();
-        }
+    // Everything on the live map, back to front, with the IR frame and the
+    // coastlines (drawn here, at export resolution) slotted where their
+    // live layers sit. The position marker is left out: the PNG draws its
+    // own high-contrast ring for the current fix below.
+    var coastLayer = detailMap ? detailMap._gaCoastLayer : null;
+    var builtins = [];
+    if (includeIR) builtins.push({ id: irOverlayLayer && irOverlayLayer._id, z: 350, draw: drawIR });
+    if (_cstPaths.length) builtins.push({ id: coastLayer && coastLayer._id + '-l', z: 450, draw: drawCoastlines });
+    var live;
+    try {
+        live = _pngLiveOverlays(detailMap, {
+            geoToPx: geoToPx, latAt: latAt, rect: mapRect, bounds: frameBounds, scale: EXPORT_SCALE,
+            skip: [irOverlayLayer, coastLayer, irPositionMarker], builtins: builtins
+        });
+    } catch (e) {
+        // A replay failure must not cost the user the export: fall back to
+        // IR + coastlines, as before overlays were replayed.
+        console.warn('PNG export: live overlay replay failed', e);
+        live = { ops: builtins.map(function (b) { return { key: b.z, draw: b.draw }; }), ready: Promise.resolve() };
     }
 
     // Intensity chart
@@ -10267,7 +10875,35 @@ window.saveCurrentFramePng = function () {
         compCtx.fillText('170 K', cbarX2 + cbarW - compCtx.measureText('170 K').width, cbarY + 10 * EXPORT_SCALE);
     }
 
-    function _finishAndDownload() {
+    function _drawMapArea() {
+        compCtx.save();
+        compCtx.beginPath();
+        compCtx.rect(mapRect.x, mapRect.y, mapRect.w, mapRect.h);
+        compCtx.clip();
+        live.ops.forEach(function (op) {
+            if (!op.draw) return;   // an image overlay that didn't load
+            compCtx.save();
+            try { op.draw(compCtx); } catch (e) { console.warn('PNG export: a layer failed to draw', e); }
+            compCtx.restore();
+        });
+
+        // Best-track marker — gated on irTrackVisible so the "Hide track"
+        // toggle is honored.
+        if (includeTrack && frameMeta && frameMeta.lat != null) {
+            var sp = geoToPx(frameMeta.lat, frameMeta.lon);
+            if (sp.y >= H_HEADER && sp.y <= MAP_BOTTOM && sp.x >= 0 && sp.x <= outW) {
+                compCtx.beginPath();
+                compCtx.arc(sp.x, sp.y, 3 * EXPORT_SCALE, 0, Math.PI * 2);
+                compCtx.strokeStyle = '#ffffff';
+                compCtx.lineWidth = 1.5 * EXPORT_SCALE;
+                compCtx.stroke();
+            }
+        }
+        compCtx.restore();
+        return _pngModelLegend(compCtx, mapRect, EXPORT_SCALE);
+    }
+
+    function _finishAndDownload(withModels) {
         // Prominent watermark pill bottom-right of IR area
         var fontPx = Math.round(11 * EXPORT_SCALE);
         compCtx.font = 'bold ' + fontPx + 'px sans-serif';
@@ -10291,7 +10927,7 @@ window.saveCurrentFramePng = function () {
         compCanvas.toBlob(function (blob) {
             if (!blob) {
                 showToast('PNG export failed');
-                if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+                release();
                 return;
             }
             var name = (selectedStorm.name || 'UNNAMED').replace(/\s+/g, '_');
@@ -10301,50 +10937,26 @@ window.saveCurrentFramePng = function () {
             showToast('PNG saved: ' + filename);
             _ga('ga_export_png', {
                 sid: selectedStorm.sid, storm_name: selectedStorm.name,
-                cmap: irSelectedColormap, with_radar: includeRadar,
+                cmap: irSelectedColormap,
+                with_radar: !!(_gaNexradVisible && _gaNexradMapOverlay),
+                with_mw: !!(typeof _gaMwVisible !== 'undefined' && _gaMwVisible),
+                with_models: !!withModels,
                 size_bytes: blob.size
             });
-            if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+            release();
         }, 'image/png');
     }
 
-    if (includeRadar) {
-        // L.imageOverlay stores its source URL on `_url` (used internally
-        // for setUrl); the rendered <img> at getElement().src is the
-        // authoritative reference if _url isn't exposed in this Leaflet build.
-        var rdrEl = _gaNexradMapOverlay.getElement && _gaNexradMapOverlay.getElement();
-        var radarUrl = _gaNexradMapOverlay._url ||
-                       (_gaNexradMapOverlay.options && _gaNexradMapOverlay.options.url) ||
-                       (rdrEl && rdrEl.src);
-        if (!radarUrl) { _finishAndDownload(); return; }
-
-        var rb = _gaNexradBounds;
-        var nw = geoToPx(rb.getNorth(), rb.getWest());
-        var se = geoToPx(rb.getSouth(), rb.getEast());
-        var rx = nw.x, ry = nw.y, rw = se.x - nw.x, rh = se.y - nw.y;
-
-        var rdrImg = new Image();
-        rdrImg.crossOrigin = 'anonymous';
-        rdrImg.onload = function () {
-            compCtx.save();
-            compCtx.beginPath();
-            compCtx.rect(0, H_HEADER, outW, irImageH);
-            compCtx.clip();
-            compCtx.globalAlpha = 0.75;
-            compCtx.imageSmoothingEnabled = false;
-            compCtx.drawImage(rdrImg, rx, ry, rw, rh);
-            compCtx.globalAlpha = 1.0;
-            compCtx.restore();
-            _finishAndDownload();
-        };
-        rdrImg.onerror = function () {
-            console.warn('PNG export: radar image failed to load, continuing without overlay');
-            _finishAndDownload();
-        };
-        rdrImg.src = radarUrl;
-    } else {
-        _finishAndDownload();
-    }
+    // Image overlays decode asynchronously; don't let one slow or stuck
+    // image hold the export hostage (it is simply left out).
+    var timeout = new Promise(function (resolve) { setTimeout(resolve, 8000); });
+    Promise.race([live.ready, timeout]).then(function () {
+        _finishAndDownload(_drawMapArea());
+    }).catch(function (e) {
+        console.error('PNG export failed', e);
+        showToast('PNG export failed');
+        release();
+    });
 };
 
 
